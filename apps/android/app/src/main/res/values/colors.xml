@@ -1,0 +1,9 @@
+<resources>
+  <!-- Brand palette inherited from TAK Field Hub 1.9 -->
+  <color name="ic_launcher_background">#0B1114</color>
+  <color name="field_bg">#0B1114</color>
+  <color name="field_panel">#102127</color>
+  <color name="field_cyan">#28E0D7</color>
+  <color name="field_red">#FF3B4E</color>
+  <color name="field_good">#59D17D</color>
+</resources>

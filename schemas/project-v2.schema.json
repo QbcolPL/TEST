@@ -1,0 +1,138 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Field TAK Builder Project v2",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "packageId",
+    "name",
+    "packageVersion",
+    "sourceDirectory",
+    "atakMinVersion",
+    "atakMaxVersion",
+    "server"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": 2
+    },
+    "packageId": {
+      "type": "string"
+    },
+    "name": {
+      "type": "string"
+    },
+    "packageVersion": {
+      "type": "string"
+    },
+    "publisherName": {
+      "type": "string"
+    },
+    "sourceDirectory": {
+      "type": "string"
+    },
+    "outputDirectory": {
+      "type": "string"
+    },
+    "atakMinVersion": {
+      "type": "string"
+    },
+    "atakMaxVersion": {
+      "type": "string"
+    },
+    "expiryHours": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "server": {
+      "type": "object",
+      "required": [
+        "type",
+        "name",
+        "host",
+        "cotPort",
+        "apiPort",
+        "webPort"
+      ],
+      "properties": {
+        "type": {
+          "type": "string",
+          "default": "OpenTAK"
+        },
+        "name": {
+          "type": "string",
+          "default": "GGZS OpenTAK"
+        },
+        "host": {
+          "type": "string",
+          "default": "ggzstak.duckdns.org"
+        },
+        "cotPort": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535,
+          "default": 8089
+        },
+        "apiPort": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535,
+          "default": 8446
+        },
+        "webPort": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535,
+          "default": 8443
+        }
+      }
+    },
+    "maxDownloads": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "meshtastic": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "mode": {
+          "type": "string",
+          "enum": [
+            "hybrid",
+            "compatible",
+            "direct"
+          ]
+        },
+        "deviceRole": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "tak",
+            "field_node",
+            "gateway"
+          ]
+        },
+        "deviceModel": {
+          "type": "string",
+          "minLength": 1
+        },
+        "channelName": {
+          "type": "string"
+        },
+        "region": {
+          "type": "string"
+        },
+        "modemPreset": {
+          "type": "string"
+        },
+        "hopLimit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 7
+        }
+      }
+    }
+  }
+}

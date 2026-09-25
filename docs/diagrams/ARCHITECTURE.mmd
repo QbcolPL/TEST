@@ -1,0 +1,13 @@
+flowchart TD
+    Builder[Builder 2.4] --> FTAK[FTAK v2]
+    FTAK --> Hub[Field TAK Hub Android]
+    Hub --> ATAK[ATAK]
+    Hub --> Mesh[Meshtastic]
+    Mesh --> Radio[Radio]
+    Radio --> LoRa[LoRa]
+    LoRa --> Gateway[Gateway]
+    Gateway --> MQTT[MQTT/TLS]
+    MQTT --> OTS[OpenTAKServer]
+    OTS --> CoT[CoT]
+    CoT --> ATAK
+    Hub --> Verify[Final Verification]

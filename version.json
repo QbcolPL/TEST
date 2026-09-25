@@ -1,0 +1,11 @@
+{
+  "product": "Field TAK Hub",
+  "hubVersion": "2.3.5",
+  "androidVersionCode": 23005,
+  "builderVersion": "2.3.0",
+  "releaseChannel": "rc",
+  "ftakSchema": 2,
+  "projectSchema": 2,
+  "storageSchema": 1,
+  "defaultUpdateRepository": "Qbcol/TAKFieldHub"
+}

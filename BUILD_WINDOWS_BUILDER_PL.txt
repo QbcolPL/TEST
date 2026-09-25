@@ -1,0 +1,39 @@
+FIELD TAK HUB 2.3.0
+WINDOWS BUILDER - SZYBKI START
+
+1. Rozpakuj cale archiwum ZIP do zwyklego katalogu, np.:
+   C:\Field-TAK-Hub-2.3.0\
+
+2. Uruchom:
+   BUILD_WINDOWS_BUILDER.cmd
+
+3. Builder wymaga .NET 10 SDK x64.
+   Gdy skrypt zglosi brak SDK, zainstaluj:
+
+   winget install Microsoft.DotNet.SDK.10 --source winget
+
+   Nastepnie zamknij stare okna CMD, otworz nowe i uruchom BUILD_WINDOWS_BUILDER.cmd ponownie.
+
+4. Gotowy plik EXE zostanie zapisany w:
+   artifacts\windows\FieldTakHub.Builder\FieldTakHub.Builder.exe
+
+5. W Builderze rola:
+   FIELD NODE = natywna rola Meshtastic TAK
+
+   W pliku projektu/profilu wartosc wewnetrzna to:
+   tak
+
+   Legacy field_node pozostaje obslugiwane przy imporcie starszych projektow.
+
+6. Pakiet nie zawiera zbudowanego EXE. EXE jest tworzony lokalnie na Twoim Windows.
+
+7. Nie umieszczaj w repozytorium ani w publicznym .ftak:
+   - prywatnych kluczy
+   - hasel MQTT
+   - tokenow dostepowych
+   - prywatnych certyfikatow TLS
+   - stalego enrollment secret
+
+UWAGA:
+Linuxowe srodowisko, w ktorym przygotowano paczke, nie sluzy do weryfikacji Windowsowego
+Publish. Zgodnosc kodu sprawdzono testami statycznymi. Finalny EXE nalezy zbudowac na Windows.

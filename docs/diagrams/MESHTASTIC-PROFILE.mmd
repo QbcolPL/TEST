@@ -1,0 +1,11 @@
+flowchart TD
+    Universal[Universal Profile] --> Detect[Detect HardwareModel]
+    Detect --> Override[Hardware Override]
+    Override --> Merge[Merge]
+    Merge --> Preview[Preview Changes]
+    Preview --> Confirm{Confirm}
+    Confirm -->|Yes| Apply[Apply]
+    Confirm -->|No| Cancel[Cancel]
+    Apply --> ReadBack[Read Back]
+    ReadBack --> Verify[Verify]
+    Verify --> Ready[Radio READY]
