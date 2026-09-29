@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<kml xmlns="http://www.opengis.net/kml/2.2">
+  <Document>
+    <name>Field TAK Hub Sample</name>
+    <Placemark><name>Sample point</name><Point><coordinates>19.94498,50.06465,0</coordinates></Point></Placemark>
+  </Document>
+</kml>

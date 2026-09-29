@@ -1,0 +1,50 @@
+name: Android
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, 'release/**']
+  pull_request:
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.12' }
+      - run: python tests/source_gate.py
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v4
+        with:
+          packages: ''
+      - name: Install Android SDK for CI
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # Android 17 is compile/target SDK 37. GitHub runners may expose the
+          # platform as android-37.0 or may not expose API 37 through the current
+          # sdkmanager repository yet. Prefer an available API 37 package; otherwise
+          # install stable API 36 and let AGP download compileSdk 37 during the build.
+          sdkmanager --install "platform-tools"
+
+          SDK_LIST="$(sdkmanager --list --channel=1 2>/dev/null)"
+          if grep -q 'platforms;android-37.0' <<<"$SDK_LIST"; then
+            sdkmanager --install "platforms;android-37.0"
+          elif grep -q 'platforms;android-37' <<<"$SDK_LIST"; then
+            sdkmanager --install "platforms;android-37"
+          else
+            echo "API 37 platform is not exposed by this runner's sdkmanager repository; using API 36 as bootstrap and enabling AGP SDK auto-download."
+            sdkmanager --install "platforms;android-36"
+          fi
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.6.0'
+      - working-directory: apps/android
+        run: gradle testDebugUnitTest assembleDebug --stacktrace
+      - uses: actions/upload-artifact@v4
+        with:
+          name: FieldTakHub-Android-debug
+          path: apps/android/app/build/outputs/apk/debug/app-debug.apk
