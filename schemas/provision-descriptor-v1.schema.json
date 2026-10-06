@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Field TAK Provision Descriptor v1",
+  "type": "object",
+  "required": [
+    "schema",
+    "version",
+    "packageUrl",
+    "expiresUtc"
+  ],
+  "properties": {
+    "schema": {
+      "const": "fieldtak.provision"
+    },
+    "version": {
+      "const": 1
+    },
+    "packageUrl": {
+      "type": "string",
+      "format": "uri"
+    },
+    "packageSha256": {
+      "type": "string",
+      "pattern": "^[A-Fa-f0-9]{64}$"
+    },
+    "label": {
+      "type": "string"
+    },
+    "expiresUtc": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "packageBytes": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "recommendedFreeBytes": {
+      "type": "integer",
+      "minimum": 0
+    }
+  }
+}

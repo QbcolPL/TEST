@@ -1,0 +1,42 @@
+{
+  "schemaVersion": 2,
+  "packageId": "pl.ggzs.milsim.player",
+  "name": "GGZS Milsim - Player",
+  "packageVersion": "2.0.0",
+  "publisherName": "GGZS Field TAK",
+  "sourceDirectory": "./source",
+  "outputDirectory": "./out",
+  "atakMinVersion": "5.6",
+  "atakMaxVersion": "5.8",
+  "expiryHours": 6,
+  "server": {
+    "type": "OpenTAK",
+    "name": "GGZS OpenTAK",
+    "host": "ggzstak.duckdns.org",
+    "cotPort": 8089,
+    "apiPort": 8446,
+    "webPort": 8443
+  },
+  "maxDownloads": 50,
+  "meshtastic": {
+    "enabled": true,
+    "mode": "hybrid",
+    "channelName": "GGZS-TAK",
+    "region": "EU_868",
+    "modemPreset": "SHORT_FAST",
+    "hopLimit": 3,
+    "pli": true,
+    "geoChat": true,
+    "otsRelay": true,
+    "fileTransfer": false,
+    "gateway": {
+      "enabled": true,
+      "type": "generic_meshtastic",
+      "role": "ots_mqtt",
+      "transport": "mqtt_tls",
+      "mqttPort": 8883,
+      "rootTopic": "opentakserver",
+      "secretsExternal": true
+    }
+  }
+}

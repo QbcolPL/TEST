@@ -1,0 +1,19 @@
+Field TAK Hub 2.3.0 — LOCAL COMPILE PACKAGE
+
+Source baseline:
+Field-TAK-Hub-2.3.0-FIELD-NODE-TAK-ROLE-FIX-v5
+
+Included:
+- Android Studio project
+- Windows Builder 2.3.0
+- Simple Mode optional skip implementation
+- Meshtastic / LoRa HYBRID
+- OTS gateway / MQTT-TLS configuration
+- Smart Diagnosis / Recovery
+- local build documentation
+- static contract tests
+
+Builder:
+2.3.0 (UI baseline prepared for 2.4 direction)
+
+No private signing keys or MQTT secrets included.
