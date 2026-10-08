@@ -50,52 +50,28 @@ namespace FieldTakHub.Builder.Services
             }
         }
 
-        private static void ForceWhiteText(DependencyObject obj)
-        {
-            if (obj == null) return;
-            if (obj is TextBlock tb) tb.Foreground = Brushes.White;
-            else if (obj is TextBox tbx) tbx.Foreground = Brushes.White;
-            else if (obj is ContentPresenter cp) TextElement.SetForeground(cp, Brushes.White);
-            
-            for (int i = 0; i < VisualTreeHelper.GetChildrenCount(obj); i++)
-            {
-                ForceWhiteText(VisualTreeHelper.GetChild(obj, i));
-            }
-        }
-
         public static void AttachToMainWindow(Window win)
         {
-            if (Application.Current == null) return; // Zabezpieczenie przed xUnit
+            if (Application.Current == null) return;
 
             try
             {
-                // Klonowanie domyślnego motywu ComboBoxa
-                Style nativeCbStyle = null;
+                // Wymuszanie białej czcionki we wszystkich starych ComboBoxach
                 var combos = new List<ComboBox>();
                 FindVisualChildren(win, combos);
+                Style nativeCbStyle = null;
+
                 foreach (var c in combos)
                 {
                     if (c.Style != null && c.Tag?.ToString() != "INJECTED")
                     {
                         nativeCbStyle = c.Style;
-                        break;
                     }
-                }
-
-                // Wymuszanie białej czcionki na starych ComboBoxach
-                foreach (var c in combos)
-                {
                     if (c.Tag?.ToString() != "INJECTED")
                     {
+                        c.IsEditable = true;
+                        c.IsReadOnly = true;
                         c.Foreground = Brushes.White;
-                        TextElement.SetForeground(c, Brushes.White);
-                        c.Loaded += (s, e) => ForceWhiteText(c);
-                        c.SelectionChanged += (s, e) => {
-                            c.Dispatcher.BeginInvoke(new Action(() => ForceWhiteText(c)), System.Windows.Threading.DispatcherPriority.ContextIdle);
-                        };
-                        c.DropDownClosed += (s, e) => {
-                            c.Dispatcher.BeginInvoke(new Action(() => ForceWhiteText(c)), System.Windows.Threading.DispatcherPriority.ContextIdle);
-                        };
                     }
                 }
 
@@ -203,7 +179,10 @@ namespace FieldTakHub.Builder.Services
                         string n = btn.Name?.ToLower() ?? "";
                         if (c.Contains("odśwież") || c.Contains("refresh") || c.Contains("przelicz") || c.Contains("aktualizuj") || n.Contains("refresh") || n.Contains("update"))
                         {
-                            btn.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
+                            if (btn.Tag?.ToString() != "INJECTED_BTN")
+                            {
+                                btn.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
+                            }
                         }
                     }
 
@@ -245,20 +224,36 @@ namespace FieldTakHub.Builder.Services
             lStack.Children.Add(new TextBlock { Text = "Czysty profil ATAK bez wymuszania wtyczek. Zdefiniuj czestotliwosci odswiezania PLI.", Foreground = new SolidColorBrush(Color.FromRgb(138, 168, 164)), FontSize = 11, Margin = new Thickness(0, 0, 0, 10) });
 
             var gAtak = new UniformGrid { Columns = 3, Margin = new Thickness(0, 0, 0, 8) };
-            gAtak.Children.Add(FieldBox("Strategia PLI", ComboCtrl(new[] { "Constant", "Dynamic" }, m.LocationReportingStrategy, nativeCbStyle, v => { m.LocationReportingStrategy = v; ForceSizeUpdate(win); })));
-            gAtak.Children.Add(FieldBox("Const Rel/LTE (s)", IntCtrl(m.ConstantReportingRateReliable, v => { m.ConstantReportingRateReliable = v; ForceSizeUpdate(win); })));
-            gAtak.Children.Add(FieldBox("Const Unrel/Mesh (s)", IntCtrl(m.ConstantReportingRateUnreliable, v => { m.ConstantReportingRateUnreliable = v; ForceSizeUpdate(win); })));
-            gAtak.Children.Add(FieldBox("Dynamic Max (s)", IntCtrl(m.DynamicReportingRateMaxReliable, v => { m.DynamicReportingRateMaxReliable = v; ForceSizeUpdate(win); })));
-            gAtak.Children.Add(FieldBox("Dynamic Min (s)", IntCtrl(m.DynamicReportingRateMinReliable, v => { m.DynamicReportingRateMinReliable = v; ForceSizeUpdate(win); })));
-            gAtak.Children.Add(FieldBox("Postoj Rel (s)", IntCtrl(m.DynamicReportingRateStationaryReliable, v => { m.DynamicReportingRateStationaryReliable = v; ForceSizeUpdate(win); })));
-            gAtak.Children.Add(FieldBox("Postoj Mesh (s)", IntCtrl(m.DynamicReportingRateStationaryUnreliable, v => { m.DynamicReportingRateStationaryUnreliable = v; ForceSizeUpdate(win); })));
-            gAtak.Children.Add(FieldBox("TCP/UDP Timeout (s)", IntCtrl(m.TcpConnectTimeout, v => { m.TcpConnectTimeout = v; ForceSizeUpdate(win); })));
+            gAtak.Children.Add(FieldBox("Strategia PLI", ComboCtrl(new[] { "Constant", "Dynamic" }, m.LocationReportingStrategy, nativeCbStyle, v => { m.LocationReportingStrategy = v; })));
+            gAtak.Children.Add(FieldBox("Const Rel/LTE (s)", IntCtrl(m.ConstantReportingRateReliable, v => { m.ConstantReportingRateReliable = v; })));
+            gAtak.Children.Add(FieldBox("Const Unrel/Mesh (s)", IntCtrl(m.ConstantReportingRateUnreliable, v => { m.ConstantReportingRateUnreliable = v; })));
+            gAtak.Children.Add(FieldBox("Dynamic Max (s)", IntCtrl(m.DynamicReportingRateMaxReliable, v => { m.DynamicReportingRateMaxReliable = v; })));
+            gAtak.Children.Add(FieldBox("Dynamic Min (s)", IntCtrl(m.DynamicReportingRateMinReliable, v => { m.DynamicReportingRateMinReliable = v; })));
+            gAtak.Children.Add(FieldBox("Postoj Rel (s)", IntCtrl(m.DynamicReportingRateStationaryReliable, v => { m.DynamicReportingRateStationaryReliable = v; })));
+            gAtak.Children.Add(FieldBox("Postoj Mesh (s)", IntCtrl(m.DynamicReportingRateStationaryUnreliable, v => { m.DynamicReportingRateStationaryUnreliable = v; })));
+            gAtak.Children.Add(FieldBox("TCP/UDP Timeout (s)", IntCtrl(m.TcpConnectTimeout, v => { m.TcpConnectTimeout = v; })));
             lStack.Children.Add(gAtak);
 
             var gSw = new UniformGrid { Columns = 2 };
-            gSw.Children.Add(TileSwitch("Wysylaj pozycje na zewnatrz", m.DispatchLocationCotExternal, v => { m.DispatchLocationCotExternal = v; ForceSizeUpdate(win); }));
-            gSw.Children.Add(TileSwitch("Polaczenia bezstrumieniowe Mesh", m.EnableNonStreamingConnections, v => { m.EnableNonStreamingConnections = v; ForceSizeUpdate(win); }));
+            gSw.Children.Add(TileSwitch("Wysylaj pozycje na zewnatrz", m.DispatchLocationCotExternal, v => { m.DispatchLocationCotExternal = v; }));
+            gSw.Children.Add(TileSwitch("Polaczenia bezstrumieniowe Mesh", m.EnableNonStreamingConnections, v => { m.EnableNonStreamingConnections = v; }));
             lStack.Children.Add(gSw);
+
+            // DEDYKOWANY PRZYCISK ODŚWIEŻANIA ROZMIARU PACZKI
+            var btnRefresh = new Button {
+                Content = "Odśwież / Skalkuluj",
+                Height = 32,
+                Margin = new Thickness(0, 14, 0, 0),
+                Background = new SolidColorBrush(Color.FromRgb(44, 229, 208)),
+                Foreground = new SolidColorBrush(Color.FromRgb(6, 22, 24)),
+                FontWeight = FontWeights.Bold,
+                Cursor = System.Windows.Input.Cursors.Hand,
+                BorderThickness = new Thickness(0),
+                Tag = "INJECTED_BTN"
+            };
+            btnRefresh.Click += (s, e) => ForceSizeUpdate(win);
+            lStack.Children.Add(btnRefresh);
+
             card.Child = lStack;
             return card;
         }
@@ -269,11 +264,11 @@ namespace FieldTakHub.Builder.Services
 
             var labelMin = new TextBlock { Text = "Firmware MIN:", Foreground = new SolidColorBrush(Color.FromRgb(138, 168, 164)), VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 8, 0) };
             var txtMin = new TextBox { Text = Current.FirmwareMin, Width = 70, Height = 24, Background = new SolidColorBrush(Color.FromRgb(8, 19, 22)), Foreground = Brushes.White, BorderBrush = new SolidColorBrush(Color.FromRgb(30, 66, 74)), BorderThickness = new Thickness(1), VerticalContentAlignment = VerticalAlignment.Center, Padding = new Thickness(4, 0, 4, 0) };
-            txtMin.TextChanged += (_, __) => { Current.FirmwareMin = txtMin.Text; ForceSizeUpdate(win); };
+            txtMin.TextChanged += (_, __) => { Current.FirmwareMin = txtMin.Text; };
 
             var labelMax = new TextBlock { Text = "Firmware MAX:", Foreground = new SolidColorBrush(Color.FromRgb(138, 168, 164)), VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(16, 0, 8, 0) };
             var txtMax = new TextBox { Text = Current.FirmwareMax, Width = 70, Height = 24, Background = new SolidColorBrush(Color.FromRgb(8, 19, 22)), Foreground = Brushes.White, BorderBrush = new SolidColorBrush(Color.FromRgb(30, 66, 74)), BorderThickness = new Thickness(1), VerticalContentAlignment = VerticalAlignment.Center, Padding = new Thickness(4, 0, 4, 0) };
-            txtMax.TextChanged += (_, __) => { Current.FirmwareMax = txtMax.Text; ForceSizeUpdate(win); };
+            txtMax.TextChanged += (_, __) => { Current.FirmwareMax = txtMax.Text; };
 
             container.Children.Add(labelMin);
             container.Children.Add(txtMin);
@@ -303,17 +298,20 @@ namespace FieldTakHub.Builder.Services
         {
             var cb = new ComboBox { ItemsSource = items, SelectedItem = init, Height = 28, FontSize = 11, VerticalContentAlignment = VerticalAlignment.Center, Tag = "INJECTED" };
             if (nativeStyle != null) cb.Style = nativeStyle;
-            cb.Foreground = Brushes.White;
-            TextElement.SetForeground(cb, Brushes.White);
             
-            cb.Loaded += (s, e) => ForceWhiteText(cb);
-            cb.SelectionChanged += (s, e) => { 
-                if (cb.SelectedItem is string str) onChg(str);
-                cb.Dispatcher.BeginInvoke(new Action(() => ForceWhiteText(cb)), System.Windows.Threading.DispatcherPriority.ContextIdle);
-            };
-            cb.DropDownClosed += (s, e) => {
-                cb.Dispatcher.BeginInvoke(new Action(() => ForceWhiteText(cb)), System.Windows.Threading.DispatcherPriority.ContextIdle);
-            };
+            // TRIK NA BIAŁĄ CZCIONKĘ
+            cb.IsEditable = true;
+            cb.IsReadOnly = true;
+            cb.Foreground = Brushes.White;
+            cb.Background = new SolidColorBrush(Color.FromRgb(8, 19, 22));
+
+            var cStyle = new Style(typeof(ComboBoxItem));
+            cStyle.Setters.Add(new Setter(Control.BackgroundProperty, new SolidColorBrush(Color.FromRgb(15, 32, 37))));
+            cStyle.Setters.Add(new Setter(Control.ForegroundProperty, Brushes.White));
+            cStyle.Setters.Add(new Setter(Control.BorderThicknessProperty, new Thickness(0)));
+            cb.ItemContainerStyle = cStyle;
+            
+            cb.SelectionChanged += (s, e) => { if (cb.SelectedItem is string str) onChg(str); };
             return cb;
         }
 
@@ -341,7 +339,7 @@ namespace FieldTakHub.Builder.Services
         public static void WriteGeneratedConfigsIfInteractive(string tgt)
         {
             if (string.IsNullOrWhiteSpace(tgt)) return;
-            if (Application.Current == null) return; // Pomija testy
+            if (Application.Current == null) return; 
 
             try
             {
