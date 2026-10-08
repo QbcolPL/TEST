@@ -7,6 +7,7 @@ using System.Text.Json;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
+using System.Windows.Data;
 using System.Windows.Documents;
 using System.Windows.Media;
 
@@ -65,7 +66,6 @@ namespace FieldTakHub.Builder.Services
 
             try
             {
-                // Naprawa czarnych napisów w ComboBoxach poprzez nadpisanie pędzli systemowych
                 var combos = new List<ComboBox>();
                 FindVisualChildren(win, combos);
                 Style nativeCbStyle = null;
@@ -75,19 +75,29 @@ namespace FieldTakHub.Builder.Services
                     if (c.Style != null && c.Tag?.ToString() != "INJECTED")
                     {
                         nativeCbStyle = c.Style;
+                        break;
                     }
-                    
-                    c.Foreground = Brushes.White;
-                    c.Resources[SystemColors.ControlTextBrushKey] = Brushes.White;
-                    c.Resources[SystemColors.WindowTextBrushKey] = Brushes.White;
-                    c.Resources[SystemColors.MenuTextBrushKey] = Brushes.White;
+                }
+
+                // Wstrzykiwanie bezpiecznego DataTemplate do starych ComboBoxów
+                foreach (var c in combos)
+                {
+                    if (c.Tag?.ToString() != "INJECTED")
+                    {
+                        c.Foreground = Brushes.White;
+                        var dt = new DataTemplate(typeof(string));
+                        var factory = new FrameworkElementFactory(typeof(TextBlock));
+                        factory.SetBinding(TextBlock.TextProperty, new Binding());
+                        factory.SetValue(TextBlock.ForegroundProperty, Brushes.White);
+                        dt.VisualTree = factory;
+                        c.ItemTemplate = dt;
+                    }
                 }
 
                 var tbs = new List<TextBlock>();
                 FindVisualChildren(win, tbs);
                 foreach (var tb in tbs)
                 {
-                    // Wstrzykiwanie sekcji Meshtastic / ATAK
                     if (tb.Text != null && tb.Text.Contains("Konfiguracja Meshtastic"))
                     {
                         Border cardBorder = GetParent<Border>(tb);
@@ -108,7 +118,6 @@ namespace FieldTakHub.Builder.Services
                         }
                     }
                     
-                    // Wstrzykiwanie przycisku Odśwież pod Podglądem Zawartości
                     if (tb.Text != null && tb.Text.Contains("Podgląd zawartości"))
                     {
                         Border previewBorder = GetParent<Border>(tb);
@@ -124,7 +133,8 @@ namespace FieldTakHub.Builder.Services
                                     Foreground = new SolidColorBrush(Color.FromRgb(6, 22, 24)),
                                     FontWeight = FontWeights.Bold,
                                     Cursor = System.Windows.Input.Cursors.Hand,
-                                    BorderThickness = new Thickness(0)
+                                    BorderThickness = new Thickness(0),
+                                    Tag = "INJECTED_BTN"
                                 };
                                 btnRefresh.Click += (s, e) => ForceSizeUpdate(win);
                                 
@@ -164,20 +174,36 @@ namespace FieldTakHub.Builder.Services
                     }
                 }
 
+                // Bezpieczne pobranie WSZYSTKICH kontekstów (ViewModelów) w aplikacji
+                var allContexts = new HashSet<object>();
+                var qCtx = new Queue<DependencyObject>();
+                qCtx.Enqueue(win);
+                while (qCtx.Count > 0)
+                {
+                    var cur = qCtx.Dequeue();
+                    if (cur is FrameworkElement fe && fe.DataContext != null)
+                    {
+                        allContexts.Add(fe.DataContext);
+                    }
+                    int c = VisualTreeHelper.GetChildrenCount(cur);
+                    for (int i = 0; i < c; i++) qCtx.Enqueue(VisualTreeHelper.GetChild(cur, i));
+                }
+
                 var targetDirs = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
                 string baseD = AppDomain.CurrentDomain.BaseDirectory;
                 targetDirs.Add(System.IO.Path.Combine(baseD, "payload", evName, "config"));
+                targetDirs.Add(System.IO.Path.Combine(baseD, "payload", "config")); // Sciezka awaryjna
 
-                if (win.DataContext != null)
+                foreach (var ctx in allContexts)
                 {
                     var flags = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public;
-                    foreach (var prop in win.DataContext.GetType().GetProperties(flags))
+                    foreach (var prop in ctx.GetType().GetProperties(flags))
                     {
                         if (prop.PropertyType == typeof(string))
                         {
                             try
                             {
-                                string val = prop.GetValue(win.DataContext) as string;
+                                string val = prop.GetValue(ctx) as string;
                                 if (!string.IsNullOrWhiteSpace(val) && val.Length > 3 && System.IO.Path.IsPathRooted(val) && Directory.Exists(val))
                                 {
                                     targetDirs.Add(System.IO.Path.Combine(val, "config"));
@@ -190,6 +216,7 @@ namespace FieldTakHub.Builder.Services
                     }
                 }
 
+                // Zapisz konfigurację do wszystkich potencjalnych folderów
                 foreach (string dir in targetDirs)
                 {
                     try 
@@ -199,48 +226,48 @@ namespace FieldTakHub.Builder.Services
                     } catch { }
                 }
 
-                // Wymuszenie aktualizacji logiki i interfejsu
+                // Głębokie wymuszenie logiki odświeżania na wszystkich ViewModelach i Buttonach
                 win.Dispatcher.BeginInvoke(new Action(() => {
                     var btns = new List<ButtonBase>();
                     FindVisualChildren(win, btns);
                     foreach(var btn in btns)
                     {
-                        string c = btn.Content?.ToString()?.ToLower() ?? "";
-                        string n = btn.Name?.ToLower() ?? "";
-                        if (c.Contains("odśwież") || c.Contains("refresh") || c.Contains("przelicz") || c.Contains("aktualizuj") || n.Contains("refresh") || n.Contains("update"))
+                        if (btn.Tag?.ToString() != "INJECTED_BTN")
                         {
-                            if (btn.Content?.ToString() != "Odśwież / Skalkuluj rozmiar")
+                            string c = btn.Content?.ToString()?.ToLower() ?? "";
+                            string n = btn.Name?.ToLower() ?? "";
+                            if (c.Contains("odśwież") || c.Contains("refresh") || c.Contains("przelicz") || c.Contains("aktualizuj") || c.Contains("gener") || n.Contains("refresh") || n.Contains("update") || n.Contains("calc") || n.Contains("gener"))
                             {
                                 btn.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
                             }
                         }
                     }
 
-                    var flags = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic;
-                    if (win.DataContext != null)
+                    var mFlags = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic;
+                    foreach (var ctx in allContexts)
                     {
-                        foreach (var p in win.DataContext.GetType().GetProperties(flags))
+                        foreach (var p in ctx.GetType().GetProperties(mFlags))
                         {
                             if (typeof(System.Windows.Input.ICommand).IsAssignableFrom(p.PropertyType))
                             {
                                 string n = p.Name.ToLower();
-                                if (n.Contains("size") || n.Contains("refresh") || n.Contains("update") || n.Contains("calc") || n.Contains("analyz") || n.Contains("load"))
+                                if (n.Contains("size") || n.Contains("refresh") || n.Contains("update") || n.Contains("calc") || n.Contains("analyz") || n.Contains("load") || n.Contains("scan"))
                                 {
-                                    var cmd = p.GetValue(win.DataContext) as System.Windows.Input.ICommand;
+                                    var cmd = p.GetValue(ctx) as System.Windows.Input.ICommand;
                                     if (cmd != null && cmd.CanExecute(null)) cmd.Execute(null);
                                 }
                             }
                         }
-                        foreach (var m in win.DataContext.GetType().GetMethods(flags))
+                        foreach (var m in ctx.GetType().GetMethods(mFlags))
                         {
                             string n = m.Name.ToLower();
-                            if ((n.Contains("size") || n.Contains("update") || n.Contains("refresh") || n.Contains("calc") || n.Contains("analyz") || n.Contains("load")) && m.GetParameters().Length == 0)
+                            if ((n.Contains("size") || n.Contains("update") || n.Contains("refresh") || n.Contains("calc") || n.Contains("analyz") || n.Contains("load") || n.Contains("scan")) && m.GetParameters().Length == 0)
                             {
-                                try { m.Invoke(win.DataContext, null); } catch { }
+                                try { m.Invoke(ctx, null); } catch { }
                             }
                         }
                     }
-                }), System.Windows.Threading.DispatcherPriority.ContextIdle);
+                }), System.Windows.Threading.DispatcherPriority.Background);
             }
             catch { }
         }
@@ -315,9 +342,13 @@ namespace FieldTakHub.Builder.Services
             if (nativeStyle != null) cb.Style = nativeStyle;
             
             cb.Foreground = Brushes.White;
-            cb.Resources[SystemColors.ControlTextBrushKey] = Brushes.White;
-            cb.Resources[SystemColors.WindowTextBrushKey] = Brushes.White;
-            cb.Resources[SystemColors.MenuTextBrushKey] = Brushes.White;
+
+            var dt = new DataTemplate(typeof(string));
+            var factory = new FrameworkElementFactory(typeof(TextBlock));
+            factory.SetBinding(TextBlock.TextProperty, new Binding());
+            factory.SetValue(TextBlock.ForegroundProperty, Brushes.White);
+            dt.VisualTree = factory;
+            cb.ItemTemplate = dt;
 
             var cStyle = new Style(typeof(ComboBoxItem));
             cStyle.Setters.Add(new Setter(Control.BackgroundProperty, new SolidColorBrush(Color.FromRgb(15, 32, 37))));
