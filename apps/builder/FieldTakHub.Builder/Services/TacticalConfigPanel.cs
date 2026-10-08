@@ -1,4 +1,5 @@
-﻿using System;
+﻿#pragma warning disable CS8600, CS8602, CS8604
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Text;
@@ -37,6 +38,8 @@ namespace FieldTakHub.Builder.Services
 
         public static void AttachToMainWindow(Window win)
         {
+            if (Application.Current == null) return; // Zabezpieczenie przed testami jednostkowymi
+
             try
             {
                 ApplyGlobalComboBoxStyle(win);
@@ -98,7 +101,6 @@ namespace FieldTakHub.Builder.Services
                     st.Setters.Add(new Setter(Control.BorderThicknessProperty, new Thickness(0)));
                     cb.ItemContainerStyle = st;
 
-                    // OSTATECZNA NAPRAWA ZLEWAJĄCEJ SIĘ CZCIONKI (LayoutUpdated Bruteforce)
                     EventHandler layoutUpdated = null;
                     layoutUpdated = (s, e) => {
                         var innerQ = new Queue<DependencyObject>();
@@ -128,6 +130,8 @@ namespace FieldTakHub.Builder.Services
 
         private static void ForceSizeUpdate(Window win)
         {
+            if (Application.Current == null) return; // Zabezpieczenie przed Unit Testami
+
             try
             {
                 string evName = "Draft";
@@ -153,62 +157,83 @@ namespace FieldTakHub.Builder.Services
                     for (int i = 0; i < cnt; i++) q.Enqueue(VisualTreeHelper.GetChild(cur, i));
                 }
 
-                // Bezposredni zapis do docelowego folderu
+                // Bezpieczne szukanie faktycznego folderu Workspace w ViewModelu
+                var targetConfigDirs = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
                 string baseD = AppDomain.CurrentDomain.BaseDirectory;
-                string pLoad = System.IO.Path.Combine(baseD, "payload");
-                string specDir = System.IO.Path.Combine(pLoad, evName, "config");
-                string rootSpecDir = System.IO.Path.Combine(pLoad, evName);
-                
-                if (!Directory.Exists(specDir)) Directory.CreateDirectory(specDir);
-                WriteGeneratedConfigsIfInteractive(specDir);
-                WriteGeneratedConfigsIfInteractive(rootSpecDir); // Gwarancja pliku
+                targetConfigDirs.Add(System.IO.Path.Combine(baseD, "payload", evName, "config"));
 
-                if (Directory.Exists(pLoad))
+                if (win.DataContext != null)
                 {
-                    foreach (var d in Directory.GetDirectories(pLoad))
+                    var propFlags = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public;
+                    foreach (var prop in win.DataContext.GetType().GetProperties(propFlags))
                     {
-                        string cfg = System.IO.Path.Combine(d, "config");
-                        if (Directory.Exists(cfg)) WriteGeneratedConfigsIfInteractive(cfg);
+                        if (prop.PropertyType == typeof(string))
+                        {
+                            try
+                            {
+                                string val = prop.GetValue(win.DataContext) as string;
+                                if (!string.IsNullOrWhiteSpace(val) && val.Length > 3 && System.IO.Path.IsPathRooted(val) && Directory.Exists(val))
+                                {
+                                    targetConfigDirs.Add(System.IO.Path.Combine(val, "config"));
+                                    if (val.EndsWith("config", StringComparison.OrdinalIgnoreCase)) 
+                                        targetConfigDirs.Add(val);
+                                }
+                            } catch { }
+                        }
                     }
                 }
 
-                // Agresywne wymuszenie wywołania komend MVVM z DataContext
-                var flags = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic;
-                
-                if (win.DataContext != null)
+                foreach (string dir in targetConfigDirs)
                 {
-                    foreach (var p in win.DataContext.GetType().GetProperties(flags))
+                    try 
                     {
-                        if (typeof(System.Windows.Input.ICommand).IsAssignableFrom(p.PropertyType))
+                        string parentDir = System.IO.Path.GetDirectoryName(dir);
+                        if (!string.IsNullOrEmpty(parentDir) && Directory.Exists(parentDir))
                         {
-                            string n = p.Name.ToLower();
-                            if (n.Contains("size") || n.Contains("refresh") || n.Contains("update") || n.Contains("calc"))
+                            if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);
+                            WriteGeneratedConfigsIfInteractive(dir);
+                        }
+                    } catch { }
+                }
+
+                // Opóźnione wywołanie komend MVVM po zapisie pliku, aby UI zdążyło zareagować
+                win.Dispatcher.BeginInvoke(new Action(() => {
+                    var flags = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic;
+                    
+                    if (win.DataContext != null)
+                    {
+                        foreach (var p in win.DataContext.GetType().GetProperties(flags))
+                        {
+                            if (typeof(System.Windows.Input.ICommand).IsAssignableFrom(p.PropertyType))
                             {
-                                var cmd = p.GetValue(win.DataContext) as System.Windows.Input.ICommand;
-                                if (cmd != null && cmd.CanExecute(null)) cmd.Execute(null);
+                                string n = p.Name.ToLower();
+                                if (n.Contains("size") || n.Contains("refresh") || n.Contains("update") || n.Contains("calc") || n.Contains("analyz") || n.Contains("load"))
+                                {
+                                    var cmd = p.GetValue(win.DataContext) as System.Windows.Input.ICommand;
+                                    if (cmd != null && cmd.CanExecute(null)) cmd.Execute(null);
+                                }
+                            }
+                        }
+
+                        foreach (var m in win.DataContext.GetType().GetMethods(flags))
+                        {
+                            string n = m.Name.ToLower();
+                            if ((n.Contains("size") || n.Contains("update") || n.Contains("refresh") || n.Contains("calc") || n.Contains("analyz") || n.Contains("load")) && m.GetParameters().Length == 0)
+                            {
+                                try { m.Invoke(win.DataContext, null); } catch { }
                             }
                         }
                     }
 
-                    foreach (var m in win.DataContext.GetType().GetMethods(flags))
+                    foreach (var m in win.GetType().GetMethods(flags))
                     {
                         string n = m.Name.ToLower();
                         if ((n.Contains("size") || n.Contains("update") || n.Contains("refresh") || n.Contains("calc") || n.Contains("load")) && m.GetParameters().Length == 0)
                         {
-                            try { m.Invoke(win.DataContext, null); } catch { }
+                            try { m.Invoke(win, null); } catch { }
                         }
                     }
-                }
-
-                // Metody awaryjne w oknie głównym
-                foreach (var m in win.GetType().GetMethods(flags))
-                {
-                    string n = m.Name.ToLower();
-                    if ((n.Contains("size") || n.Contains("update") || n.Contains("refresh") || n.Contains("calc") || n.Contains("load")) && m.GetParameters().Length == 0)
-                    {
-                        try { m.Invoke(win, null); } catch { }
-                    }
-                }
+                }), System.Windows.Threading.DispatcherPriority.ContextIdle);
             }
             catch { }
         }
@@ -326,6 +351,8 @@ namespace FieldTakHub.Builder.Services
         public static void WriteGeneratedConfigsIfInteractive(string tgt)
         {
             if (string.IsNullOrWhiteSpace(tgt)) return;
+            if (Application.Current == null) return;
+
             try
             {
                 if (!Directory.Exists(tgt)) Directory.CreateDirectory(tgt);
