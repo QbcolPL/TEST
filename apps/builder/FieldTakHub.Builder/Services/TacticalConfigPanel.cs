@@ -98,24 +98,24 @@ namespace FieldTakHub.Builder.Services
                     st.Setters.Add(new Setter(Control.BorderThicknessProperty, new Thickness(0)));
                     cb.ItemContainerStyle = st;
 
-                    // OSTATECZNA NAPRAWA ZLEWAJĄCEJ SIĘ CZCIONKI COMBOBOX (Bruteforce Visual Tree)
-                    RoutedEventHandler forceWhite = (s, e) => {
-                        var targetCb = s as ComboBox;
-                        if (targetCb == null) return;
+                    // OSTATECZNA NAPRAWA ZLEWAJĄCEJ SIĘ CZCIONKI (LayoutUpdated Bruteforce)
+                    EventHandler layoutUpdated = null;
+                    layoutUpdated = (s, e) => {
                         var innerQ = new Queue<DependencyObject>();
-                        innerQ.Enqueue(targetCb);
+                        innerQ.Enqueue(cb);
                         while (innerQ.Count > 0) {
                             var innerCur = innerQ.Dequeue();
-                            if (innerCur is TextBlock innerTb) innerTb.Foreground = Brushes.White;
-                            else if (innerCur is TextBox innerTx) innerTx.Foreground = Brushes.White;
+                            if (innerCur is TextBlock innerTb) {
+                                if (innerTb.Foreground != Brushes.White) innerTb.Foreground = Brushes.White;
+                            }
+                            else if (innerCur is TextBox innerTx) {
+                                if (innerTx.Foreground != Brushes.White) innerTx.Foreground = Brushes.White;
+                            }
                             int c = VisualTreeHelper.GetChildrenCount(innerCur);
                             for (int i = 0; i < c; i++) innerQ.Enqueue(VisualTreeHelper.GetChild(innerCur, i));
                         }
                     };
-                    cb.Loaded += forceWhite;
-                    cb.SelectionChanged += (s, e) => {
-                        cb.Dispatcher.BeginInvoke(new Action(() => forceWhite(cb, null)), System.Windows.Threading.DispatcherPriority.Loaded);
-                    };
+                    cb.LayoutUpdated += layoutUpdated;
                 }
                 else if (cur is TextBox tb)
                 {
@@ -153,13 +153,15 @@ namespace FieldTakHub.Builder.Services
                     for (int i = 0; i < cnt; i++) q.Enqueue(VisualTreeHelper.GetChild(cur, i));
                 }
 
-                // Bezposredni zapis do docelowego folderu, aby aktualizacja pliku była widziana
+                // Bezposredni zapis do docelowego folderu
                 string baseD = AppDomain.CurrentDomain.BaseDirectory;
                 string pLoad = System.IO.Path.Combine(baseD, "payload");
                 string specDir = System.IO.Path.Combine(pLoad, evName, "config");
+                string rootSpecDir = System.IO.Path.Combine(pLoad, evName);
                 
                 if (!Directory.Exists(specDir)) Directory.CreateDirectory(specDir);
                 WriteGeneratedConfigsIfInteractive(specDir);
+                WriteGeneratedConfigsIfInteractive(rootSpecDir); // Gwarancja pliku
 
                 if (Directory.Exists(pLoad))
                 {
@@ -170,11 +172,24 @@ namespace FieldTakHub.Builder.Services
                     }
                 }
 
-                // Przymusowe wywołanie funkcji odświeżających wielkość paczki w KB na widoku
+                // Agresywne wymuszenie wywołania komend MVVM z DataContext
                 var flags = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic;
                 
                 if (win.DataContext != null)
                 {
+                    foreach (var p in win.DataContext.GetType().GetProperties(flags))
+                    {
+                        if (typeof(System.Windows.Input.ICommand).IsAssignableFrom(p.PropertyType))
+                        {
+                            string n = p.Name.ToLower();
+                            if (n.Contains("size") || n.Contains("refresh") || n.Contains("update") || n.Contains("calc"))
+                            {
+                                var cmd = p.GetValue(win.DataContext) as System.Windows.Input.ICommand;
+                                if (cmd != null && cmd.CanExecute(null)) cmd.Execute(null);
+                            }
+                        }
+                    }
+
                     foreach (var m in win.DataContext.GetType().GetMethods(flags))
                     {
                         string n = m.Name.ToLower();
@@ -185,6 +200,7 @@ namespace FieldTakHub.Builder.Services
                     }
                 }
 
+                // Metody awaryjne w oknie głównym
                 foreach (var m in win.GetType().GetMethods(flags))
                 {
                     string n = m.Name.ToLower();
@@ -269,24 +285,20 @@ namespace FieldTakHub.Builder.Services
             cStyle.Setters.Add(new Setter(Control.BorderThicknessProperty, new Thickness(0)));
             cb.ItemContainerStyle = cStyle;
             
-            RoutedEventHandler forceWhite = (s, e) => {
-                var targetCb = s as ComboBox;
-                if (targetCb == null) return;
+            EventHandler layoutUpdated = null;
+            layoutUpdated = (s, e) => {
                 var innerQ = new Queue<DependencyObject>();
-                innerQ.Enqueue(targetCb);
+                innerQ.Enqueue(cb);
                 while (innerQ.Count > 0) {
                     var innerCur = innerQ.Dequeue();
-                    if (innerCur is TextBlock innerTb) innerTb.Foreground = Brushes.White;
-                    else if (innerCur is TextBox innerTx) innerTx.Foreground = Brushes.White;
+                    if (innerCur is TextBlock innerTb && innerTb.Foreground != Brushes.White) innerTb.Foreground = Brushes.White;
+                    else if (innerCur is TextBox innerTx && innerTx.Foreground != Brushes.White) innerTx.Foreground = Brushes.White;
                     int c = VisualTreeHelper.GetChildrenCount(innerCur);
                     for (int i = 0; i < c; i++) innerQ.Enqueue(VisualTreeHelper.GetChild(innerCur, i));
                 }
             };
-            cb.Loaded += forceWhite;
-            cb.SelectionChanged += (s, e) => { 
-                if (cb.SelectedItem is string str) onChg(str);
-                cb.Dispatcher.BeginInvoke(new Action(() => forceWhite(cb, null)), System.Windows.Threading.DispatcherPriority.Loaded);
-            };
+            cb.LayoutUpdated += layoutUpdated;
+            cb.SelectionChanged += (s, e) => { if (cb.SelectedItem is string str) onChg(str); };
             return cb;
         }
 
@@ -316,8 +328,6 @@ namespace FieldTakHub.Builder.Services
             if (string.IsNullOrWhiteSpace(tgt)) return;
             try
             {
-                string norm = tgt.ToLowerInvariant();
-                if (!norm.EndsWith("config") && !norm.EndsWith("meshtastic")) return;
                 if (!Directory.Exists(tgt)) Directory.CreateDirectory(tgt);
                 string jsonPath = System.IO.Path.Combine(tgt, "tactical_config.json");
                 var root = new Dictionary<string, object>();
