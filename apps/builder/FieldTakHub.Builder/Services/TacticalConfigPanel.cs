@@ -36,6 +36,7 @@ namespace FieldTakHub.Builder.Services
         public static TacticalConfigModel Current { get; set; } = new TacticalConfigModel();
         private static bool _fwFieldsAdded = false;
         private static bool _atakCardAdded = false;
+        private static bool _refreshBtnAdded = false;
 
         private static void FindVisualChildren<T>(DependencyObject depObj, List<T> list) where T : DependencyObject
         {
@@ -50,13 +51,21 @@ namespace FieldTakHub.Builder.Services
             }
         }
 
+        private static T GetParent<T>(DependencyObject child) where T : DependencyObject
+        {
+            DependencyObject parentObject = VisualTreeHelper.GetParent(child);
+            if (parentObject == null) return null;
+            if (parentObject is T parent) return parent;
+            return GetParent<T>(parentObject);
+        }
+
         public static void AttachToMainWindow(Window win)
         {
             if (Application.Current == null) return;
 
             try
             {
-                // Wymuszanie białej czcionki we wszystkich starych ComboBoxach
+                // Naprawa czarnych napisów w ComboBoxach poprzez nadpisanie pędzli systemowych
                 var combos = new List<ComboBox>();
                 FindVisualChildren(win, combos);
                 Style nativeCbStyle = null;
@@ -67,28 +76,21 @@ namespace FieldTakHub.Builder.Services
                     {
                         nativeCbStyle = c.Style;
                     }
-                    if (c.Tag?.ToString() != "INJECTED")
-                    {
-                        c.IsEditable = true;
-                        c.IsReadOnly = true;
-                        c.Foreground = Brushes.White;
-                    }
+                    
+                    c.Foreground = Brushes.White;
+                    c.Resources[SystemColors.ControlTextBrushKey] = Brushes.White;
+                    c.Resources[SystemColors.WindowTextBrushKey] = Brushes.White;
+                    c.Resources[SystemColors.MenuTextBrushKey] = Brushes.White;
                 }
 
                 var tbs = new List<TextBlock>();
                 FindVisualChildren(win, tbs);
                 foreach (var tb in tbs)
                 {
+                    // Wstrzykiwanie sekcji Meshtastic / ATAK
                     if (tb.Text != null && tb.Text.Contains("Konfiguracja Meshtastic"))
                     {
-                        Border cardBorder = null;
-                        DependencyObject p = VisualTreeHelper.GetParent(tb);
-                        while (p != null)
-                        {
-                            if (p is Border b && b.Background != null) { cardBorder = b; break; }
-                            p = VisualTreeHelper.GetParent(p) ?? LogicalTreeHelper.GetParent(p);
-                        }
-
+                        Border cardBorder = GetParent<Border>(tb);
                         if (cardBorder != null)
                         {
                             if (!_fwFieldsAdded && cardBorder.Child is Panel innerPanel)
@@ -102,6 +104,33 @@ namespace FieldTakHub.Builder.Services
                                 int idx = parentPanel.Children.IndexOf(cardBorder);
                                 parentPanel.Children.Insert(idx, BuildAtakCard(win, nativeCbStyle));
                                 _atakCardAdded = true;
+                            }
+                        }
+                    }
+                    
+                    // Wstrzykiwanie przycisku Odśwież pod Podglądem Zawartości
+                    if (tb.Text != null && tb.Text.Contains("Podgląd zawartości"))
+                    {
+                        Border previewBorder = GetParent<Border>(tb);
+                        if (previewBorder != null)
+                        {
+                            if (VisualTreeHelper.GetParent(previewBorder) is Panel parentPanel && !_refreshBtnAdded)
+                            {
+                                var btnRefresh = new Button {
+                                    Content = "Odśwież / Skalkuluj rozmiar",
+                                    Height = 32,
+                                    Margin = new Thickness(0, 8, 0, 14),
+                                    Background = new SolidColorBrush(Color.FromRgb(44, 229, 208)),
+                                    Foreground = new SolidColorBrush(Color.FromRgb(6, 22, 24)),
+                                    FontWeight = FontWeights.Bold,
+                                    Cursor = System.Windows.Input.Cursors.Hand,
+                                    BorderThickness = new Thickness(0)
+                                };
+                                btnRefresh.Click += (s, e) => ForceSizeUpdate(win);
+                                
+                                int idx = parentPanel.Children.IndexOf(previewBorder);
+                                parentPanel.Children.Insert(idx + 1, btnRefresh);
+                                _refreshBtnAdded = true;
                             }
                         }
                     }
@@ -170,6 +199,7 @@ namespace FieldTakHub.Builder.Services
                     } catch { }
                 }
 
+                // Wymuszenie aktualizacji logiki i interfejsu
                 win.Dispatcher.BeginInvoke(new Action(() => {
                     var btns = new List<ButtonBase>();
                     FindVisualChildren(win, btns);
@@ -179,7 +209,7 @@ namespace FieldTakHub.Builder.Services
                         string n = btn.Name?.ToLower() ?? "";
                         if (c.Contains("odśwież") || c.Contains("refresh") || c.Contains("przelicz") || c.Contains("aktualizuj") || n.Contains("refresh") || n.Contains("update"))
                         {
-                            if (btn.Tag?.ToString() != "INJECTED_BTN")
+                            if (btn.Content?.ToString() != "Odśwież / Skalkuluj rozmiar")
                             {
                                 btn.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
                             }
@@ -239,21 +269,6 @@ namespace FieldTakHub.Builder.Services
             gSw.Children.Add(TileSwitch("Polaczenia bezstrumieniowe Mesh", m.EnableNonStreamingConnections, v => { m.EnableNonStreamingConnections = v; }));
             lStack.Children.Add(gSw);
 
-            // DEDYKOWANY PRZYCISK ODŚWIEŻANIA ROZMIARU PACZKI
-            var btnRefresh = new Button {
-                Content = "Odśwież / Skalkuluj",
-                Height = 32,
-                Margin = new Thickness(0, 14, 0, 0),
-                Background = new SolidColorBrush(Color.FromRgb(44, 229, 208)),
-                Foreground = new SolidColorBrush(Color.FromRgb(6, 22, 24)),
-                FontWeight = FontWeights.Bold,
-                Cursor = System.Windows.Input.Cursors.Hand,
-                BorderThickness = new Thickness(0),
-                Tag = "INJECTED_BTN"
-            };
-            btnRefresh.Click += (s, e) => ForceSizeUpdate(win);
-            lStack.Children.Add(btnRefresh);
-
             card.Child = lStack;
             return card;
         }
@@ -299,11 +314,10 @@ namespace FieldTakHub.Builder.Services
             var cb = new ComboBox { ItemsSource = items, SelectedItem = init, Height = 28, FontSize = 11, VerticalContentAlignment = VerticalAlignment.Center, Tag = "INJECTED" };
             if (nativeStyle != null) cb.Style = nativeStyle;
             
-            // TRIK NA BIAŁĄ CZCIONKĘ
-            cb.IsEditable = true;
-            cb.IsReadOnly = true;
             cb.Foreground = Brushes.White;
-            cb.Background = new SolidColorBrush(Color.FromRgb(8, 19, 22));
+            cb.Resources[SystemColors.ControlTextBrushKey] = Brushes.White;
+            cb.Resources[SystemColors.WindowTextBrushKey] = Brushes.White;
+            cb.Resources[SystemColors.MenuTextBrushKey] = Brushes.White;
 
             var cStyle = new Style(typeof(ComboBoxItem));
             cStyle.Setters.Add(new Setter(Control.BackgroundProperty, new SolidColorBrush(Color.FromRgb(15, 32, 37))));
