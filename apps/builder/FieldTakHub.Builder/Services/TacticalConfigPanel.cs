@@ -36,21 +36,73 @@ namespace FieldTakHub.Builder.Services
         private static bool _fwFieldsAdded = false;
         private static bool _atakCardAdded = false;
 
+        private static void FindVisualChildren<T>(DependencyObject depObj, List<T> list) where T : DependencyObject
+        {
+            if (depObj != null)
+            {
+                for (int i = 0; i < VisualTreeHelper.GetChildrenCount(depObj); i++)
+                {
+                    DependencyObject child = VisualTreeHelper.GetChild(depObj, i);
+                    if (child != null && child is T t) list.Add(t);
+                    FindVisualChildren<T>(child, list);
+                }
+            }
+        }
+
+        private static void ForceWhiteText(DependencyObject obj)
+        {
+            if (obj == null) return;
+            if (obj is TextBlock tb) tb.Foreground = Brushes.White;
+            else if (obj is TextBox tbx) tbx.Foreground = Brushes.White;
+            else if (obj is ContentPresenter cp) TextElement.SetForeground(cp, Brushes.White);
+            
+            for (int i = 0; i < VisualTreeHelper.GetChildrenCount(obj); i++)
+            {
+                ForceWhiteText(VisualTreeHelper.GetChild(obj, i));
+            }
+        }
+
         public static void AttachToMainWindow(Window win)
         {
-            if (Application.Current == null) return; // Zabezpieczenie przed testami jednostkowymi
+            if (Application.Current == null) return; // Zabezpieczenie przed xUnit
 
             try
             {
-                ApplyGlobalComboBoxStyle(win);
-
-                var q = new Queue<DependencyObject>();
-                q.Enqueue(win);
-                while (q.Count > 0)
+                // Klonowanie domyślnego motywu ComboBoxa
+                Style nativeCbStyle = null;
+                var combos = new List<ComboBox>();
+                FindVisualChildren(win, combos);
+                foreach (var c in combos)
                 {
-                    var cur = q.Dequeue();
-                    
-                    if (cur is TextBlock tb && tb.Text != null && tb.Text.Contains("Konfiguracja Meshtastic"))
+                    if (c.Style != null && c.Tag?.ToString() != "INJECTED")
+                    {
+                        nativeCbStyle = c.Style;
+                        break;
+                    }
+                }
+
+                // Wymuszanie białej czcionki na starych ComboBoxach
+                foreach (var c in combos)
+                {
+                    if (c.Tag?.ToString() != "INJECTED")
+                    {
+                        c.Foreground = Brushes.White;
+                        TextElement.SetForeground(c, Brushes.White);
+                        c.Loaded += (s, e) => ForceWhiteText(c);
+                        c.SelectionChanged += (s, e) => {
+                            c.Dispatcher.BeginInvoke(new Action(() => ForceWhiteText(c)), System.Windows.Threading.DispatcherPriority.ContextIdle);
+                        };
+                        c.DropDownClosed += (s, e) => {
+                            c.Dispatcher.BeginInvoke(new Action(() => ForceWhiteText(c)), System.Windows.Threading.DispatcherPriority.ContextIdle);
+                        };
+                    }
+                }
+
+                var tbs = new List<TextBlock>();
+                FindVisualChildren(win, tbs);
+                foreach (var tb in tbs)
+                {
+                    if (tb.Text != null && tb.Text.Contains("Konfiguracja Meshtastic"))
                     {
                         Border cardBorder = null;
                         DependencyObject p = VisualTreeHelper.GetParent(tb);
@@ -71,101 +123,49 @@ namespace FieldTakHub.Builder.Services
                             if (!_atakCardAdded && VisualTreeHelper.GetParent(cardBorder) is Panel parentPanel)
                             {
                                 int idx = parentPanel.Children.IndexOf(cardBorder);
-                                parentPanel.Children.Insert(idx, BuildAtakCard(win));
+                                parentPanel.Children.Insert(idx, BuildAtakCard(win, nativeCbStyle));
                                 _atakCardAdded = true;
                             }
                         }
                     }
-
-                    int cnt = VisualTreeHelper.GetChildrenCount(cur);
-                    for (int i = 0; i < cnt; i++) q.Enqueue(VisualTreeHelper.GetChild(cur, i));
                 }
             }
             catch { }
         }
 
-        private static void ApplyGlobalComboBoxStyle(DependencyObject root)
-        {
-            var q = new Queue<DependencyObject>();
-            q.Enqueue(root);
-            while (q.Count > 0)
-            {
-                var cur = q.Dequeue();
-                if (cur is ComboBox cb)
-                {
-                    cb.Foreground = Brushes.White;
-                    var bg = new SolidColorBrush(Color.FromRgb(15, 32, 37));
-                    var st = new Style(typeof(ComboBoxItem));
-                    st.Setters.Add(new Setter(Control.BackgroundProperty, bg));
-                    st.Setters.Add(new Setter(Control.ForegroundProperty, Brushes.White));
-                    st.Setters.Add(new Setter(Control.BorderThicknessProperty, new Thickness(0)));
-                    cb.ItemContainerStyle = st;
-
-                    EventHandler layoutUpdated = null;
-                    layoutUpdated = (s, e) => {
-                        var innerQ = new Queue<DependencyObject>();
-                        innerQ.Enqueue(cb);
-                        while (innerQ.Count > 0) {
-                            var innerCur = innerQ.Dequeue();
-                            if (innerCur is TextBlock innerTb) {
-                                if (innerTb.Foreground != Brushes.White) innerTb.Foreground = Brushes.White;
-                            }
-                            else if (innerCur is TextBox innerTx) {
-                                if (innerTx.Foreground != Brushes.White) innerTx.Foreground = Brushes.White;
-                            }
-                            int c = VisualTreeHelper.GetChildrenCount(innerCur);
-                            for (int i = 0; i < c; i++) innerQ.Enqueue(VisualTreeHelper.GetChild(innerCur, i));
-                        }
-                    };
-                    cb.LayoutUpdated += layoutUpdated;
-                }
-                else if (cur is TextBox tb)
-                {
-                    tb.Foreground = Brushes.White;
-                }
-                int cnt = VisualTreeHelper.GetChildrenCount(cur);
-                for (int i = 0; i < cnt; i++) q.Enqueue(VisualTreeHelper.GetChild(cur, i));
-            }
-        }
-
         private static void ForceSizeUpdate(Window win)
         {
-            if (Application.Current == null) return; // Zabezpieczenie przed Unit Testami
+            if (Application.Current == null) return;
 
             try
             {
                 string evName = "Draft";
-                var q = new Queue<DependencyObject>();
-                q.Enqueue(win);
-                while (q.Count > 0)
+                var tbs = new List<TextBlock>();
+                FindVisualChildren(win, tbs);
+                foreach (var tb in tbs)
                 {
-                    var cur = q.Dequeue();
-                    if (cur is TextBlock tb && tb.Text != null && (tb.Text.Contains("Nazwa wydarzenia") || tb.Text.Contains("Event Name")))
+                    if (tb.Text != null && (tb.Text.Contains("Nazwa wydarzenia") || tb.Text.Contains("Event Name")))
                     {
                         var parent = VisualTreeHelper.GetParent(tb);
                         if (parent != null)
                         {
-                            int c = VisualTreeHelper.GetChildrenCount(parent);
-                            for (int i = 0; i < c; i++)
+                            for (int i = 0; i < VisualTreeHelper.GetChildrenCount(parent); i++)
                             {
                                 var sib = VisualTreeHelper.GetChild(parent, i);
                                 if (sib is TextBox tbx && !string.IsNullOrWhiteSpace(tbx.Text)) { evName = tbx.Text.Trim(); break; }
                             }
                         }
                     }
-                    int cnt = VisualTreeHelper.GetChildrenCount(cur);
-                    for (int i = 0; i < cnt; i++) q.Enqueue(VisualTreeHelper.GetChild(cur, i));
                 }
 
-                // Bezpieczne szukanie faktycznego folderu Workspace w ViewModelu
-                var targetConfigDirs = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                var targetDirs = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
                 string baseD = AppDomain.CurrentDomain.BaseDirectory;
-                targetConfigDirs.Add(System.IO.Path.Combine(baseD, "payload", evName, "config"));
+                targetDirs.Add(System.IO.Path.Combine(baseD, "payload", evName, "config"));
 
                 if (win.DataContext != null)
                 {
-                    var propFlags = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public;
-                    foreach (var prop in win.DataContext.GetType().GetProperties(propFlags))
+                    var flags = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public;
+                    foreach (var prop in win.DataContext.GetType().GetProperties(flags))
                     {
                         if (prop.PropertyType == typeof(string))
                         {
@@ -174,32 +174,39 @@ namespace FieldTakHub.Builder.Services
                                 string val = prop.GetValue(win.DataContext) as string;
                                 if (!string.IsNullOrWhiteSpace(val) && val.Length > 3 && System.IO.Path.IsPathRooted(val) && Directory.Exists(val))
                                 {
-                                    targetConfigDirs.Add(System.IO.Path.Combine(val, "config"));
-                                    if (val.EndsWith("config", StringComparison.OrdinalIgnoreCase)) 
-                                        targetConfigDirs.Add(val);
+                                    targetDirs.Add(System.IO.Path.Combine(val, "config"));
+                                    targetDirs.Add(System.IO.Path.Combine(val, "source"));
+                                    if (val.EndsWith("config", StringComparison.OrdinalIgnoreCase) || val.EndsWith("source", StringComparison.OrdinalIgnoreCase)) 
+                                        targetDirs.Add(val);
                                 }
                             } catch { }
                         }
                     }
                 }
 
-                foreach (string dir in targetConfigDirs)
+                foreach (string dir in targetDirs)
                 {
                     try 
                     {
-                        string parentDir = System.IO.Path.GetDirectoryName(dir);
-                        if (!string.IsNullOrEmpty(parentDir) && Directory.Exists(parentDir))
-                        {
-                            if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);
-                            WriteGeneratedConfigsIfInteractive(dir);
-                        }
+                        if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);
+                        WriteGeneratedConfigsIfInteractive(dir);
                     } catch { }
                 }
 
-                // Opóźnione wywołanie komend MVVM po zapisie pliku, aby UI zdążyło zareagować
                 win.Dispatcher.BeginInvoke(new Action(() => {
+                    var btns = new List<ButtonBase>();
+                    FindVisualChildren(win, btns);
+                    foreach(var btn in btns)
+                    {
+                        string c = btn.Content?.ToString()?.ToLower() ?? "";
+                        string n = btn.Name?.ToLower() ?? "";
+                        if (c.Contains("odśwież") || c.Contains("refresh") || c.Contains("przelicz") || c.Contains("aktualizuj") || n.Contains("refresh") || n.Contains("update"))
+                        {
+                            btn.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
+                        }
+                    }
+
                     var flags = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic;
-                    
                     if (win.DataContext != null)
                     {
                         foreach (var p in win.DataContext.GetType().GetProperties(flags))
@@ -214,7 +221,6 @@ namespace FieldTakHub.Builder.Services
                                 }
                             }
                         }
-
                         foreach (var m in win.DataContext.GetType().GetMethods(flags))
                         {
                             string n = m.Name.ToLower();
@@ -224,21 +230,12 @@ namespace FieldTakHub.Builder.Services
                             }
                         }
                     }
-
-                    foreach (var m in win.GetType().GetMethods(flags))
-                    {
-                        string n = m.Name.ToLower();
-                        if ((n.Contains("size") || n.Contains("update") || n.Contains("refresh") || n.Contains("calc") || n.Contains("load")) && m.GetParameters().Length == 0)
-                        {
-                            try { m.Invoke(win, null); } catch { }
-                        }
-                    }
                 }), System.Windows.Threading.DispatcherPriority.ContextIdle);
             }
             catch { }
         }
 
-        private static UIElement BuildAtakCard(Window win)
+        private static UIElement BuildAtakCard(Window win, Style nativeCbStyle)
         {
             var m = Current;
             var card = new Border { Background = new SolidColorBrush(Color.FromRgb(9, 20, 24)), BorderBrush = new SolidColorBrush(Color.FromRgb(26, 58, 66)), BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(8), Padding = new Thickness(14), Margin = new Thickness(0, 0, 0, 14) };
@@ -247,7 +244,7 @@ namespace FieldTakHub.Builder.Services
             lStack.Children.Add(new TextBlock { Text = "Czysty profil ATAK bez wymuszania wtyczek. Zdefiniuj czestotliwosci odswiezania PLI.", Foreground = new SolidColorBrush(Color.FromRgb(138, 168, 164)), FontSize = 11, Margin = new Thickness(0, 0, 0, 10) });
 
             var gAtak = new UniformGrid { Columns = 3, Margin = new Thickness(0, 0, 0, 8) };
-            gAtak.Children.Add(FieldBox("Strategia PLI", ComboCtrl(new[] { "Constant", "Dynamic" }, m.LocationReportingStrategy, v => { m.LocationReportingStrategy = v; ForceSizeUpdate(win); })));
+            gAtak.Children.Add(FieldBox("Strategia PLI", ComboCtrl(new[] { "Constant", "Dynamic" }, m.LocationReportingStrategy, nativeCbStyle, v => { m.LocationReportingStrategy = v; ForceSizeUpdate(win); })));
             gAtak.Children.Add(FieldBox("Const Rel/LTE (s)", IntCtrl(m.ConstantReportingRateReliable, v => { m.ConstantReportingRateReliable = v; ForceSizeUpdate(win); })));
             gAtak.Children.Add(FieldBox("Const Unrel/Mesh (s)", IntCtrl(m.ConstantReportingRateUnreliable, v => { m.ConstantReportingRateUnreliable = v; ForceSizeUpdate(win); })));
             gAtak.Children.Add(FieldBox("Dynamic Max (s)", IntCtrl(m.DynamicReportingRateMaxReliable, v => { m.DynamicReportingRateMaxReliable = v; ForceSizeUpdate(win); })));
@@ -301,29 +298,21 @@ namespace FieldTakHub.Builder.Services
 
         private static UIElement IntCtrl(int init, Action<int> onChg) => TextCtrl(init.ToString(), s => { if (int.TryParse(s.Trim(), out int v)) onChg(v); });
 
-        private static UIElement ComboCtrl(string[] items, string init, Action<string> onChg)
+        private static UIElement ComboCtrl(string[] items, string init, Style nativeStyle, Action<string> onChg)
         {
-            var cb = new ComboBox { ItemsSource = items, SelectedItem = init, Height = 28, FontSize = 11, VerticalContentAlignment = VerticalAlignment.Center, Foreground = Brushes.White, Background = new SolidColorBrush(Color.FromRgb(15, 32, 37)) };
-            var cStyle = new Style(typeof(ComboBoxItem));
-            cStyle.Setters.Add(new Setter(Control.BackgroundProperty, new SolidColorBrush(Color.FromRgb(15, 32, 37))));
-            cStyle.Setters.Add(new Setter(Control.ForegroundProperty, Brushes.White));
-            cStyle.Setters.Add(new Setter(Control.BorderThicknessProperty, new Thickness(0)));
-            cb.ItemContainerStyle = cStyle;
+            var cb = new ComboBox { ItemsSource = items, SelectedItem = init, Height = 28, FontSize = 11, VerticalContentAlignment = VerticalAlignment.Center, Tag = "INJECTED" };
+            if (nativeStyle != null) cb.Style = nativeStyle;
+            cb.Foreground = Brushes.White;
+            TextElement.SetForeground(cb, Brushes.White);
             
-            EventHandler layoutUpdated = null;
-            layoutUpdated = (s, e) => {
-                var innerQ = new Queue<DependencyObject>();
-                innerQ.Enqueue(cb);
-                while (innerQ.Count > 0) {
-                    var innerCur = innerQ.Dequeue();
-                    if (innerCur is TextBlock innerTb && innerTb.Foreground != Brushes.White) innerTb.Foreground = Brushes.White;
-                    else if (innerCur is TextBox innerTx && innerTx.Foreground != Brushes.White) innerTx.Foreground = Brushes.White;
-                    int c = VisualTreeHelper.GetChildrenCount(innerCur);
-                    for (int i = 0; i < c; i++) innerQ.Enqueue(VisualTreeHelper.GetChild(innerCur, i));
-                }
+            cb.Loaded += (s, e) => ForceWhiteText(cb);
+            cb.SelectionChanged += (s, e) => { 
+                if (cb.SelectedItem is string str) onChg(str);
+                cb.Dispatcher.BeginInvoke(new Action(() => ForceWhiteText(cb)), System.Windows.Threading.DispatcherPriority.ContextIdle);
             };
-            cb.LayoutUpdated += layoutUpdated;
-            cb.SelectionChanged += (s, e) => { if (cb.SelectedItem is string str) onChg(str); };
+            cb.DropDownClosed += (s, e) => {
+                cb.Dispatcher.BeginInvoke(new Action(() => ForceWhiteText(cb)), System.Windows.Threading.DispatcherPriority.ContextIdle);
+            };
             return cb;
         }
 
@@ -351,7 +340,7 @@ namespace FieldTakHub.Builder.Services
         public static void WriteGeneratedConfigsIfInteractive(string tgt)
         {
             if (string.IsNullOrWhiteSpace(tgt)) return;
-            if (Application.Current == null) return;
+            if (Application.Current == null) return; // Pomija testy
 
             try
             {
