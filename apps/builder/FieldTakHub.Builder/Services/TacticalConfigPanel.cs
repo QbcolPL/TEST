@@ -126,7 +126,7 @@ namespace FieldTakHub.Builder.Services
                             if (VisualTreeHelper.GetParent(previewBorder) is Panel parentPanel && !_refreshBtnAdded)
                             {
                                 var btnRefresh = new Button {
-                                    Content = "Odśwież / Skalkuluj rozmiar",
+                                    Content = "Odśwież skalkuluj zawartość (folder source)",
                                     Height = 32,
                                     Margin = new Thickness(0, 8, 0, 14),
                                     Background = new SolidColorBrush(Color.FromRgb(44, 229, 208)),
@@ -174,7 +174,7 @@ namespace FieldTakHub.Builder.Services
                     }
                 }
 
-                // Bezpieczne pobranie WSZYSTKICH kontekstów (ViewModelów) w aplikacji
+                // Pobranie kontekstów MVVM
                 var allContexts = new HashSet<object>();
                 var qCtx = new Queue<DependencyObject>();
                 qCtx.Enqueue(win);
@@ -191,8 +191,15 @@ namespace FieldTakHub.Builder.Services
 
                 var targetDirs = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
                 string baseD = AppDomain.CurrentDomain.BaseDirectory;
-                targetDirs.Add(System.IO.Path.Combine(baseD, "payload", evName, "config"));
-                targetDirs.Add(System.IO.Path.Combine(baseD, "payload", "config")); // Sciezka awaryjna
+                
+                string pLoadDir = System.IO.Path.Combine(baseD, "payload", evName);
+                string configDir = System.IO.Path.Combine(pLoadDir, "config");
+                string sourceDir = System.IO.Path.Combine(pLoadDir, "source");
+                
+                targetDirs.Add(configDir);
+                
+                if (!Directory.Exists(sourceDir)) Directory.CreateDirectory(sourceDir); // Zapewnia istnienie folderu source
+                if (!Directory.Exists(configDir)) Directory.CreateDirectory(configDir);
 
                 foreach (var ctx in allContexts)
                 {
@@ -207,7 +214,6 @@ namespace FieldTakHub.Builder.Services
                                 if (!string.IsNullOrWhiteSpace(val) && val.Length > 3 && System.IO.Path.IsPathRooted(val) && Directory.Exists(val))
                                 {
                                     targetDirs.Add(System.IO.Path.Combine(val, "config"));
-                                    targetDirs.Add(System.IO.Path.Combine(val, "source"));
                                     if (val.EndsWith("config", StringComparison.OrdinalIgnoreCase) || val.EndsWith("source", StringComparison.OrdinalIgnoreCase)) 
                                         targetDirs.Add(val);
                                 }
@@ -216,7 +222,6 @@ namespace FieldTakHub.Builder.Services
                     }
                 }
 
-                // Zapisz konfigurację do wszystkich potencjalnych folderów
                 foreach (string dir in targetDirs)
                 {
                     try 
@@ -226,23 +231,8 @@ namespace FieldTakHub.Builder.Services
                     } catch { }
                 }
 
-                // Głębokie wymuszenie logiki odświeżania na wszystkich ViewModelach i Buttonach
+                // GŁÓWNA NAPRAWA: Zabezpieczone odświeżanie logiki bez uruchamiania generowania paczki
                 win.Dispatcher.BeginInvoke(new Action(() => {
-                    var btns = new List<ButtonBase>();
-                    FindVisualChildren(win, btns);
-                    foreach(var btn in btns)
-                    {
-                        if (btn.Tag?.ToString() != "INJECTED_BTN")
-                        {
-                            string c = btn.Content?.ToString()?.ToLower() ?? "";
-                            string n = btn.Name?.ToLower() ?? "";
-                            if (c.Contains("odśwież") || c.Contains("refresh") || c.Contains("przelicz") || c.Contains("aktualizuj") || c.Contains("gener") || n.Contains("refresh") || n.Contains("update") || n.Contains("calc") || n.Contains("gener"))
-                            {
-                                btn.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
-                            }
-                        }
-                    }
-
                     var mFlags = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic;
                     foreach (var ctx in allContexts)
                     {
@@ -251,7 +241,9 @@ namespace FieldTakHub.Builder.Services
                             if (typeof(System.Windows.Input.ICommand).IsAssignableFrom(p.PropertyType))
                             {
                                 string n = p.Name.ToLower();
-                                if (n.Contains("size") || n.Contains("refresh") || n.Contains("update") || n.Contains("calc") || n.Contains("analyz") || n.Contains("load") || n.Contains("scan"))
+                                // WAZNE: Omijamy komendy odpowiedzialne za "Generate" i "Build", aby nie wywołać FTH-BLD-001
+                                if ((n.Contains("size") || n.Contains("refresh") || n.Contains("calc") || n.Contains("analyz") || n.Contains("scan")) 
+                                     && !n.Contains("gener") && !n.Contains("build") && !n.Contains("pack") && !n.Contains("save"))
                                 {
                                     var cmd = p.GetValue(ctx) as System.Windows.Input.ICommand;
                                     if (cmd != null && cmd.CanExecute(null)) cmd.Execute(null);
@@ -261,7 +253,9 @@ namespace FieldTakHub.Builder.Services
                         foreach (var m in ctx.GetType().GetMethods(mFlags))
                         {
                             string n = m.Name.ToLower();
-                            if ((n.Contains("size") || n.Contains("update") || n.Contains("refresh") || n.Contains("calc") || n.Contains("analyz") || n.Contains("load") || n.Contains("scan")) && m.GetParameters().Length == 0)
+                            if ((n.Contains("size") || n.Contains("calc") || n.Contains("analyz") || n.Contains("scan") || n.Contains("refresh")) 
+                                 && !n.Contains("gener") && !n.Contains("build") && !n.Contains("pack") && !n.Contains("save") 
+                                 && m.GetParameters().Length == 0)
                             {
                                 try { m.Invoke(ctx, null); } catch { }
                             }
