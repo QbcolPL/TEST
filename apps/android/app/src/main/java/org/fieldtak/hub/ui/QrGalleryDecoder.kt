@@ -11,7 +11,7 @@ import com.google.zxing.common.HybridBinarizer
 
 object QrImageDecoder {
 
-    fun decodeUri(context: Context, uri: Uri): String? {
+    fun decodeFromUri(context: Context, uri: Uri): String? {
         return try {
             // 1. Bezpieczne odczytywanie URI z galerii
             val inputStream = context.contentResolver.openInputStream(uri)
