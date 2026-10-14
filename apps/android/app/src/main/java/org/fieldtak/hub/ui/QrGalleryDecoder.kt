@@ -25,7 +25,6 @@ object QrImageDecoder {
     fun decodeFromUri(resolver: ContentResolver, uri: Uri): String? {
         var sampledBitmap: Bitmap? = null
         return try {
-            // 1. Odczyt samych wymiarów bez alokacji pikseli w pamięci RAM (Ochrona przed OutOfMemoryError)
             val boundsOptions = BitmapFactory.Options().apply {
                 inJustDecodeBounds = true
             }
@@ -35,7 +34,6 @@ object QrImageDecoder {
 
             if (boundsOptions.outWidth <= 0 || boundsOptions.outHeight <= 0) return null
 
-            // 2. Wyliczenie współczynnika redukcji inSampleSize przed wczytaniem bitmapy do RAM
             val decodeOptions = BitmapFactory.Options().apply {
                 inSampleSize = calculateInSampleSize(boundsOptions.outWidth, boundsOptions.outHeight, 1600)
                 inPreferredConfig = Bitmap.Config.ARGB_8888

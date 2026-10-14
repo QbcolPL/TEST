@@ -495,7 +495,7 @@ public partial class MainWindow : Window
             if(string.IsNullOrWhiteSpace(local) || !File.Exists(local)){MessageBox.Show(T("SelectCloudPackageFirst","Select the exact local .ftak file that you uploaded to the cloud."),T("WindowTitle","Field TAK Hub Builder"));return;}
             var project=FromUi();
             var resolved=CloudDistributionService.ResolvePackageUrl(CloudUrlBox.Text);
-            var deepLink=CloudDistributionService.CreateDeepLink(resolved.DownloadUrl,local,DateTimeOffset.UtcNow.AddHours(project.QrExpiryHours),project.Name);
+            var deepLink=CloudDistributionService.CreateDeepLink(resolved.DownloadUrl,local,DateTimeOffset.UtcNow.AddHours(((project.QrExpiryHours) == 0 ? 876000.0 : (double)(project.QrExpiryHours))),project.Name);
             if(resolved.WasNormalized) CloudUrlBox.Text=resolved.DownloadUrl;
             var png=_qr.CreatePng(deepLink); ShowQr(deepLink,png);
             Directory.CreateDirectory(project.OutputDirectory);

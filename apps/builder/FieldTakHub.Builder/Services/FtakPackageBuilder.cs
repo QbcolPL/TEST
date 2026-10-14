@@ -139,7 +139,7 @@ public sealed class FtakPackageBuilder
                 Enrollment = project.Enrollment,
                 Meshtastic = project.Meshtastic,
                 Components = new ComponentInfo { MissionPackage = missionCreated, Plugins = pluginCount, Files = SourceFileFilter.EnumerateFilteredFiles(payload, "*", SearchOption.AllDirectories).Count(), Enrollment = enrollmentFile != null, Meshtastic = project.Meshtastic.Enabled || (Directory.Exists(Path.Combine(project.SourceDirectory, "meshtastic")) && SourceFileFilter.EnumerateFilteredFiles(project.SourceDirectory + Path.DirectorySeparatorChar + "meshtastic", "*", SearchOption.AllDirectories).Any()) },
-                Distribution = new DistributionInfo { ExpiresUtc = DateTime.UtcNow.AddHours(project.ExpiryHours), MaxDownloads = project.MaxDownloads },
+                Distribution = new DistributionInfo { ExpiresUtc = DateTime.UtcNow.AddHours(((project.ExpiryHours) == 0 ? 876000.0 : (double)(project.ExpiryHours))), MaxDownloads = project.MaxDownloads },
                 Size = new PackageSizeInfo { PayloadBytes = payloadBytes, UncompressedBytes = uncompressedEstimate, RecommendedFreeBytes = recommendedFree }
             };
 

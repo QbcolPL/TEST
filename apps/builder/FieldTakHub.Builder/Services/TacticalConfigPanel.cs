@@ -14,6 +14,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Documents;
+using System.Windows.Input;
 using System.Windows.Markup;
 using System.Windows.Media;
 using System.Windows.Threading;
@@ -42,6 +43,10 @@ namespace FieldTakHub.Builder.Services
         public string HardwareModel { get; set; } = "generic_meshtastic";
         public string FirmwareMin { get; set; } = "2.7.26";
         public string FirmwareMax { get; set; } = "2.8.0.47";
+
+        // 0 = Ważność bezterminowa (paczka .ftak oraz kod QR nigdy nie wygasają)
+        public int PackageValidityHours { get; set; } = 0;
+        public int QrValidityHours { get; set; } = 0;
     }
 
     public static class TacticalConfigPanel
@@ -69,13 +74,16 @@ namespace FieldTakHub.Builder.Services
             return brush;
         }
 
-        // Attached Property zapobiegające duplikowaniu subskrypcji zdarzeń (Memory Leak Fix)
         private static readonly DependencyProperty IsHookedProperty =
             DependencyProperty.RegisterAttached("IsHooked", typeof(bool), typeof(TacticalConfigPanel), new PropertyMetadata(false));
 
         private static Style _darkComboBoxStyle = null;
         private static Style _darkComboBoxItemStyle = null;
         private static Button _injectedRefreshButton = null;
+        private static TextBox _injectedPkgValidityBox = null;
+        private static TextBox _injectedQrValidityBox = null;
+        private static TextBlock _indefiniteStatusBadge = null;
+        private static bool _syncingValidity = false;
 
         private static readonly Regex WindowsPathRegex = new Regex(@"[A-Za-z]:[\\/][^\r\n""<>|?*]+", RegexOptions.Compiled);
 
@@ -274,15 +282,6 @@ namespace FieldTakHub.Builder.Services
             }
         }
 
-        private static T GetParent<T>(DependencyObject child) where T : DependencyObject
-        {
-            DependencyObject parentObject = VisualTreeHelper.GetParent(child) ?? LogicalTreeHelper.GetParent(child);
-            if (parentObject == null) return null;
-            if (parentObject is T parent) return parent;
-            return GetParent<T>(parentObject);
-        }
-
-        // Znajduje główny Border całej karty (a nie tylko wewnętrznego nagłówka)
         private static Border GetOuterCardBorder(DependencyObject startElement)
         {
             Border bestBorder = null;
@@ -358,7 +357,7 @@ namespace FieldTakHub.Builder.Services
                                     Background = BrushButtonAccent,
                                     Foreground = BrushDarkFg,
                                     FontWeight = FontWeights.Bold,
-                                    Cursor = System.Windows.Input.Cursors.Hand,
+                                    Cursor = Cursors.Hand,
                                     BorderThickness = new Thickness(0),
                                     Tag = "INJECTED_BTN"
                                 };
@@ -380,6 +379,7 @@ namespace FieldTakHub.Builder.Services
                         }
                     }
 
+                    HookNativeValidityControls(win);
                     SyncNativeMeshtasticSelections(win);
                 }
                 catch { }
@@ -390,6 +390,21 @@ namespace FieldTakHub.Builder.Services
             if (!(bool)win.GetValue(IsHookedProperty))
             {
                 win.SetValue(IsHookedProperty, true);
+
+                // Przechwytywanie kliknięć przycisków Buduj / Generuj QR, aby 0 zawsze dawało ważność bezterminową
+                win.AddHandler(UIElement.PreviewMouseLeftButtonDownEvent, new MouseButtonEventHandler((s, e) =>
+                {
+                    ApplyIndefiniteValidityBeforeAction(win);
+                }), true);
+
+                win.AddHandler(UIElement.PreviewKeyDownEvent, new KeyEventHandler((s, e) =>
+                {
+                    if (e.Key == Key.Enter || e.Key == Key.Space)
+                    {
+                        ApplyIndefiniteValidityBeforeAction(win);
+                    }
+                }), true);
+
                 win.Loaded += async (s, e) =>
                 {
                     InitializeEnhancements();
@@ -401,6 +416,277 @@ namespace FieldTakHub.Builder.Services
                     }
                 };
             }
+        }
+
+        // Wykrywa natywne pola ważności paczki .ftak oraz QR w oknie MainWindow i spina je z obsługą 0 = Bezterminowo
+        private static List<TextBox> FindNativeValidityTextBoxes(Window win)
+        {
+            var result = new List<TextBox>();
+            if (win == null) return result;
+
+            var allTbs = new List<TextBox>();
+            FindVisualChildren(win, allTbs);
+
+            foreach (var tb in allTbs)
+            {
+                if (tb.Tag?.ToString() == "INJECTED_VALIDITY") continue;
+
+                string name = (tb.Name ?? "").ToLowerInvariant();
+                string toolTip = (tb.ToolTip?.ToString() ?? "").ToLowerInvariant();
+                string nearbyLabel = "";
+
+                var parent = VisualTreeHelper.GetParent(tb);
+                if (parent != null)
+                {
+                    var labelBlocks = new List<TextBlock>();
+                    FindVisualChildren(parent, labelBlocks);
+                    nearbyLabel = string.Join(" ", labelBlocks.Select(b => b.Text ?? "")).ToLowerInvariant();
+                }
+
+                bool isValidityField =
+                    name.Contains("valid") || name.Contains("expir") || name.Contains("ttl") || name.Contains("waznosc") || name.Contains("lifetime") ||
+                    toolTip.Contains("ważno") || toolTip.Contains("wazno") || toolTip.Contains("wygas") || toolTip.Contains("expir") || toolTip.Contains("valid") ||
+                    nearbyLabel.Contains("ważno") || nearbyLabel.Contains("wazno") || nearbyLabel.Contains("wygas") || nearbyLabel.Contains("wygaś") ||
+                    nearbyLabel.Contains("ttl") || nearbyLabel.Contains("czas życia") || nearbyLabel.Contains("validity") || nearbyLabel.Contains("expiration");
+
+                if (isValidityField)
+                {
+                    result.Add(tb);
+                }
+            }
+            return result;
+        }
+
+        private static void HookNativeValidityControls(Window win)
+        {
+            var nativeBoxes = FindNativeValidityTextBoxes(win);
+            foreach (var tb in nativeBoxes)
+            {
+                if ((bool)tb.GetValue(IsHookedProperty)) continue;
+                tb.SetValue(IsHookedProperty, true);
+
+                tb.ToolTip = "Wpisz 0, aby ustawić ważność bezterminową (brak wygasania paczki .ftak oraz kodu QR).";
+
+                if (int.TryParse(tb.Text?.Trim(), out int initVal) && initVal >= 0)
+                {
+                    if (_injectedPkgValidityBox != null && Current.PackageValidityHours == 0 && initVal > 0)
+                    {
+                        Current.PackageValidityHours = initVal;
+                        Current.QrValidityHours = initVal;
+                    }
+                }
+
+                tb.TextChanged += (s, e) =>
+                {
+                    if (_syncingValidity) return;
+                    if (int.TryParse(tb.Text?.Trim(), out int v) && v >= 0)
+                    {
+                        _syncingValidity = true;
+                        try
+                        {
+                            if (v == 0 || v < 800000)
+                            {
+                                Current.PackageValidityHours = v;
+                                Current.QrValidityHours = v;
+                                if (_injectedPkgValidityBox != null && _injectedPkgValidityBox.Text != v.ToString())
+                                    _injectedPkgValidityBox.Text = v.ToString();
+                                if (_injectedQrValidityBox != null && _injectedQrValidityBox.Text != v.ToString())
+                                    _injectedQrValidityBox.Text = v.ToString();
+                            }
+                            tb.BorderBrush = (v == 0) ? BrushAccent : BrushInputBorder;
+                            UpdateIndefiniteBadge();
+                        }
+                        finally
+                        {
+                            _syncingValidity = false;
+                        }
+                    }
+                };
+            }
+
+            // Obsługa ewentualnych ComboBoxów z czasem ważności
+            var combos = new List<ComboBox>();
+            FindVisualChildren(win, combos);
+            foreach (var cb in combos)
+            {
+                if (cb.Tag?.ToString() == "INJECTED") continue;
+                string name = (cb.Name ?? "").ToLowerInvariant();
+                if (name.Contains("valid") || name.Contains("expir") || name.Contains("ttl"))
+                {
+                    bool hasZero = false;
+                    foreach (var item in cb.Items)
+                    {
+                        string s = (item is ComboBoxItem cbi) ? cbi.Content?.ToString() : item?.ToString();
+                        if (s != null && (s == "0" || s.StartsWith("0 ") || s.Contains("Bezterminow", StringComparison.OrdinalIgnoreCase)))
+                        {
+                            hasZero = true;
+                            break;
+                        }
+                    }
+                    if (!hasZero && cb.ItemsSource == null)
+                    {
+                        cb.Items.Insert(0, new ComboBoxItem { Content = "0 (Bezterminowo)", Foreground = Brushes.White, Background = BrushItemBg });
+                    }
+                }
+            }
+        }
+
+        private static void SyncValidityToNativeControls(Window win)
+        {
+            if (win == null || _syncingValidity) return;
+            _syncingValidity = true;
+            try
+            {
+                var nativeBoxes = FindNativeValidityTextBoxes(win);
+                foreach (var tb in nativeBoxes)
+                {
+                    string name = (tb.Name ?? "").ToLowerInvariant();
+                    int valToSet = name.Contains("qr") ? Current.QrValidityHours : Current.PackageValidityHours;
+                    tb.Text = valToSet.ToString();
+                    tb.BorderBrush = (valToSet == 0) ? BrushAccent : BrushInputBorder;
+                }
+                UpdateIndefiniteBadge();
+            }
+            catch { }
+            finally
+            {
+                _syncingValidity = false;
+            }
+        }
+
+        private static void UpdateIndefiniteBadge()
+        {
+            if (_indefiniteStatusBadge == null) return;
+            if (Current.PackageValidityHours == 0 && Current.QrValidityHours == 0)
+            {
+                _indefiniteStatusBadge.Text = "✓ Ważność: BEZTERMINOWA (Paczka .ftak oraz kod QR nigdy nie wygasają)";
+                _indefiniteStatusBadge.Foreground = BrushAccent;
+            }
+            else if (Current.PackageValidityHours == 0 || Current.QrValidityHours == 0)
+            {
+                string pkgStr = Current.PackageValidityHours == 0 ? "Bezterminowa" : $"{Current.PackageValidityHours}h";
+                string qrStr = Current.QrValidityHours == 0 ? "Bezterminowy" : $"{Current.QrValidityHours}h";
+                _indefiniteStatusBadge.Text = $"✓ Ważność paczki .ftak: {pkgStr} | Ważność kodu QR: {qrStr}";
+                _indefiniteStatusBadge.Foreground = BrushAccent;
+            }
+            else
+            {
+                _indefiniteStatusBadge.Text = $"Czas wygaśnięcia — Paczka .ftak: {Current.PackageValidityHours}h | Kod QR: {Current.QrValidityHours}h (wpisz 0 dla bezterminowej)";
+                _indefiniteStatusBadge.Foreground = BrushMutedText;
+            }
+        }
+
+        // Zapewnia, że przy wartości 0 wewnętrzny generator paczki .ftak i kodu QR otrzymuje 100 lat ważności (brak wygasania)
+        private static void ApplyIndefiniteValidityBeforeAction(Window win)
+        {
+            if (win == null) return;
+            try
+            {
+                var nativeBoxes = FindNativeValidityTextBoxes(win);
+                var boxesRestoredToZero = new List<TextBox>();
+
+                foreach (var tb in nativeBoxes)
+                {
+                    if (int.TryParse(tb.Text?.Trim(), out int v) && v == 0)
+                    {
+                        Current.PackageValidityHours = 0;
+                        Current.QrValidityHours = 0;
+                        boxesRestoredToZero.Add(tb);
+                    }
+                }
+
+                bool isIndefinite = (Current.PackageValidityHours == 0 || Current.QrValidityHours == 0 || boxesRestoredToZero.Count > 0);
+                if (!isIndefinite) return;
+
+                // Jeżeli natywne pole ma "0", na ułamek sekundy przekazujemy 876000h (100 lat), aby ominąć każdą blokadę <= 0 w MainWindow
+                _syncingValidity = true;
+                try
+                {
+                    foreach (var tb in boxesRestoredToZero)
+                    {
+                        tb.Text = "876000";
+                    }
+                }
+                finally
+                {
+                    _syncingValidity = false;
+                }
+
+                // Ustawienie właściwości ważności w modelu projektu w pamięci (MainWindow / FieldTakProject)
+                var flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+                var targets = new List<object> { win };
+                if (win.DataContext != null) targets.Add(win.DataContext);
+
+                foreach (var f in win.GetType().GetFields(flags))
+                {
+                    try
+                    {
+                        var fv = f.GetValue(win);
+                        if (fv != null && fv.GetType().Namespace != null && fv.GetType().Namespace.StartsWith("FieldTakHub"))
+                            targets.Add(fv);
+                    }
+                    catch { }
+                }
+
+                foreach (var obj in targets)
+                {
+                    foreach (var prop in obj.GetType().GetProperties(flags))
+                    {
+                        if (!prop.CanWrite || prop.GetIndexParameters().Length > 0) continue;
+                        string pn = prop.Name.ToLowerInvariant();
+                        if (pn.Contains("expir") || pn.Contains("valid") || pn.Contains("ttl"))
+                        {
+                            try
+                            {
+                                if (prop.PropertyType == typeof(int))
+                                {
+                                    var curVal = (int)prop.GetValue(obj);
+                                    if (curVal <= 0) prop.SetValue(obj, pn.Contains("day") ? 36500 : 876000);
+                                }
+                                else if (prop.PropertyType == typeof(long))
+                                {
+                                    var curVal = (long)prop.GetValue(obj);
+                                    if (curVal <= 0) prop.SetValue(obj, pn.Contains("day") ? 36500L : 876000L);
+                                }
+                                else if (prop.PropertyType == typeof(double))
+                                {
+                                    var curVal = (double)prop.GetValue(obj);
+                                    if (curVal <= 0) prop.SetValue(obj, pn.Contains("day") ? 36500.0 : 876000.0);
+                                }
+                                else if (prop.PropertyType == typeof(DateTimeOffset) || prop.PropertyType == typeof(DateTimeOffset?))
+                                {
+                                    prop.SetValue(obj, DateTimeOffset.UtcNow.AddYears(100));
+                                }
+                            }
+                            catch { }
+                        }
+                    }
+                }
+
+                // Przywrócenie "0" w kontrolkach UI po wykonaniu akcji kliknięcia
+                _ = win.Dispatcher.BeginInvoke(new Action(() =>
+                {
+                    _syncingValidity = true;
+                    try
+                    {
+                        foreach (var tb in boxesRestoredToZero)
+                        {
+                            if (tb.Text == "876000") tb.Text = "0";
+                            tb.BorderBrush = BrushAccent;
+                        }
+                        if (_injectedPkgValidityBox != null && Current.PackageValidityHours == 0)
+                            _injectedPkgValidityBox.Text = "0";
+                        if (_injectedQrValidityBox != null && Current.QrValidityHours == 0)
+                            _injectedQrValidityBox.Text = "0";
+                        UpdateIndefiniteBadge();
+                    }
+                    finally
+                    {
+                        _syncingValidity = false;
+                    }
+                }), DispatcherPriority.ApplicationIdle);
+            }
+            catch { }
         }
 
         private static bool HasInjectedTag(Panel panel, string tag)
@@ -524,7 +810,6 @@ namespace FieldTakHub.Builder.Services
                 EvaluateRawString(LastKnownSourceDir, true);
             }
 
-            // Rekurencyjne przeszukanie grafu obiektów MainWindow (do 4 poziomów w głąb)
             if (win != null)
             {
                 var visitedObjs = new HashSet<object>();
@@ -550,7 +835,6 @@ namespace FieldTakHub.Builder.Services
                         return;
                     }
 
-                    // Ignorujemy głębokie struktury wewnętrzne WPF poza samym MainWindow
                     if (depth > 0 && t.Namespace != null && t.Namespace.StartsWith("System.Windows")) return;
 
                     var flags = BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic;
@@ -584,7 +868,6 @@ namespace FieldTakHub.Builder.Services
                         catch { }
                     }
 
-                    // Wywołanie bezargumentowych metod zwracających ścieżkę (np. GetSourceDirectory / GetWorkspacePath)
                     if (t.Namespace != null && t.Namespace.StartsWith("FieldTakHub"))
                     {
                         foreach (var m in t.GetMethods(flags))
@@ -609,7 +892,6 @@ namespace FieldTakHub.Builder.Services
                 InspectObject(win, 0);
                 if (win.DataContext != null) InspectObject(win.DataContext, 0);
 
-                // Skanowanie wszystkich TextBoxów i TextBlocków w UI pod kątem wyświetlonej ścieżki folderu
                 var textBoxes = new List<TextBox>();
                 FindVisualChildren(win, textBoxes);
                 foreach (var tbx in textBoxes) EvaluateRawString(tbx.Text, true);
@@ -619,7 +901,6 @@ namespace FieldTakHub.Builder.Services
                 foreach (var tb in textBlocks) EvaluateRawString(tb.Text, false);
             }
 
-            // Standardowe lokalizacje zapasowe
             string localApp = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "FieldTakHub");
             if (Directory.Exists(localApp))
             {
@@ -666,7 +947,6 @@ namespace FieldTakHub.Builder.Services
                 SyncNativeMeshtasticSelections(win);
                 var sourceDirs = ResolveSourceDirectories(win);
 
-                // Zapisz konfigurację i oblicz statystyki dla każdego wykrytego katalogu source
                 SourceStats bestStats = null;
                 await Task.Run(() =>
                 {
@@ -688,7 +968,6 @@ namespace FieldTakHub.Builder.Services
 
                 if (bestStats == null) bestStats = emptyStats;
 
-                // 1. Wywołanie natywnych metod odświeżających w MainWindow (bez blokowania słowa "Package")
                 var flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
                 foreach (var m in win.GetType().GetMethods(flags))
                 {
@@ -708,10 +987,8 @@ namespace FieldTakHub.Builder.Services
                     }
                 }
 
-                // 2. Bezpośrednia aktualizacja kontrolek w sekcji "Podgląd zawartości"
                 UpdatePreviewCardLabels(win, bestStats);
 
-                // Drugi przebieg w stanie ApplicationIdle na wypadek asynchronicznego odświeżania MainWindow
                 _ = win.Dispatcher.BeginInvoke(new Action(() =>
                 {
                     UpdatePreviewCardLabels(win, bestStats);
@@ -759,7 +1036,7 @@ namespace FieldTakHub.Builder.Services
                     {
                         stats.PluginsBytes += len;
                     }
-                    else if (ext == ".mbtiles" || ext == ".sqlite" || ext == ".sqlitedb" || ext == ".tif" || ext == ".tiff" || ext == ".geotiff" || ext == ".xml" && rel.StartsWith("maps/") || rel.StartsWith("maps/"))
+                    else if (ext == ".mbtiles" || ext == ".sqlite" || ext == ".sqlitedb" || ext == ".tif" || ext == ".tiff" || ext == ".geotiff" || rel.StartsWith("maps/"))
                     {
                         stats.MapsBytes += len;
                     }
@@ -848,7 +1125,6 @@ namespace FieldTakHub.Builder.Services
                     TextBlock targetValueTb = null;
                     var parent = VisualTreeHelper.GetParent(labelTb);
 
-                    // 1. Sprawdzenie układu Grid (ten sam Grid.Row, większy Grid.Column)
                     if (parent is Grid grid)
                     {
                         int targetRow = Grid.GetRow(labelTb);
@@ -863,7 +1139,6 @@ namespace FieldTakHub.Builder.Services
                         }
                     }
 
-                    // 2. Sprawdzenie układu wierszowego (DockPanel / StackPanel / Grid z 2 dziećmi)
                     if (targetValueTb == null && parent != null)
                     {
                         var rowChildren = new List<TextBlock>();
@@ -874,7 +1149,6 @@ namespace FieldTakHub.Builder.Services
                         }
                     }
 
-                    // 3. Dopasowanie po współrzędnej pionowej Y na ekranie (niezależne od zagnieżdżenia XAML)
                     if (targetValueTb == null)
                     {
                         try
@@ -903,7 +1177,6 @@ namespace FieldTakHub.Builder.Services
                     }
                 }
 
-                // 4. Fallback: jeśli punkty ekranowe nie były jeszcze przeliczone, przypisz po kolejności 6 wartościowych TextBlocków
                 if (updatedCount < 6)
                 {
                     var valueTbs = cardTbs.Where(t => !IsKnownLabelOrHeader(t.Text) && t.Text != null && t.Text.Length <= 20).ToList();
@@ -924,8 +1197,8 @@ namespace FieldTakHub.Builder.Services
             var m = Current;
             var card = new Border { Background = BrushCardBg, BorderBrush = BrushCardBorder, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(8), Padding = new Thickness(14), Margin = new Thickness(0, 0, 0, 14), Tag = "INJECTED_ATAK" };
             var lStack = new StackPanel();
-            lStack.Children.Add(new TextBlock { Text = "Konfiguracja ATAK-CIV (PLI i siec)", Foreground = Brushes.White, FontWeight = FontWeights.Bold, FontSize = 14, Margin = new Thickness(0, 0, 0, 4) });
-            lStack.Children.Add(new TextBlock { Text = "Czysty profil ATAK bez wymuszania wtyczek. Zdefiniuj czestotliwosci odswiezania PLI.", Foreground = BrushMutedText, FontSize = 11, Margin = new Thickness(0, 0, 0, 10) });
+            lStack.Children.Add(new TextBlock { Text = "Konfiguracja ATAK-CIV (PLI, siec oraz waznosc paczki/QR)", Foreground = Brushes.White, FontWeight = FontWeights.Bold, FontSize = 14, Margin = new Thickness(0, 0, 0, 4) });
+            lStack.Children.Add(new TextBlock { Text = "Czysty profil ATAK bez wymuszania wtyczek. Wpisanie 0 w polach waznosci oznacza waznosc bezterminowa.", Foreground = BrushMutedText, FontSize = 11, Margin = new Thickness(0, 0, 0, 10) });
 
             var gAtak = new UniformGrid { Columns = 3, Margin = new Thickness(0, 0, 0, 8) };
             gAtak.Children.Add(FieldBox("Strategia PLI", ComboCtrl(new[] { "Constant", "Dynamic" }, m.LocationReportingStrategy, win, v => { m.LocationReportingStrategy = v; })));
@@ -938,6 +1211,32 @@ namespace FieldTakHub.Builder.Services
             gAtak.Children.Add(FieldBox("TCP/UDP Timeout (s)", IntCtrl(m.TcpConnectTimeout, v => { m.TcpConnectTimeout = v; })));
             lStack.Children.Add(gAtak);
 
+            // Sekcja ważności paczki .ftak oraz kodu QR (0 = Bezterminowo)
+            var gValidity = new UniformGrid { Columns = 2, Margin = new Thickness(0, 2, 0, 4) };
+            _injectedPkgValidityBox = ValidityTextCtrl(m.PackageValidityHours, v =>
+            {
+                m.PackageValidityHours = v;
+                SyncValidityToNativeControls(win);
+            });
+            _injectedQrValidityBox = ValidityTextCtrl(m.QrValidityHours, v =>
+            {
+                m.QrValidityHours = v;
+                SyncValidityToNativeControls(win);
+            });
+
+            gValidity.Children.Add(FieldBox("Ważność paczki .ftak (godz., 0 = bezterminowo)", _injectedPkgValidityBox));
+            gValidity.Children.Add(FieldBox("Ważność kodu QR (godz., 0 = bezterminowo)", _injectedQrValidityBox));
+            lStack.Children.Add(gValidity);
+
+            _indefiniteStatusBadge = new TextBlock
+            {
+                FontSize = 11,
+                FontWeight = FontWeights.SemiBold,
+                Margin = new Thickness(0, 0, 0, 8)
+            };
+            UpdateIndefiniteBadge();
+            lStack.Children.Add(_indefiniteStatusBadge);
+
             var gSw = new UniformGrid { Columns = 2 };
             gSw.Children.Add(TileSwitch("Wysylaj pozycje na zewnatrz", m.DispatchLocationCotExternal, v => { m.DispatchLocationCotExternal = v; }));
             gSw.Children.Add(TileSwitch("Polaczenia bezstrumieniowe Mesh", m.EnableNonStreamingConnections, v => { m.EnableNonStreamingConnections = v; }));
@@ -945,6 +1244,33 @@ namespace FieldTakHub.Builder.Services
 
             card.Child = lStack;
             return card;
+        }
+
+        private static TextBox ValidityTextCtrl(int init, Action<int> onChg)
+        {
+            var tb = new TextBox
+            {
+                Text = init.ToString(),
+                Height = 28,
+                VerticalContentAlignment = VerticalAlignment.Center,
+                Padding = new Thickness(6, 0, 6, 0),
+                FontSize = 11,
+                Background = BrushInputBg,
+                Foreground = Brushes.White,
+                BorderBrush = (init == 0) ? BrushAccent : BrushInputBorder,
+                BorderThickness = new Thickness(1),
+                Tag = "INJECTED_VALIDITY",
+                ToolTip = "Wpisz 0, aby ważność była bezterminowa (brak wygasania)."
+            };
+            tb.TextChanged += (_, __) =>
+            {
+                if (int.TryParse(tb.Text.Trim(), out int v) && v >= 0)
+                {
+                    tb.BorderBrush = (v == 0) ? BrushAccent : BrushInputBorder;
+                    onChg(v);
+                }
+            };
+            return tb;
         }
 
         private static void InjectMeshtasticFields(Panel parentPanel, Window win)
@@ -1008,7 +1334,7 @@ namespace FieldTakHub.Builder.Services
             var b = new Border { Background = BrushItemBg, BorderBrush = BrushTileBorder, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(6), Padding = new Thickness(10, 6, 10, 6), Margin = new Thickness(0, 0, 8, 6) };
             var g = new Grid(); g.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) }); g.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
             var tb = new TextBlock { Text = title, Foreground = Brushes.White, FontWeight = FontWeights.SemiBold, FontSize = 11, VerticalAlignment = VerticalAlignment.Center };
-            var tr = new Border { Width = 36, Height = 20, CornerRadius = new CornerRadius(10), Cursor = System.Windows.Input.Cursors.Hand, VerticalAlignment = VerticalAlignment.Center };
+            var tr = new Border { Width = 36, Height = 20, CornerRadius = new CornerRadius(10), Cursor = Cursors.Hand, VerticalAlignment = VerticalAlignment.Center };
             var kn = new Border { Width = 16, Height = 16, CornerRadius = new CornerRadius(8), Margin = new Thickness(2) };
             bool state = init;
             void Upd()
@@ -1030,7 +1356,7 @@ namespace FieldTakHub.Builder.Services
             if (string.IsNullOrWhiteSpace(tgt)) return;
             if (tgt.Contains("fth-analyze-", StringComparison.OrdinalIgnoreCase)) return;
             LastKnownSourceDir = tgt;
-            if (Application.Current == null) return; // Chroni testy xUnit przed modyfikacją folderu tymczasowego
+            if (Application.Current == null) return;
             WriteConfigsToDirectory(tgt);
         }
 
@@ -1054,7 +1380,16 @@ namespace FieldTakHub.Builder.Services
                 }
                 if (root == null) root = new JsonObject();
 
-                // 1. Sekcja ATAK (Bez ponownego przypisywania węzła posiadającego już Parent!)
+                // 0. Ważność paczki .ftak oraz kodu QR (0 = Bezterminowo)
+                root["packageValidityHours"] = Current.PackageValidityHours;
+                root["qrValidityHours"] = Current.QrValidityHours;
+                root["neverExpires"] = (Current.PackageValidityHours == 0);
+                root["qrNeverExpires"] = (Current.QrValidityHours == 0);
+                root["expiresAt"] = (Current.PackageValidityHours == 0)
+                    ? DateTimeOffset.UtcNow.AddYears(100).ToString("o")
+                    : DateTimeOffset.UtcNow.AddHours(Current.PackageValidityHours).ToString("o");
+
+                // 1. Sekcja ATAK
                 JsonObject atak;
                 if (root.TryGetPropertyValue("atak", out var atakNode) && atakNode is JsonObject existingAtak)
                 {
