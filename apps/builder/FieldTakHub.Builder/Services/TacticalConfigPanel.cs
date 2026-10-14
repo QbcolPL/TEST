@@ -1,5 +1,6 @@
 ﻿#pragma warning disable CS8600, CS8601, CS8602, CS8603, CS8604, CS8618, CS8625
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -7,6 +8,7 @@ using System.Reflection;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
@@ -14,6 +16,7 @@ using System.Windows.Controls.Primitives;
 using System.Windows.Documents;
 using System.Windows.Markup;
 using System.Windows.Media;
+using System.Windows.Threading;
 
 namespace FieldTakHub.Builder.Services
 {
@@ -46,10 +49,35 @@ namespace FieldTakHub.Builder.Services
         public static TacticalConfigModel Current { get; set; } = new TacticalConfigModel();
         public static string LastKnownSourceDir { get; set; } = "";
 
-        private static bool _fwFieldsAdded = false;
-        private static bool _atakCardAdded = false;
-        private static bool _refreshBtnAdded = false;
+        // ZAMROŻONE PĘDZLE (Brak wycieków pamięci GDI / Dispatcher w WPF)
+        private static readonly SolidColorBrush BrushInputBg = CreateFrozenBrush(8, 19, 22);
+        private static readonly SolidColorBrush BrushInputBorder = CreateFrozenBrush(30, 66, 74);
+        private static readonly SolidColorBrush BrushItemBg = CreateFrozenBrush(15, 32, 37);
+        private static readonly SolidColorBrush BrushCardBg = CreateFrozenBrush(9, 20, 24);
+        private static readonly SolidColorBrush BrushCardBorder = CreateFrozenBrush(26, 58, 66);
+        private static readonly SolidColorBrush BrushMutedText = CreateFrozenBrush(138, 168, 164);
+        private static readonly SolidColorBrush BrushTileBorder = CreateFrozenBrush(28, 64, 72);
+        private static readonly SolidColorBrush BrushAccent = CreateFrozenBrush(31, 224, 197);
+        private static readonly SolidColorBrush BrushButtonAccent = CreateFrozenBrush(44, 229, 208);
+        private static readonly SolidColorBrush BrushSwitchOff = CreateFrozenBrush(24, 44, 50);
+        private static readonly SolidColorBrush BrushDarkFg = CreateFrozenBrush(6, 22, 24);
+
+        private static SolidColorBrush CreateFrozenBrush(byte r, byte g, byte b)
+        {
+            var brush = new SolidColorBrush(Color.FromRgb(r, g, b));
+            brush.Freeze();
+            return brush;
+        }
+
+        // Attached Property zapobiegające duplikowaniu subskrypcji zdarzeń (Memory Leak Fix)
+        private static readonly DependencyProperty IsHookedProperty =
+            DependencyProperty.RegisterAttached("IsHooked", typeof(bool), typeof(TacticalConfigPanel), new PropertyMetadata(false));
+
         private static Style _darkComboBoxStyle = null;
+        private static Style _darkComboBoxItemStyle = null;
+        private static Button _injectedRefreshButton = null;
+
+        private static readonly Regex WindowsPathRegex = new Regex(@"[A-Za-z]:[\\/][^\r\n""<>|?*]+", RegexOptions.Compiled);
 
         private const string DarkComboBoxXaml = @"
 <Style xmlns=""http://schemas.microsoft.com/winfx/2006/xaml/presentation""
@@ -161,10 +189,26 @@ namespace FieldTakHub.Builder.Services
                 try
                 {
                     _darkComboBoxStyle = (Style)XamlReader.Parse(DarkComboBoxXaml);
+                    _darkComboBoxStyle.Seal();
                 }
                 catch { }
             }
             return _darkComboBoxStyle;
+        }
+
+        private static Style GetDarkComboBoxItemStyle()
+        {
+            if (_darkComboBoxItemStyle == null)
+            {
+                var itemStyle = new Style(typeof(ComboBoxItem));
+                itemStyle.Setters.Add(new Setter(Control.BackgroundProperty, BrushItemBg));
+                itemStyle.Setters.Add(new Setter(Control.ForegroundProperty, Brushes.White));
+                itemStyle.Setters.Add(new Setter(Control.PaddingProperty, new Thickness(8, 5, 8, 5)));
+                itemStyle.Setters.Add(new Setter(Control.BorderThicknessProperty, new Thickness(0)));
+                itemStyle.Seal();
+                _darkComboBoxItemStyle = itemStyle;
+            }
+            return _darkComboBoxItemStyle;
         }
 
         private static void ApplyUnifiedComboBoxTheme(ComboBox cb, Window win)
@@ -176,30 +220,22 @@ namespace FieldTakHub.Builder.Services
                 cb.IsEditable = false;
                 cb.IsReadOnly = false;
                 cb.Foreground = Brushes.White;
-                cb.Background = new SolidColorBrush(Color.FromRgb(8, 19, 22));
-                cb.BorderBrush = new SolidColorBrush(Color.FromRgb(30, 66, 74));
+                cb.Background = BrushInputBg;
+                cb.BorderBrush = BrushInputBorder;
 
                 var style = GetDarkComboBoxStyle();
                 if (style != null) cb.Style = style;
+                cb.ItemContainerStyle = GetDarkComboBoxItemStyle();
 
-                var itemStyle = new Style(typeof(ComboBoxItem));
-                itemStyle.Setters.Add(new Setter(Control.BackgroundProperty, new SolidColorBrush(Color.FromRgb(15, 32, 37))));
-                itemStyle.Setters.Add(new Setter(Control.ForegroundProperty, Brushes.White));
-                itemStyle.Setters.Add(new Setter(Control.PaddingProperty, new Thickness(8, 5, 8, 5)));
-                itemStyle.Setters.Add(new Setter(Control.BorderThicknessProperty, new Thickness(0)));
-                cb.ItemContainerStyle = itemStyle;
-
-                // Ujednolicenie istniejących elementów ComboBoxItem na biały tekst
                 foreach (var item in cb.Items)
                 {
                     if (item is ComboBoxItem cbi)
                     {
                         cbi.Foreground = Brushes.White;
-                        cbi.Background = new SolidColorBrush(Color.FromRgb(15, 32, 37));
+                        cbi.Background = BrushItemBg;
                     }
                 }
 
-                // Jeśli przed wyłączeniem IsEditable wybrany był tekst, upewnij się że SelectedItem jest ustawiony
                 if (cb.SelectedItem == null && !string.IsNullOrWhiteSpace(preservedText))
                 {
                     foreach (var item in cb.Items)
@@ -217,10 +253,11 @@ namespace FieldTakHub.Builder.Services
                     cb.SelectedIndex = 0;
                 }
 
-                cb.SelectionChanged += (s, e) =>
+                if (!(bool)cb.GetValue(IsHookedProperty))
                 {
-                    SyncNativeMeshtasticSelections(win);
-                };
+                    cb.SetValue(IsHookedProperty, true);
+                    cb.SelectionChanged += (s, e) => SyncNativeMeshtasticSelections(win);
+                }
             }
             catch { }
         }
@@ -239,10 +276,35 @@ namespace FieldTakHub.Builder.Services
 
         private static T GetParent<T>(DependencyObject child) where T : DependencyObject
         {
-            DependencyObject parentObject = VisualTreeHelper.GetParent(child);
+            DependencyObject parentObject = VisualTreeHelper.GetParent(child) ?? LogicalTreeHelper.GetParent(child);
             if (parentObject == null) return null;
             if (parentObject is T parent) return parent;
             return GetParent<T>(parentObject);
+        }
+
+        // Znajduje główny Border całej karty (a nie tylko wewnętrznego nagłówka)
+        private static Border GetOuterCardBorder(DependencyObject startElement)
+        {
+            Border bestBorder = null;
+            DependencyObject cur = startElement;
+            while (cur != null)
+            {
+                if (cur is Border b)
+                {
+                    var innerTbs = new List<TextBlock>();
+                    FindVisualChildren(b, innerTbs);
+                    if (innerTbs.Count >= 6)
+                    {
+                        return b;
+                    }
+                    if (bestBorder == null && b.Background != null)
+                    {
+                        bestBorder = b;
+                    }
+                }
+                cur = VisualTreeHelper.GetParent(cur) ?? LogicalTreeHelper.GetParent(cur);
+            }
+            return bestBorder;
         }
 
         public static void AttachToMainWindow(Window win)
@@ -262,60 +324,58 @@ namespace FieldTakHub.Builder.Services
 
                     var tbs = new List<TextBlock>();
                     FindVisualChildren(win, tbs);
+
                     foreach (var tb in tbs)
                     {
                         if (tb.Text != null && tb.Text.Contains("Konfiguracja Meshtastic"))
                         {
-                            Border cardBorder = GetParent<Border>(tb);
+                            Border cardBorder = GetOuterCardBorder(tb);
                             if (cardBorder != null)
                             {
-                                if (!_fwFieldsAdded && cardBorder.Child is Panel innerPanel)
+                                if (cardBorder.Child is Panel innerPanel && !HasInjectedTag(innerPanel, "INJECTED_FW"))
                                 {
                                     InjectMeshtasticFields(innerPanel, win);
-                                    _fwFieldsAdded = true;
                                 }
 
-                                if (!_atakCardAdded && VisualTreeHelper.GetParent(cardBorder) is Panel parentPanel)
+                                if (VisualTreeHelper.GetParent(cardBorder) is Panel parentPanel && !HasInjectedTag(parentPanel, "INJECTED_ATAK"))
                                 {
                                     int idx = parentPanel.Children.IndexOf(cardBorder);
                                     parentPanel.Children.Insert(idx, BuildAtakCard(win));
-                                    _atakCardAdded = true;
                                 }
                             }
                         }
 
-                        if (tb.Text != null && tb.Text.Contains("Podgląd zawartości"))
+                        if (tb.Text != null && (tb.Text.Contains("Podgląd zawartości") || tb.Text.Equals("Pliki paczki", StringComparison.OrdinalIgnoreCase)))
                         {
-                            Border previewBorder = GetParent<Border>(tb);
-                            if (previewBorder != null)
+                            Border previewBorder = GetOuterCardBorder(tb);
+                            if (previewBorder != null && VisualTreeHelper.GetParent(previewBorder) is Panel parentPanel && !HasInjectedTag(parentPanel, "INJECTED_BTN"))
                             {
-                                if (VisualTreeHelper.GetParent(previewBorder) is Panel parentPanel && !_refreshBtnAdded)
+                                var btnRefresh = new Button
                                 {
-                                    var btnRefresh = new Button
-                                    {
-                                        Content = "Odśwież / Skalkuluj zawartość (folder source)",
-                                        Height = 32,
-                                        Margin = new Thickness(0, 8, 0, 14),
-                                        Background = new SolidColorBrush(Color.FromRgb(44, 229, 208)),
-                                        Foreground = new SolidColorBrush(Color.FromRgb(6, 22, 24)),
-                                        FontWeight = FontWeights.Bold,
-                                        Cursor = System.Windows.Input.Cursors.Hand,
-                                        BorderThickness = new Thickness(0),
-                                        Tag = "INJECTED_BTN"
-                                    };
-                                    btnRefresh.Click += async (s, e) =>
-                                    {
-                                        btnRefresh.Content = "Przeliczanie zawartości source...";
-                                        btnRefresh.IsEnabled = false;
-                                        await ForceSizeUpdateAsync(win);
-                                        btnRefresh.Content = "Odśwież / Skalkuluj zawartość (folder source)";
-                                        btnRefresh.IsEnabled = true;
-                                    };
+                                    Content = "Odśwież / Skalkuluj zawartość (folder source)",
+                                    Height = 32,
+                                    Margin = new Thickness(0, 8, 0, 14),
+                                    Background = BrushButtonAccent,
+                                    Foreground = BrushDarkFg,
+                                    FontWeight = FontWeights.Bold,
+                                    Cursor = System.Windows.Input.Cursors.Hand,
+                                    BorderThickness = new Thickness(0),
+                                    Tag = "INJECTED_BTN"
+                                };
+                                _injectedRefreshButton = btnRefresh;
 
-                                    int idx = parentPanel.Children.IndexOf(previewBorder);
-                                    parentPanel.Children.Insert(idx + 1, btnRefresh);
-                                    _refreshBtnAdded = true;
-                                }
+                                btnRefresh.Click += async (s, e) =>
+                                {
+                                    btnRefresh.Content = "Przeliczanie zawartości source...";
+                                    btnRefresh.IsEnabled = false;
+                                    var result = await ForceSizeUpdateAsync(win);
+                                    btnRefresh.Content = $"Odśwież / Skalkuluj (Plików: {result.FileCount} | {FormatBytes(result.TotalBytes)})";
+                                    btnRefresh.ToolTip = $"Aktywny folder source: {result.SourcePath}";
+                                    btnRefresh.IsEnabled = true;
+                                };
+
+                                int idx = parentPanel.Children.IndexOf(previewBorder);
+                                parentPanel.Children.Insert(idx + 1, btnRefresh);
                             }
                         }
                     }
@@ -326,11 +386,31 @@ namespace FieldTakHub.Builder.Services
             }
 
             InitializeEnhancements();
-            win.Loaded += async (s, e) =>
+
+            if (!(bool)win.GetValue(IsHookedProperty))
             {
-                InitializeEnhancements();
-                await ForceSizeUpdateAsync(win);
-            };
+                win.SetValue(IsHookedProperty, true);
+                win.Loaded += async (s, e) =>
+                {
+                    InitializeEnhancements();
+                    var res = await ForceSizeUpdateAsync(win);
+                    if (_injectedRefreshButton != null)
+                    {
+                        _injectedRefreshButton.Content = $"Odśwież / Skalkuluj (Plików: {res.FileCount} | {FormatBytes(res.TotalBytes)})";
+                        _injectedRefreshButton.ToolTip = $"Aktywny folder source: {res.SourcePath}";
+                    }
+                };
+            }
+        }
+
+        private static bool HasInjectedTag(Panel panel, string tag)
+        {
+            foreach (UIElement child in panel.Children)
+            {
+                if (child is FrameworkElement fe && string.Equals(fe.Tag?.ToString(), tag, StringComparison.Ordinal))
+                    return true;
+            }
+            return false;
         }
 
         private static void SyncNativeMeshtasticSelections(Window win)
@@ -371,160 +451,203 @@ namespace FieldTakHub.Builder.Services
 
         private static List<string> ResolveSourceDirectories(Window win)
         {
-            var sourceDirs = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var highPriorityDirs = new List<string>();
+            var normalDirs = new List<string>();
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-            void TryAddSourceCandidate(string rawPath)
+            void AddCandidateDir(string dir, bool highPriority)
             {
-                if (string.IsNullOrWhiteSpace(rawPath) || rawPath.Length < 3) return;
+                if (string.IsNullOrWhiteSpace(dir)) return;
                 try
                 {
-                    string clean = rawPath.Trim().Trim('"');
-                    if (!Path.IsPathRooted(clean)) return;
-
-                    if (Directory.Exists(clean))
+                    string normalized = Path.GetFullPath(Path.TrimEndingDirectorySeparator(dir.Trim()));
+                    if (seen.Add(normalized))
                     {
-                        if (string.Equals(Path.GetFileName(clean), "source", StringComparison.OrdinalIgnoreCase))
-                        {
-                            sourceDirs.Add(clean);
-                        }
-                        else
-                        {
-                            string subSource = Path.Combine(clean, "source");
-                            if (Directory.Exists(subSource) || File.Exists(Path.Combine(clean, "project.json")) || Directory.GetFiles(clean, "*.fthproj").Length > 0)
-                            {
-                                sourceDirs.Add(subSource);
-                            }
-                        }
-                    }
-                    else if (File.Exists(clean))
-                    {
-                        string parent = Path.GetDirectoryName(clean);
-                        if (!string.IsNullOrEmpty(parent))
-                        {
-                            string subSource = Path.Combine(parent, "source");
-                            sourceDirs.Add(subSource);
-                        }
+                        if (highPriority) highPriorityDirs.Add(normalized);
+                        else normalDirs.Add(normalized);
                     }
                 }
                 catch { }
             }
 
-            if (!string.IsNullOrWhiteSpace(LastKnownSourceDir))
+            void EvaluateRawString(string rawText, bool isHighPriorityHint)
             {
-                TryAddSourceCandidate(LastKnownSourceDir);
-            }
+                if (string.IsNullOrWhiteSpace(rawText) || rawText.Length < 3) return;
 
-            // 1. Skanowanie pól i właściwości Code-Behind okna MainWindow (oraz obiektów potomnych np. _project)
-            if (win != null)
-            {
-                var flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
-                var objectsToInspect = new List<object> { win };
-                if (win.DataContext != null) objectsToInspect.Add(win.DataContext);
+                var candidates = new List<string> { rawText.Trim().Trim('"') };
+                foreach (Match m in WindowsPathRegex.Matches(rawText))
+                {
+                    if (m.Success) candidates.Add(m.Value.Trim().Trim('"', ',', ';', ')'));
+                }
 
-                foreach (var field in win.GetType().GetFields(flags))
+                foreach (var candidate in candidates)
                 {
                     try
                     {
-                        var val = field.GetValue(win);
-                        if (val is string strVal) TryAddSourceCandidate(strVal);
-                        else if (val != null && val.GetType().Namespace != null && val.GetType().Namespace.StartsWith("FieldTakHub"))
-                            objectsToInspect.Add(val);
+                        if (!Path.IsPathRooted(candidate)) continue;
+                        string clean = Path.TrimEndingDirectorySeparator(candidate);
+
+                        if (File.Exists(clean))
+                        {
+                            clean = Path.GetDirectoryName(clean);
+                            if (string.IsNullOrEmpty(clean)) continue;
+                            clean = Path.TrimEndingDirectorySeparator(clean);
+                        }
+
+                        if (Directory.Exists(clean))
+                        {
+                            string folderName = Path.GetFileName(clean);
+                            if (string.Equals(folderName, "source", StringComparison.OrdinalIgnoreCase))
+                            {
+                                AddCandidateDir(clean, true);
+                            }
+                            else
+                            {
+                                string subSource = Path.Combine(clean, "source");
+                                if (Directory.Exists(subSource))
+                                {
+                                    AddCandidateDir(subSource, isHighPriorityHint);
+                                }
+                                else if (isHighPriorityHint || File.Exists(Path.Combine(clean, "project.json")) || Directory.GetFiles(clean, "*.fthproj").Length > 0)
+                                {
+                                    AddCandidateDir(subSource, isHighPriorityHint);
+                                }
+                            }
+                        }
                     }
                     catch { }
                 }
+            }
 
-                foreach (var obj in objectsToInspect)
+            if (!string.IsNullOrWhiteSpace(LastKnownSourceDir))
+            {
+                EvaluateRawString(LastKnownSourceDir, true);
+            }
+
+            // Rekurencyjne przeszukanie grafu obiektów MainWindow (do 4 poziomów w głąb)
+            if (win != null)
+            {
+                var visitedObjs = new HashSet<object>();
+                void InspectObject(object obj, int depth)
                 {
-                    foreach (var prop in obj.GetType().GetProperties(flags))
+                    if (obj == null || depth > 4 || !visitedObjs.Add(obj)) return;
+                    Type t = obj.GetType();
+                    if (t.IsPrimitive || t.IsEnum || obj is Brush || obj is Style || obj is Geometry || obj is ImageSource) return;
+
+                    if (obj is string s)
+                    {
+                        EvaluateRawString(s, false);
+                        return;
+                    }
+                    if (obj is DirectoryInfo di)
+                    {
+                        EvaluateRawString(di.FullName, true);
+                        return;
+                    }
+                    if (obj is FileInfo fi)
+                    {
+                        EvaluateRawString(fi.FullName, true);
+                        return;
+                    }
+
+                    // Ignorujemy głębokie struktury wewnętrzne WPF poza samym MainWindow
+                    if (depth > 0 && t.Namespace != null && t.Namespace.StartsWith("System.Windows")) return;
+
+                    var flags = BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic;
+                    foreach (var field in t.GetFields(flags))
+                    {
+                        try
+                        {
+                            var val = field.GetValue(obj);
+                            bool hp = field.Name.Contains("source", StringComparison.OrdinalIgnoreCase) ||
+                                      field.Name.Contains("workspace", StringComparison.OrdinalIgnoreCase) ||
+                                      field.Name.Contains("project", StringComparison.OrdinalIgnoreCase);
+                            if (val is string strVal) EvaluateRawString(strVal, hp);
+                            else if (val != null && depth < 4) InspectObject(val, depth + 1);
+                        }
+                        catch { }
+                    }
+
+                    foreach (var prop in t.GetProperties(flags))
                     {
                         if (prop.GetIndexParameters().Length > 0) continue;
                         try
                         {
                             var val = prop.GetValue(obj);
-                            if (val is string strVal) TryAddSourceCandidate(strVal);
+                            bool hp = prop.Name.Contains("source", StringComparison.OrdinalIgnoreCase) ||
+                                      prop.Name.Contains("workspace", StringComparison.OrdinalIgnoreCase) ||
+                                      prop.Name.Contains("project", StringComparison.OrdinalIgnoreCase);
+                            if (val is string strVal) EvaluateRawString(strVal, hp);
+                            else if (val != null && depth < 4 && t.Namespace != null && t.Namespace.StartsWith("FieldTakHub"))
+                                InspectObject(val, depth + 1);
                         }
                         catch { }
                     }
-                    foreach (var field in obj.GetType().GetFields(flags))
+
+                    // Wywołanie bezargumentowych metod zwracających ścieżkę (np. GetSourceDirectory / GetWorkspacePath)
+                    if (t.Namespace != null && t.Namespace.StartsWith("FieldTakHub"))
                     {
-                        try
+                        foreach (var m in t.GetMethods(flags))
                         {
-                            if (field.GetValue(obj) is string strVal) TryAddSourceCandidate(strVal);
+                            if (m.GetParameters().Length == 0 && m.ReturnType == typeof(string))
+                            {
+                                string mn = m.Name.ToLowerInvariant();
+                                if (mn.Contains("source") || mn.Contains("workspace") || mn.Contains("project") || mn.Contains("path") || mn.Contains("dir"))
+                                {
+                                    try
+                                    {
+                                        if (m.Invoke(m.IsStatic ? null : obj, null) is string retPath)
+                                            EvaluateRawString(retPath, true);
+                                    }
+                                    catch { }
+                                }
+                            }
                         }
-                        catch { }
                     }
                 }
 
-                // 2. Skanowanie wszystkich TextBoxów w oknie pod kątem wpisanej ścieżki Workspace/Source
+                InspectObject(win, 0);
+                if (win.DataContext != null) InspectObject(win.DataContext, 0);
+
+                // Skanowanie wszystkich TextBoxów i TextBlocków w UI pod kątem wyświetlonej ścieżki folderu
                 var textBoxes = new List<TextBox>();
                 FindVisualChildren(win, textBoxes);
-                foreach (var tbx in textBoxes)
-                {
-                    TryAddSourceCandidate(tbx.Text);
-                }
+                foreach (var tbx in textBoxes) EvaluateRawString(tbx.Text, true);
+
+                var textBlocks = new List<TextBlock>();
+                FindVisualChildren(win, textBlocks);
+                foreach (var tb in textBlocks) EvaluateRawString(tb.Text, false);
             }
 
-            // 3. Domyślny katalog roboczy, jeśli żaden zewnętrzny projekt nie został jeszcze otwarty
-            if (sourceDirs.Count == 0)
+            // Standardowe lokalizacje zapasowe
+            string localApp = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "FieldTakHub");
+            if (Directory.Exists(localApp))
             {
-                string baseD = AppDomain.CurrentDomain.BaseDirectory;
-                string defaultSource = Path.Combine(baseD, "workspace", "source");
-                sourceDirs.Add(defaultSource);
+                try
+                {
+                    foreach (var d in Directory.GetDirectories(localApp, "source", SearchOption.AllDirectories))
+                        AddCandidateDir(d, false);
+                }
+                catch { }
             }
 
-            return sourceDirs.ToList();
-        }
+            var combined = new List<string>();
+            combined.AddRange(highPriorityDirs);
+            combined.AddRange(normalDirs);
 
-        private static async Task ForceSizeUpdateAsync(Window win)
-        {
-            if (Application.Current == null || win == null) return;
-
-            try
+            if (combined.Count == 0)
             {
-                SyncNativeMeshtasticSelections(win);
-                var sourceDirs = ResolveSourceDirectories(win);
-
-                await Task.Run(() =>
-                {
-                    foreach (var sDir in sourceDirs)
-                    {
-                        try
-                        {
-                            if (!Directory.Exists(sDir)) Directory.CreateDirectory(sDir);
-                            WriteConfigsToDirectory(sDir);
-                        }
-                        catch { }
-                    }
-                });
-
-                // 1. Wywołanie natywnych metod odświeżających w MainWindow (Code-Behind), z wykluczeniem Build/Validate
-                var flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
-                foreach (var m in win.GetType().GetMethods(flags))
-                {
-                    if (m.GetParameters().Length != 0) continue;
-                    string n = m.Name.ToLowerInvariant();
-                    if ((n.Contains("preview") || n.Contains("analyz") || n.Contains("refresh") || n.Contains("recalc") || n.Contains("updatesource") || n.Contains("updatecontent"))
-                        && !n.Contains("build") && !n.Contains("gener") && !n.Contains("export") && !n.Contains("pack")
-                        && !n.Contains("valid") && !n.Contains("publish") && !n.Contains("deploy") && !n.Contains("dialog")
-                        && !n.Contains("open") && !n.Contains("new") && !n.Contains("save") && !n.Contains("import") && !n.Contains("sign"))
-                    {
-                        try { m.Invoke(win, null); } catch { }
-                    }
-                }
-
-                // 2. Bezpośrednie przeliczenie plików w folderze source i aktualizacja sekcji "Podgląd zawartości"
-                string activeSourceDir = sourceDirs.FirstOrDefault(Directory.Exists) ?? sourceDirs.FirstOrDefault();
-                if (!string.IsNullOrEmpty(activeSourceDir) && Directory.Exists(activeSourceDir))
-                {
-                    var stats = await Task.Run(() => CalculateSourceFolderStats(activeSourceDir));
-                    UpdatePreviewCardLabels(win, stats);
-                }
+                string defaultSource = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "workspace", "source");
+                combined.Add(defaultSource);
             }
-            catch { }
+
+            return combined;
         }
 
         private class SourceStats
         {
+            public string SourcePath = "";
+            public int FileCount;
             public long TotalBytes;
             public long MapsBytes;
             public long PluginsBytes;
@@ -533,10 +656,79 @@ namespace FieldTakHub.Builder.Services
             public long OtherBytes;
         }
 
+        private static async Task<SourceStats> ForceSizeUpdateAsync(Window win)
+        {
+            var emptyStats = new SourceStats();
+            if (Application.Current == null || win == null) return emptyStats;
+
+            try
+            {
+                SyncNativeMeshtasticSelections(win);
+                var sourceDirs = ResolveSourceDirectories(win);
+
+                // Zapisz konfigurację i oblicz statystyki dla każdego wykrytego katalogu source
+                SourceStats bestStats = null;
+                await Task.Run(() =>
+                {
+                    foreach (var sDir in sourceDirs)
+                    {
+                        try
+                        {
+                            if (!Directory.Exists(sDir)) Directory.CreateDirectory(sDir);
+                            WriteConfigsToDirectory(sDir);
+                            var st = CalculateSourceFolderStats(sDir);
+                            if (bestStats == null || st.FileCount > bestStats.FileCount || (st.FileCount == bestStats.FileCount && st.TotalBytes > bestStats.TotalBytes))
+                            {
+                                bestStats = st;
+                            }
+                        }
+                        catch { }
+                    }
+                });
+
+                if (bestStats == null) bestStats = emptyStats;
+
+                // 1. Wywołanie natywnych metod odświeżających w MainWindow (bez blokowania słowa "Package")
+                var flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+                foreach (var m in win.GetType().GetMethods(flags))
+                {
+                    if (m.GetParameters().Length != 0) continue;
+                    string n = m.Name.ToLowerInvariant();
+                    if ((n.Contains("preview") || n.Contains("analyz") || n.Contains("refresh") || n.Contains("recalc") || n.Contains("updatesource") || n.Contains("updatecontent") || n.Contains("updatesummary"))
+                        && !n.Contains("build") && !n.Contains("gener") && !n.Contains("export") && !n.Contains("compile")
+                        && !n.Contains("valid") && !n.Contains("publish") && !n.Contains("deploy") && !n.Contains("dialog")
+                        && !n.Contains("open") && !n.Contains("new") && !n.Contains("save") && !n.Contains("import") && !n.Contains("sign"))
+                    {
+                        try
+                        {
+                            var res = m.Invoke(win, null);
+                            if (res is Task t) await t;
+                        }
+                        catch { }
+                    }
+                }
+
+                // 2. Bezpośrednia aktualizacja kontrolek w sekcji "Podgląd zawartości"
+                UpdatePreviewCardLabels(win, bestStats);
+
+                // Drugi przebieg w stanie ApplicationIdle na wypadek asynchronicznego odświeżania MainWindow
+                _ = win.Dispatcher.BeginInvoke(new Action(() =>
+                {
+                    UpdatePreviewCardLabels(win, bestStats);
+                }), DispatcherPriority.ApplicationIdle);
+
+                return bestStats;
+            }
+            catch
+            {
+                return emptyStats;
+            }
+        }
+
         private static SourceStats CalculateSourceFolderStats(string sourceDir)
         {
-            var stats = new SourceStats();
-            if (!Directory.Exists(sourceDir)) return stats;
+            var stats = new SourceStats { SourcePath = sourceDir };
+            if (string.IsNullOrWhiteSpace(sourceDir) || !Directory.Exists(sourceDir)) return stats;
 
             try
             {
@@ -546,7 +738,6 @@ namespace FieldTakHub.Builder.Services
                     string fileName = Path.GetFileName(file);
                     if (string.IsNullOrEmpty(fileName)) continue;
 
-                    // Ignorujemy pliki pomocnicze workspace tak jak SourceFileFilter
                     if (fileName.StartsWith(".", StringComparison.Ordinal) ||
                         fileName.StartsWith("README", StringComparison.OrdinalIgnoreCase) ||
                         fileName.EndsWith(".fthproj", StringComparison.OrdinalIgnoreCase) ||
@@ -561,13 +752,14 @@ namespace FieldTakHub.Builder.Services
                     string rel = Path.GetRelativePath(sourceDir, file).Replace('\\', '/').ToLowerInvariant();
                     string ext = Path.GetExtension(fileName).ToLowerInvariant();
 
+                    stats.FileCount++;
                     stats.TotalBytes += len;
 
                     if (ext == ".apk" || rel.StartsWith("plugins/"))
                     {
                         stats.PluginsBytes += len;
                     }
-                    else if (ext == ".mbtiles" || ext == ".sqlite" || ext == ".sqlitedb" || ext == ".tif" || ext == ".tiff" || ext == ".geotiff" || rel.StartsWith("maps/"))
+                    else if (ext == ".mbtiles" || ext == ".sqlite" || ext == ".sqlitedb" || ext == ".tif" || ext == ".tiff" || ext == ".geotiff" || ext == ".xml" && rel.StartsWith("maps/") || rel.StartsWith("maps/"))
                     {
                         stats.MapsBytes += len;
                     }
@@ -605,16 +797,18 @@ namespace FieldTakHub.Builder.Services
 
         private static void UpdatePreviewCardLabels(Window win, SourceStats stats)
         {
+            if (win == null || stats == null) return;
             try
             {
-                var tbs = new List<TextBlock>();
-                FindVisualChildren(win, tbs);
+                var allTbs = new List<TextBlock>();
+                FindVisualChildren(win, allTbs);
+
                 Border previewBorder = null;
-                foreach (var tb in tbs)
+                foreach (var tb in allTbs)
                 {
-                    if (tb.Text != null && tb.Text.Contains("Podgląd zawartości"))
+                    if (tb.Text != null && (tb.Text.Equals("Pliki paczki", StringComparison.OrdinalIgnoreCase) || tb.Text.Contains("Podgląd zawartości")))
                     {
-                        previewBorder = GetParent<Border>(tb);
+                        previewBorder = GetOuterCardBorder(tb);
                         if (previewBorder != null) break;
                     }
                 }
@@ -623,42 +817,104 @@ namespace FieldTakHub.Builder.Services
                 var cardTbs = new List<TextBlock>();
                 FindVisualChildren(previewBorder, cardTbs);
 
-                void SetRowValue(string labelPrefix, string formattedSize)
+                string[] rowLabels = { "Pliki paczki", "Mapy", "Pluginy", "Konfiguracja", "Dane taktyczne", "Pozostałe" };
+                string[] rowValues = {
+                    FormatBytes(stats.TotalBytes),
+                    FormatBytes(stats.MapsBytes),
+                    FormatBytes(stats.PluginsBytes),
+                    FormatBytes(stats.ConfigBytes),
+                    FormatBytes(stats.TacticalBytes),
+                    FormatBytes(stats.OtherBytes)
+                };
+
+                bool IsKnownLabelOrHeader(string text)
                 {
-                    for (int i = 0; i < cardTbs.Count; i++)
+                    if (string.IsNullOrWhiteSpace(text)) return true;
+                    string tr = text.Trim();
+                    if (tr.Contains("Podgląd zawartości", StringComparison.OrdinalIgnoreCase)) return true;
+                    return rowLabels.Any(l => tr.StartsWith(l, StringComparison.OrdinalIgnoreCase));
+                }
+
+                int updatedCount = 0;
+
+                for (int r = 0; r < rowLabels.Length; r++)
+                {
+                    string labelPrefix = rowLabels[r];
+                    string valText = rowValues[r];
+
+                    TextBlock labelTb = cardTbs.FirstOrDefault(t => t.Text != null && t.Text.Trim().StartsWith(labelPrefix, StringComparison.OrdinalIgnoreCase));
+                    if (labelTb == null) continue;
+
+                    TextBlock targetValueTb = null;
+                    var parent = VisualTreeHelper.GetParent(labelTb);
+
+                    // 1. Sprawdzenie układu Grid (ten sam Grid.Row, większy Grid.Column)
+                    if (parent is Grid grid)
                     {
-                        var t = cardTbs[i];
-                        if (t.Text != null && t.Text.Trim().StartsWith(labelPrefix, StringComparison.OrdinalIgnoreCase))
+                        int targetRow = Grid.GetRow(labelTb);
+                        int labelCol = Grid.GetColumn(labelTb);
+                        foreach (UIElement child in grid.Children)
                         {
-                            // Szukamy sąsiedniego TextBlocka w tym samym wierszu (Grid / DockPanel / StackPanel)
-                            var parent = VisualTreeHelper.GetParent(t);
-                            if (parent != null)
+                            if (child is TextBlock sib && sib != labelTb && Grid.GetRow(sib) == targetRow && Grid.GetColumn(sib) >= labelCol && !IsKnownLabelOrHeader(sib.Text))
                             {
-                                int children = VisualTreeHelper.GetChildrenCount(parent);
-                                for (int c = 0; c < children; c++)
-                                {
-                                    if (VisualTreeHelper.GetChild(parent, c) is TextBlock sib && sib != t)
-                                    {
-                                        sib.Text = formattedSize;
-                                        return;
-                                    }
-                                }
-                            }
-                            if (i + 1 < cardTbs.Count)
-                            {
-                                cardTbs[i + 1].Text = formattedSize;
-                                return;
+                                targetValueTb = sib;
+                                break;
                             }
                         }
                     }
+
+                    // 2. Sprawdzenie układu wierszowego (DockPanel / StackPanel / Grid z 2 dziećmi)
+                    if (targetValueTb == null && parent != null)
+                    {
+                        var rowChildren = new List<TextBlock>();
+                        FindVisualChildren(parent, rowChildren);
+                        if (rowChildren.Count == 2)
+                        {
+                            targetValueTb = rowChildren.FirstOrDefault(x => x != labelTb);
+                        }
+                    }
+
+                    // 3. Dopasowanie po współrzędnej pionowej Y na ekranie (niezależne od zagnieżdżenia XAML)
+                    if (targetValueTb == null)
+                    {
+                        try
+                        {
+                            Point labelPt = labelTb.TranslatePoint(new Point(0, 0), previewBorder);
+                            double bestDist = double.MaxValue;
+                            foreach (var cand in cardTbs)
+                            {
+                                if (cand == labelTb || IsKnownLabelOrHeader(cand.Text)) continue;
+                                Point candPt = cand.TranslatePoint(new Point(0, 0), previewBorder);
+                                double dy = Math.Abs(candPt.Y - labelPt.Y);
+                                if (dy <= 14 && candPt.X > labelPt.X + 10 && dy < bestDist)
+                                {
+                                    bestDist = dy;
+                                    targetValueTb = cand;
+                                }
+                            }
+                        }
+                        catch { }
+                    }
+
+                    if (targetValueTb != null)
+                    {
+                        targetValueTb.Text = valText;
+                        updatedCount++;
+                    }
                 }
 
-                SetRowValue("Pliki paczki", FormatBytes(stats.TotalBytes));
-                SetRowValue("Mapy", FormatBytes(stats.MapsBytes));
-                SetRowValue("Pluginy", FormatBytes(stats.PluginsBytes));
-                SetRowValue("Konfiguracja", FormatBytes(stats.ConfigBytes));
-                SetRowValue("Dane taktyczne", FormatBytes(stats.TacticalBytes));
-                SetRowValue("Pozostałe", FormatBytes(stats.OtherBytes));
+                // 4. Fallback: jeśli punkty ekranowe nie były jeszcze przeliczone, przypisz po kolejności 6 wartościowych TextBlocków
+                if (updatedCount < 6)
+                {
+                    var valueTbs = cardTbs.Where(t => !IsKnownLabelOrHeader(t.Text) && t.Text != null && t.Text.Length <= 20).ToList();
+                    if (valueTbs.Count == 6)
+                    {
+                        for (int i = 0; i < 6; i++)
+                        {
+                            valueTbs[i].Text = rowValues[i];
+                        }
+                    }
+                }
             }
             catch { }
         }
@@ -666,10 +922,10 @@ namespace FieldTakHub.Builder.Services
         private static UIElement BuildAtakCard(Window win)
         {
             var m = Current;
-            var card = new Border { Background = new SolidColorBrush(Color.FromRgb(9, 20, 24)), BorderBrush = new SolidColorBrush(Color.FromRgb(26, 58, 66)), BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(8), Padding = new Thickness(14), Margin = new Thickness(0, 0, 0, 14) };
+            var card = new Border { Background = BrushCardBg, BorderBrush = BrushCardBorder, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(8), Padding = new Thickness(14), Margin = new Thickness(0, 0, 0, 14), Tag = "INJECTED_ATAK" };
             var lStack = new StackPanel();
             lStack.Children.Add(new TextBlock { Text = "Konfiguracja ATAK-CIV (PLI i siec)", Foreground = Brushes.White, FontWeight = FontWeights.Bold, FontSize = 14, Margin = new Thickness(0, 0, 0, 4) });
-            lStack.Children.Add(new TextBlock { Text = "Czysty profil ATAK bez wymuszania wtyczek. Zdefiniuj czestotliwosci odswiezania PLI.", Foreground = new SolidColorBrush(Color.FromRgb(138, 168, 164)), FontSize = 11, Margin = new Thickness(0, 0, 0, 10) });
+            lStack.Children.Add(new TextBlock { Text = "Czysty profil ATAK bez wymuszania wtyczek. Zdefiniuj czestotliwosci odswiezania PLI.", Foreground = BrushMutedText, FontSize = 11, Margin = new Thickness(0, 0, 0, 10) });
 
             var gAtak = new UniformGrid { Columns = 3, Margin = new Thickness(0, 0, 0, 8) };
             gAtak.Children.Add(FieldBox("Strategia PLI", ComboCtrl(new[] { "Constant", "Dynamic" }, m.LocationReportingStrategy, win, v => { m.LocationReportingStrategy = v; })));
@@ -693,18 +949,18 @@ namespace FieldTakHub.Builder.Services
 
         private static void InjectMeshtasticFields(Panel parentPanel, Window win)
         {
-            var loraGrid = new UniformGrid { Columns = 2, Margin = new Thickness(0, 8, 0, 0) };
+            var loraGrid = new UniformGrid { Columns = 2, Margin = new Thickness(0, 8, 0, 0), Tag = "INJECTED_FW" };
             loraGrid.Children.Add(FieldBox("LoRa Region", ComboCtrl(new[] { "EU_868", "US_915", "EU_433", "ANZ_915", "RU_864", "KR_920" }, Current.LoraRegion, win, v => { Current.LoraRegion = v; })));
             loraGrid.Children.Add(FieldBox("LoRa Modem Preset", ComboCtrl(new[] { "SHORT_FAST", "LONG_FAST", "LONG_SLOW", "MEDIUM_SLOW", "MEDIUM_FAST" }, Current.LoraModemPreset, win, v => { Current.LoraModemPreset = v; })));
             parentPanel.Children.Add(loraGrid);
 
             var fwContainer = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 8, 0, 0) };
-            var labelMin = new TextBlock { Text = "Firmware MIN:", Foreground = new SolidColorBrush(Color.FromRgb(138, 168, 164)), VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 8, 0) };
-            var txtMin = new TextBox { Text = Current.FirmwareMin, Width = 70, Height = 24, Background = new SolidColorBrush(Color.FromRgb(8, 19, 22)), Foreground = Brushes.White, BorderBrush = new SolidColorBrush(Color.FromRgb(30, 66, 74)), BorderThickness = new Thickness(1), VerticalContentAlignment = VerticalAlignment.Center, Padding = new Thickness(4, 0, 4, 0) };
+            var labelMin = new TextBlock { Text = "Firmware MIN:", Foreground = BrushMutedText, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 8, 0) };
+            var txtMin = new TextBox { Text = Current.FirmwareMin, Width = 70, Height = 24, Background = BrushInputBg, Foreground = Brushes.White, BorderBrush = BrushInputBorder, BorderThickness = new Thickness(1), VerticalContentAlignment = VerticalAlignment.Center, Padding = new Thickness(4, 0, 4, 0) };
             txtMin.TextChanged += (_, __) => { Current.FirmwareMin = txtMin.Text; };
 
-            var labelMax = new TextBlock { Text = "Firmware MAX:", Foreground = new SolidColorBrush(Color.FromRgb(138, 168, 164)), VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(16, 0, 8, 0) };
-            var txtMax = new TextBox { Text = Current.FirmwareMax, Width = 70, Height = 24, Background = new SolidColorBrush(Color.FromRgb(8, 19, 22)), Foreground = Brushes.White, BorderBrush = new SolidColorBrush(Color.FromRgb(30, 66, 74)), BorderThickness = new Thickness(1), VerticalContentAlignment = VerticalAlignment.Center, Padding = new Thickness(4, 0, 4, 0) };
+            var labelMax = new TextBlock { Text = "Firmware MAX:", Foreground = BrushMutedText, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(16, 0, 8, 0) };
+            var txtMax = new TextBox { Text = Current.FirmwareMax, Width = 70, Height = 24, Background = BrushInputBg, Foreground = Brushes.White, BorderBrush = BrushInputBorder, BorderThickness = new Thickness(1), VerticalContentAlignment = VerticalAlignment.Center, Padding = new Thickness(4, 0, 4, 0) };
             txtMax.TextChanged += (_, __) => { Current.FirmwareMax = txtMax.Text; };
 
             fwContainer.Children.Add(labelMin);
@@ -717,14 +973,14 @@ namespace FieldTakHub.Builder.Services
         private static UIElement FieldBox(string label, UIElement ctrl)
         {
             var sp = new StackPanel { Margin = new Thickness(0, 0, 8, 6) };
-            sp.Children.Add(new TextBlock { Text = label, Foreground = new SolidColorBrush(Color.FromRgb(138, 168, 164)), FontSize = 10.5, Margin = new Thickness(0, 0, 0, 3) });
+            sp.Children.Add(new TextBlock { Text = label, Foreground = BrushMutedText, FontSize = 10.5, Margin = new Thickness(0, 0, 0, 3) });
             sp.Children.Add(ctrl);
             return sp;
         }
 
         private static UIElement TextCtrl(string init, Action<string> onChg)
         {
-            var tb = new TextBox { Text = init, Height = 28, VerticalContentAlignment = VerticalAlignment.Center, Padding = new Thickness(6, 0, 6, 0), FontSize = 11, Background = new SolidColorBrush(Color.FromRgb(8, 19, 22)), Foreground = Brushes.White, BorderBrush = new SolidColorBrush(Color.FromRgb(30, 66, 74)), BorderThickness = new Thickness(1) };
+            var tb = new TextBox { Text = init, Height = 28, VerticalContentAlignment = VerticalAlignment.Center, Padding = new Thickness(6, 0, 6, 0), FontSize = 11, Background = BrushInputBg, Foreground = Brushes.White, BorderBrush = BrushInputBorder, BorderThickness = new Thickness(1) };
             tb.TextChanged += (_, __) => onChg(tb.Text);
             return tb;
         }
@@ -749,7 +1005,7 @@ namespace FieldTakHub.Builder.Services
 
         private static UIElement TileSwitch(string title, bool init, Action<bool> onChg)
         {
-            var b = new Border { Background = new SolidColorBrush(Color.FromRgb(15, 32, 37)), BorderBrush = new SolidColorBrush(Color.FromRgb(28, 64, 72)), BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(6), Padding = new Thickness(10, 6, 10, 6), Margin = new Thickness(0, 0, 8, 6) };
+            var b = new Border { Background = BrushItemBg, BorderBrush = BrushTileBorder, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(6), Padding = new Thickness(10, 6, 10, 6), Margin = new Thickness(0, 0, 8, 6) };
             var g = new Grid(); g.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) }); g.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
             var tb = new TextBlock { Text = title, Foreground = Brushes.White, FontWeight = FontWeights.SemiBold, FontSize = 11, VerticalAlignment = VerticalAlignment.Center };
             var tr = new Border { Width = 36, Height = 20, CornerRadius = new CornerRadius(10), Cursor = System.Windows.Input.Cursors.Hand, VerticalAlignment = VerticalAlignment.Center };
@@ -757,8 +1013,8 @@ namespace FieldTakHub.Builder.Services
             bool state = init;
             void Upd()
             {
-                tr.Background = state ? new SolidColorBrush(Color.FromRgb(31, 224, 197)) : new SolidColorBrush(Color.FromRgb(24, 44, 50));
-                kn.Background = state ? new SolidColorBrush(Color.FromRgb(6, 22, 24)) : new SolidColorBrush(Color.FromRgb(138, 168, 164));
+                tr.Background = state ? BrushAccent : BrushSwitchOff;
+                kn.Background = state ? BrushDarkFg : BrushMutedText;
                 kn.HorizontalAlignment = state ? HorizontalAlignment.Right : HorizontalAlignment.Left;
             }
             Upd(); tr.Child = kn;
@@ -772,8 +1028,9 @@ namespace FieldTakHub.Builder.Services
         public static void WriteGeneratedConfigsIfInteractive(string tgt)
         {
             if (string.IsNullOrWhiteSpace(tgt)) return;
+            if (tgt.Contains("fth-analyze-", StringComparison.OrdinalIgnoreCase)) return;
             LastKnownSourceDir = tgt;
-            if (Application.Current == null) return; // Chroni testy jednostkowe xUnit przed modyfikacją folderu tymczasowego
+            if (Application.Current == null) return; // Chroni testy xUnit przed modyfikacją folderu tymczasowego
             WriteConfigsToDirectory(tgt);
         }
 
@@ -797,11 +1054,17 @@ namespace FieldTakHub.Builder.Services
                 }
                 if (root == null) root = new JsonObject();
 
-                // 1. Sekcja ATAK
-                JsonObject atak = (root.TryGetPropertyValue("atak", out var atakNode) && atakNode is JsonObject existingAtak)
-                    ? existingAtak
-                    : new JsonObject();
-                root["atak"] = atak;
+                // 1. Sekcja ATAK (Bez ponownego przypisywania węzła posiadającego już Parent!)
+                JsonObject atak;
+                if (root.TryGetPropertyValue("atak", out var atakNode) && atakNode is JsonObject existingAtak)
+                {
+                    atak = existingAtak;
+                }
+                else
+                {
+                    atak = new JsonObject();
+                    root["atak"] = atak;
+                }
 
                 atak["locationReportingStrategy"] = Current.LocationReportingStrategy;
                 atak["constantReportingRateReliable"] = Current.ConstantReportingRateReliable;
@@ -817,11 +1080,17 @@ namespace FieldTakHub.Builder.Services
                 atak["enableNonStreamingConnections"] = Current.EnableNonStreamingConnections;
                 atak["autoDisableMeshSAWhenStreaming"] = Current.AutoDisableMeshSAWhenStreaming;
 
-                // 2. Sekcja MESHTASTIC + LORA (Pełna kompatybilność z aplikacją Android 2.4)
-                JsonObject mesh = (root.TryGetPropertyValue("meshtastic", out var meshNode) && meshNode is JsonObject existingMesh)
-                    ? existingMesh
-                    : new JsonObject();
-                root["meshtastic"] = mesh;
+                // 2. Sekcja MESHTASTIC + LORA
+                JsonObject mesh;
+                if (root.TryGetPropertyValue("meshtastic", out var meshNode) && meshNode is JsonObject existingMesh)
+                {
+                    mesh = existingMesh;
+                }
+                else
+                {
+                    mesh = new JsonObject();
+                    root["meshtastic"] = mesh;
+                }
 
                 mesh["firmwareMin"] = Current.FirmwareMin;
                 mesh["firmwareMax"] = Current.FirmwareMax;
@@ -835,10 +1104,16 @@ namespace FieldTakHub.Builder.Services
                 mesh["loraModemPreset"] = Current.LoraModemPreset;
                 mesh["usePreset"] = true;
 
-                JsonObject lora = (mesh.TryGetPropertyValue("lora", out var loraNode) && loraNode is JsonObject existingLora)
-                    ? existingLora
-                    : new JsonObject();
-                mesh["lora"] = lora;
+                JsonObject lora;
+                if (mesh.TryGetPropertyValue("lora", out var loraNode) && loraNode is JsonObject existingLora)
+                {
+                    lora = existingLora;
+                }
+                else
+                {
+                    lora = new JsonObject();
+                    mesh["lora"] = lora;
+                }
 
                 lora["region"] = Current.LoraRegion;
                 lora["modemPreset"] = Current.LoraModemPreset;
@@ -846,11 +1121,17 @@ namespace FieldTakHub.Builder.Services
                 lora["hopLimit"] = 3;
                 lora["txEnabled"] = true;
 
-                // Zapis również w głównym węźle "lora" dla wstecznej kompatybilności parsera Android
-                JsonObject rootLora = (root.TryGetPropertyValue("lora", out var rLoraNode) && rLoraNode is JsonObject existingRLora)
-                    ? existingRLora
-                    : new JsonObject();
-                root["lora"] = rootLora;
+                JsonObject rootLora;
+                if (root.TryGetPropertyValue("lora", out var rLoraNode) && rLoraNode is JsonObject existingRLora)
+                {
+                    rootLora = existingRLora;
+                }
+                else
+                {
+                    rootLora = new JsonObject();
+                    root["lora"] = rootLora;
+                }
+
                 rootLora["region"] = Current.LoraRegion;
                 rootLora["modemPreset"] = Current.LoraModemPreset;
                 rootLora["usePreset"] = true;

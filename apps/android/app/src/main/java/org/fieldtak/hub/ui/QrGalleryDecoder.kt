@@ -23,27 +23,50 @@ object QrImageDecoder {
     }
 
     fun decodeFromUri(resolver: ContentResolver, uri: Uri): String? {
+        var sampledBitmap: Bitmap? = null
         return try {
-            val options = BitmapFactory.Options().apply {
+            // 1. Odczyt samych wymiarów bez alokacji pikseli w pamięci RAM (Ochrona przed OutOfMemoryError)
+            val boundsOptions = BitmapFactory.Options().apply {
+                inJustDecodeBounds = true
+            }
+            resolver.openInputStream(uri)?.use { stream ->
+                BitmapFactory.decodeStream(stream, null, boundsOptions)
+            }
+
+            if (boundsOptions.outWidth <= 0 || boundsOptions.outHeight <= 0) return null
+
+            // 2. Wyliczenie współczynnika redukcji inSampleSize przed wczytaniem bitmapy do RAM
+            val decodeOptions = BitmapFactory.Options().apply {
+                inSampleSize = calculateInSampleSize(boundsOptions.outWidth, boundsOptions.outHeight, 1600)
                 inPreferredConfig = Bitmap.Config.ARGB_8888
             }
-            val bitmap = resolver.openInputStream(uri)?.use { inputStream ->
-                BitmapFactory.decodeStream(inputStream, null, options)
+
+            sampledBitmap = resolver.openInputStream(uri)?.use { stream ->
+                BitmapFactory.decodeStream(stream, null, decodeOptions)
             } ?: return null
 
-            decodeBitmapMultiPass(bitmap)
+            decodeBitmapMultiPass(sampledBitmap)
         } catch (e: Exception) {
             e.printStackTrace()
             null
+        } finally {
+            sampledBitmap?.recycle()
         }
     }
 
     fun decodeBitmapMultiPass(bitmap: Bitmap): String? {
-        // Testujemy kilka rozdzielczości (duże zrzuty ekranu vs zdjęcia z aparatu)
-        val targetSizes = listOf(1600, 1024, 720)
+        val targetSizes = listOf(1400, 960, 640)
         for (maxDim in targetSizes) {
-            val candidate = scaleBitmapDown(bitmap, maxDim)
-            decodeSingleBitmap(candidate)?.let { return it }
+            var candidate: Bitmap? = null
+            try {
+                candidate = scaleBitmapDown(bitmap, maxDim)
+                val decoded = decodeSingleBitmap(candidate)
+                if (decoded != null) return decoded
+            } finally {
+                if (candidate != null && candidate !== bitmap) {
+                    candidate.recycle()
+                }
+            }
         }
         return null
     }
@@ -64,21 +87,18 @@ object QrImageDecoder {
         }
         val reader = MultiFormatReader().apply { setHints(hints) }
 
-        // 1. Standardowy HybridBinarizer
         try {
             return reader.decodeWithState(BinaryBitmap(HybridBinarizer(source))).text
         } catch (_: Exception) {
             reader.reset()
         }
 
-        // 2. GlobalHistogramBinarizer (lepszy dla zrzutów ekranu z galerii)
         try {
             return reader.decodeWithState(BinaryBitmap(GlobalHistogramBinarizer(source))).text
         } catch (_: Exception) {
             reader.reset()
         }
 
-        // 3. Odwrócone kolory (dla kodów QR na ciemnym tle)
         try {
             val inverted = source.invert()
             return reader.decodeWithState(BinaryBitmap(HybridBinarizer(inverted))).text
@@ -87,6 +107,18 @@ object QrImageDecoder {
         }
 
         return null
+    }
+
+    private fun calculateInSampleSize(width: Int, height: Int, maxDim: Int): Int {
+        var inSampleSize = 1
+        if (height > maxDim || width > maxDim) {
+            val halfHeight = height / 2
+            val halfWidth = width / 2
+            while ((halfHeight / inSampleSize) >= maxDim && (halfWidth / inSampleSize) >= maxDim) {
+                inSampleSize *= 2
+            }
+        }
+        return inSampleSize
     }
 
     private fun scaleBitmapDown(bitmap: Bitmap, maxDimension: Int): Bitmap {
