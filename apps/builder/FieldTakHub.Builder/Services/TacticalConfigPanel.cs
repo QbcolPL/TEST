@@ -399,7 +399,6 @@ namespace FieldTakHub.Builder.Services
                         }
                     }
 
-                    // Podpięcie osobnej pełnoekranowej zakładki Generatora Map Taktycznych
                     TacticalMapGeneratorView.AttachFullScreenTab(win);
 
                     HookNativeValidityControls(win);
@@ -689,7 +688,6 @@ namespace FieldTakHub.Builder.Services
             Grid.SetColumn(row.ChannelBox, 1);
             grid.Children.Add(row.ChannelBox);
 
-            // Przycisk wyboru koloru z palety RGB
             var colorSwatch = new Border
             {
                 Width = 14,
@@ -765,7 +763,6 @@ namespace FieldTakHub.Builder.Services
             Grid.SetColumn(btnRnd, 4);
             grid.Children.Add(btnRnd);
 
-            // Spójny przycisk ze znakiem minus "-" w ciemnej stylistyce UI
             var btnMinus = new Button
             {
                 Content = "−",
@@ -803,7 +800,6 @@ namespace FieldTakHub.Builder.Services
             SyncFirstFactionToDefaultModel();
         }
 
-        // Okno dialogowe wyboru koloru z palety RGB (suwaki R/G/B + próbki taktyczne + kod HEX)
         private static string ShowRgbColorPickerDialog(Window owner, string factionName, string initialHex)
         {
             Color initColor = Color.FromRgb(38, 132, 255);
@@ -849,7 +845,6 @@ namespace FieldTakHub.Builder.Services
             previewBorder.Child = previewText;
             root.Children.Add(previewBorder);
 
-            // Szybkie próbki taktyczne
             root.Children.Add(new TextBlock { Text = "Szybkie kolory taktyczne:", Foreground = BrushMutedText, FontSize = 11, Margin = new Thickness(0, 0, 0, 4) });
             var swatchesWrap = new WrapPanel { Margin = new Thickness(0, 0, 0, 10) };
             string[] presets = { "#2684FF", "#EB4034", "#F5B82E", "#2ECC71", "#9B59B6", "#1FE0C5", "#E67E22", "#E84393", "#00CEC9", "#95A5A6" };

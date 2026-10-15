@@ -12,6 +12,7 @@ using System.Text;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
@@ -51,7 +52,6 @@ namespace FieldTakHub.Builder.Services
         private static TextBlock _coordsBadge = null;
         private static ListBox _pinsListBox = null;
 
-        // Domyślny środek: Polska Południowa / Śląsk (49.9135, 19.0238)
         private static double _centerLat = 49.9135;
         private static double _centerLon = 19.0238;
         private static int _zoom = 14;
@@ -94,7 +94,6 @@ namespace FieldTakHub.Builder.Services
             return client;
         }
 
-        // Podpina osobną zakładkę obok Trybu Prostego i Zaawansowanego oraz pełnoekranowy widok Generatora Map
         public static void AttachFullScreenTab(Window win)
         {
             if (Application.Current == null || win == null) return;
@@ -102,7 +101,6 @@ namespace FieldTakHub.Builder.Services
             {
                 if (win.Content is not Grid rootGrid) return;
 
-                // 1. Utworzenie pełnoekranowego kontenera zakładki Generatora Map
                 if (_fullScreenOverlay == null || _fullScreenOverlay.Parent == null)
                 {
                     _fullScreenOverlay = BuildFullScreenMapGeneratorUI(win);
@@ -115,7 +113,6 @@ namespace FieldTakHub.Builder.Services
                     rootGrid.Children.Add(_fullScreenOverlay);
                 }
 
-                // 2. Wstrzyknięcie przycisku zakładki "🗺️ Generator Map" obok przycisków Tryb Prosty / Zaawansowany
                 var allButtons = new List<Button>();
                 TacticalConfigPanel.FindVisualChildren(win, allButtons);
                 Button modeBtn = allButtons.FirstOrDefault(b =>
@@ -155,7 +152,6 @@ namespace FieldTakHub.Builder.Services
                         _headerTabButton.Click += (s, e) => ShowFullScreenMapTab(win);
                         modeBarPanel.Children.Add(_headerTabButton);
 
-                        // Kliknięcie Tryb Prosty lub Zaawansowany automatycznie chowa zakładkę mapy
                         foreach (var b in allButtons)
                         {
                             string c = b.Content?.ToString() ?? "";
@@ -215,7 +211,6 @@ namespace FieldTakHub.Builder.Services
             mainGrid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
             mainGrid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(34) });
 
-            // 1. GÓRNY PASEK NAWIGACYJNY PEŁNOEKRANOWEJ ZAKŁADKI
             var topBar = new Border
             {
                 Background = TacticalConfigPanel.BrushInputBg,
@@ -269,12 +264,10 @@ namespace FieldTakHub.Builder.Services
             Grid.SetRow(topBar, 0);
             mainGrid.Children.Add(topBar);
 
-            // 2. GŁÓWNY OBSZAR ROBOCZY (LEWY PANEL KONTROLNY + INTERAKTYWNA MAPA PEŁNOEKRANOWA)
             var bodyGrid = new Grid();
             bodyGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(360) });
             bodyGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
 
-            // Lewy panel sterowania
             var leftScroll = new ScrollViewer
             {
                 VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
@@ -283,7 +276,6 @@ namespace FieldTakHub.Builder.Services
             };
             var leftStack = new StackPanel { Margin = new Thickness(12) };
 
-            // Karta 1: Wybór podkładu mapowego
             var cardLayer = CreateSectionCard("1. Warstwa Podkładowa (Orto / LIDAR / Topo)");
             var layerCombo = new ComboBox
             {
@@ -330,7 +322,6 @@ namespace FieldTakHub.Builder.Services
             cardLayer.Children.Add(chkHybrid);
             leftStack.Children.Add(WrapCard(cardLayer));
 
-            // Karta 2: Nawigacja i Współrzędne
             var cardNav = CreateSectionCard("2. Obszar Operacji & Zoom");
             _mapTitleBox = (TextBox)TacticalConfigPanel.TextCtrl("Mapa_Taktyczna_AO", _ => { });
             cardNav.Children.Add(TacticalConfigPanel.FieldBox("Nazwa arkusza mapy / operacji:", _mapTitleBox));
@@ -361,7 +352,6 @@ namespace FieldTakHub.Builder.Services
             cardNav.Children.Add(zoomRow);
             leftStack.Children.Add(WrapCard(cardNav));
 
-            // Karta 3: Punkty Taktyczne (KML / GPX)
             var cardPins = CreateSectionCard("3. Punkty i Strefy Taktyczne (Kliknij na mapie)");
             var pinFormGrid = new UniformGrid { Columns = 2 };
             _pinFactionCombo = new ComboBox { Height = 28, FontSize = 11, Tag = "INJECTED" };
@@ -396,7 +386,6 @@ namespace FieldTakHub.Builder.Services
             cardPins.Children.Add(btnClearPins);
             leftStack.Children.Add(WrapCard(cardPins));
 
-            // Karta 4: Eksport do Paczki .ftak, KMZ/GPX oraz PDF/Druk
             var cardExport = CreateSectionCard("4. Eksport do Paczki .ftak / KMZ / GPX / PDF");
 
             var btnAddToFtak = MakeBtn("📦 Zapisz mapę + warstwy do paczki .ftak (source/maps)", true, async () =>
@@ -422,7 +411,6 @@ namespace FieldTakHub.Builder.Services
             Grid.SetColumn(leftScroll, 0);
             bodyGrid.Children.Add(leftScroll);
 
-            // Prawa część: Pełnoekranowe płótno mapy taktycznej
             var mapBorder = new Border
             {
                 Background = new SolidColorBrush(Color.FromRgb(5, 12, 15)),
@@ -434,7 +422,6 @@ namespace FieldTakHub.Builder.Services
             var mapOverlayGrid = new Grid();
             _mapCanvas = new Canvas { Background = new SolidColorBrush(Color.FromRgb(6, 15, 18)), ClipToBounds = true, Cursor = Cursors.Cross };
 
-            // Obsługa przeciągania myszą (Pan), kółka myszy (Zoom) oraz kliknięcia (Dodanie punktu)
             _mapCanvas.MouseLeftButtonDown += (s, e) =>
             {
                 _isDragging = true;
@@ -478,7 +465,6 @@ namespace FieldTakHub.Builder.Services
 
                 if (dist < 5.0)
                 {
-                    // Pojedyncze kliknięcie dodaje punkt taktyczny
                     var (clickLat, clickLon) = ScreenToLatLon(endPt.X, endPt.Y, _mapCanvas.ActualWidth, _mapCanvas.ActualHeight);
                     string facName = _pinFactionCombo?.SelectedItem?.ToString() ?? "BLUFOR";
                     var facInfo = TacticalConfigPanel.GetConfiguredFactions().FirstOrDefault(f => f.Name.Equals(facName, StringComparison.OrdinalIgnoreCase));
@@ -513,7 +499,6 @@ namespace FieldTakHub.Builder.Services
 
             mapOverlayGrid.Children.Add(_mapCanvas);
 
-            // Pływający pasek współrzędnych na górze mapy
             var hudBorder = new Border
             {
                 Background = new SolidColorBrush(Color.FromArgb(215, 8, 19, 22)),
@@ -543,7 +528,6 @@ namespace FieldTakHub.Builder.Services
             Grid.SetRow(bodyGrid, 1);
             mainGrid.Children.Add(bodyGrid);
 
-            // 3. DOLNY PASEK STATUSU
             var bottomBar = new Border
             {
                 Background = TacticalConfigPanel.BrushInputBg,
@@ -624,9 +608,6 @@ namespace FieldTakHub.Builder.Services
             }
         }
 
-        // =========================================================================
-        // SILNIK KAFELKÓW SLIPPY MAP + WMS EPSG:3857 (GEOPORTAL ORTO HI-RES / LIDAR / TOPO)
-        // =========================================================================
         private static (double X, double Y) LatLonToTileXY(double lat, double lon, int zoom)
         {
             double latRad = Math.Clamp(lat, -85.0511, 85.0511) * Math.PI / 180.0;
@@ -823,7 +804,6 @@ namespace FieldTakHub.Builder.Services
                 _mapCanvas.Children.Add(lbl);
             }
 
-            // Celownik centralny
             double cx = w / 2.0, cy = h / 2.0;
             _mapCanvas.Children.Add(new Line { X1 = cx - 15, Y1 = cy, X2 = cx + 15, Y2 = cy, Stroke = TacticalConfigPanel.BrushAccent, StrokeThickness = 1.5 });
             _mapCanvas.Children.Add(new Line { X1 = cx, Y1 = cy - 15, X2 = cx, Y2 = cy + 15, Stroke = TacticalConfigPanel.BrushAccent, StrokeThickness = 1.5 });
@@ -871,9 +851,6 @@ namespace FieldTakHub.Builder.Services
             }
         }
 
-        // =========================================================================
-        // EKSPORT MAPY DO PACZKI .FTAK (SOURCE/MAPS + SOURCE/ATAK), KMZ, GPX ORAZ PDF
-        // =========================================================================
         private static byte[] CaptureMapCanvasPngBytes()
         {
             int w = (int)Math.Max(800, _mapCanvas.ActualWidth);
@@ -881,19 +858,6 @@ namespace FieldTakHub.Builder.Services
             var rtb = new RenderTargetBitmap(w, h, 96, 96, PixelFormats.Pbgra32);
             rtb.Render(_mapCanvas);
             var enc = new PngBitmapEncoder();
-            enc.Frames.Add(BitmapFrame.Create(rtb));
-            using var ms = new MemoryStream();
-            enc.Save(ms);
-            return ms.ToArray();
-        }
-
-        private static byte[] CaptureMapCanvasJpegBytes()
-        {
-            int w = (int)Math.Max(800, _mapCanvas.ActualWidth);
-            int h = (int)Math.Max(600, _mapCanvas.ActualHeight);
-            var rtb = new RenderTargetBitmap(w, h, 96, 96, PixelFormats.Pbgra32);
-            rtb.Render(_mapCanvas);
-            var enc = new JpegBitmapEncoder { QualityLevel = 92 };
             enc.Frames.Add(BitmapFrame.Create(rtb));
             using var ms = new MemoryStream();
             enc.Save(ms);
@@ -1032,7 +996,6 @@ namespace FieldTakHub.Builder.Services
             File.WriteAllText(gpxPath, sb.ToString(), Encoding.UTF8);
         }
 
-        // Natywny generator pliku PDF A4 (osadza strumień JPEG mapy taktycznej z ramką tytułową)
         private static async Task ExportTacticalMapPdfAsync(Window win)
         {
             try
