@@ -49,7 +49,6 @@ namespace FieldTakHub.Builder.Services
         public string FirmwareMin { get; set; } = "2.7.26";
         public string FirmwareMax { get; set; } = "2.8.0.47";
 
-        // 0 = Ważność bezterminowa
         public int PackageValidityHours { get; set; } = 0;
         public int QrValidityHours { get; set; } = 0;
 
@@ -70,24 +69,23 @@ namespace FieldTakHub.Builder.Services
         public static TacticalConfigModel Current { get; set; } = new TacticalConfigModel();
         public static string LastKnownSourceDir { get; set; } = "";
 
-        // Zamrożone pędzle (brak wycieków pamięci w WPF)
-        private static readonly SolidColorBrush BrushInputBg = CreateFrozenBrush(8, 19, 22);
-        private static readonly SolidColorBrush BrushInputBorder = CreateFrozenBrush(30, 66, 74);
-        private static readonly SolidColorBrush BrushItemBg = CreateFrozenBrush(15, 32, 37);
-        private static readonly SolidColorBrush BrushCardBg = CreateFrozenBrush(9, 20, 24);
-        private static readonly SolidColorBrush BrushCardBorder = CreateFrozenBrush(26, 58, 66);
-        private static readonly SolidColorBrush BrushMutedText = CreateFrozenBrush(138, 168, 164);
-        private static readonly SolidColorBrush BrushTileBorder = CreateFrozenBrush(28, 64, 72);
-        private static readonly SolidColorBrush BrushAccent = CreateFrozenBrush(31, 224, 197);
-        private static readonly SolidColorBrush BrushButtonAccent = CreateFrozenBrush(44, 229, 208);
-        private static readonly SolidColorBrush BrushSwitchOff = CreateFrozenBrush(24, 44, 50);
-        private static readonly SolidColorBrush BrushDarkFg = CreateFrozenBrush(6, 22, 24);
-        private static readonly SolidColorBrush BrushBlufor = CreateFrozenBrush(38, 132, 255);
-        private static readonly SolidColorBrush BrushOpfor = CreateFrozenBrush(235, 64, 52);
-        private static readonly SolidColorBrush BrushOrga = CreateFrozenBrush(245, 184, 46);
-        private static readonly SolidColorBrush BrushDanger = CreateFrozenBrush(235, 64, 52);
+        internal static readonly SolidColorBrush BrushInputBg = CreateFrozenBrush(8, 19, 22);
+        internal static readonly SolidColorBrush BrushInputBorder = CreateFrozenBrush(30, 66, 74);
+        internal static readonly SolidColorBrush BrushItemBg = CreateFrozenBrush(15, 32, 37);
+        internal static readonly SolidColorBrush BrushCardBg = CreateFrozenBrush(9, 20, 24);
+        internal static readonly SolidColorBrush BrushCardBorder = CreateFrozenBrush(26, 58, 66);
+        internal static readonly SolidColorBrush BrushMutedText = CreateFrozenBrush(138, 168, 164);
+        internal static readonly SolidColorBrush BrushTileBorder = CreateFrozenBrush(28, 64, 72);
+        internal static readonly SolidColorBrush BrushAccent = CreateFrozenBrush(31, 224, 197);
+        internal static readonly SolidColorBrush BrushButtonAccent = CreateFrozenBrush(44, 229, 208);
+        internal static readonly SolidColorBrush BrushSwitchOff = CreateFrozenBrush(24, 44, 50);
+        internal static readonly SolidColorBrush BrushDarkFg = CreateFrozenBrush(6, 22, 24);
+        internal static readonly SolidColorBrush BrushBlufor = CreateFrozenBrush(38, 132, 255);
+        internal static readonly SolidColorBrush BrushOpfor = CreateFrozenBrush(235, 64, 52);
+        internal static readonly SolidColorBrush BrushOrga = CreateFrozenBrush(245, 184, 46);
+        internal static readonly SolidColorBrush BrushDanger = CreateFrozenBrush(235, 64, 52);
 
-        private static SolidColorBrush CreateFrozenBrush(byte r, byte g, byte b)
+        internal static SolidColorBrush CreateFrozenBrush(byte r, byte g, byte b)
         {
             var brush = new SolidColorBrush(Color.FromRgb(r, g, b));
             brush.Freeze();
@@ -118,6 +116,22 @@ namespace FieldTakHub.Builder.Services
 
         private static readonly List<FactionRow> _factionRows = new List<FactionRow>();
         private static StackPanel _factionsContainer = null;
+
+        public static List<string> GetConfiguredFactionNames()
+        {
+            var list = new List<string> { "ALL" };
+            foreach (var r in _factionRows)
+            {
+                string n = r.NameBox?.Text?.Trim();
+                if (!string.IsNullOrWhiteSpace(n) && !list.Contains(n, StringComparer.OrdinalIgnoreCase))
+                    list.Add(n);
+            }
+            if (list.Count == 1)
+            {
+                list.AddRange(new[] { "BLUFOR", "OPFOR", "ORGA" });
+            }
+            return list;
+        }
 
         private const string DarkComboBoxXaml = @"
 <Style xmlns=""http://schemas.microsoft.com/winfx/2006/xaml/presentation""
@@ -222,7 +236,7 @@ namespace FieldTakHub.Builder.Services
     </Setter>
 </Style>";
 
-        private static Style GetDarkComboBoxStyle()
+        internal static Style GetDarkComboBoxStyle()
         {
             if (_darkComboBoxStyle == null)
             {
@@ -236,7 +250,7 @@ namespace FieldTakHub.Builder.Services
             return _darkComboBoxStyle;
         }
 
-        private static Style GetDarkComboBoxItemStyle()
+        internal static Style GetDarkComboBoxItemStyle()
         {
             if (_darkComboBoxItemStyle == null)
             {
@@ -251,7 +265,7 @@ namespace FieldTakHub.Builder.Services
             return _darkComboBoxItemStyle;
         }
 
-        private static void ApplyUnifiedComboBoxTheme(ComboBox cb, Window win)
+        internal static void ApplyUnifiedComboBoxTheme(ComboBox cb, Window win)
         {
             if (cb == null) return;
             try
@@ -293,7 +307,7 @@ namespace FieldTakHub.Builder.Services
                     cb.SelectedIndex = 0;
                 }
 
-                if (!(bool)cb.GetValue(IsHookedProperty))
+                if (win != null && !(bool)cb.GetValue(IsHookedProperty))
                 {
                     cb.SetValue(IsHookedProperty, true);
                     cb.SelectionChanged += (s, e) => SyncNativeMeshtasticSelections(win);
@@ -302,7 +316,7 @@ namespace FieldTakHub.Builder.Services
             catch { }
         }
 
-        private static void FindVisualChildren<T>(DependencyObject depObj, List<T> list) where T : DependencyObject
+        internal static void FindVisualChildren<T>(DependencyObject depObj, List<T> list) where T : DependencyObject
         {
             if (depObj == null) return;
             int count = VisualTreeHelper.GetChildrenCount(depObj);
@@ -332,7 +346,7 @@ namespace FieldTakHub.Builder.Services
             return bestBorder;
         }
 
-        private static bool HasInjectedTag(Panel panel, string tag)
+        internal static bool HasInjectedTag(Panel panel, string tag)
         {
             foreach (UIElement child in panel.Children)
             {
@@ -414,7 +428,7 @@ namespace FieldTakHub.Builder.Services
                                 {
                                     Content = "🖨️ Eksportuj plakat startowy (A4 PNG)",
                                     Height = 30,
-                                    Margin = new Thickness(0, 0, 0, 14),
+                                    Margin = new Thickness(0, 0, 0, 6),
                                     Background = BrushItemBg,
                                     Foreground = Brushes.White,
                                     BorderBrush = BrushAccent,
@@ -430,12 +444,34 @@ namespace FieldTakHub.Builder.Services
                                     btnPosterQuick.IsEnabled = true;
                                 };
 
+                                var btnOpenMapGenQuick = new Button
+                                {
+                                    Content = "🗺️ Otwórz Generator Map Taktycznych",
+                                    Height = 30,
+                                    Margin = new Thickness(0, 0, 0, 14),
+                                    Background = BrushItemBg,
+                                    Foreground = BrushAccent,
+                                    BorderBrush = BrushAccent,
+                                    BorderThickness = new Thickness(1),
+                                    FontWeight = FontWeights.Bold,
+                                    Cursor = Cursors.Hand,
+                                    Tag = "INJECTED_MAPGEN_QUICK"
+                                };
+                                btnOpenMapGenQuick.Click += (s, e) =>
+                                {
+                                    TacticalMapGeneratorHost.OpenMapGeneratorTab(win);
+                                };
+
                                 int idx = parentPanel.Children.IndexOf(previewBorder);
                                 parentPanel.Children.Insert(idx + 1, btnRefresh);
                                 parentPanel.Children.Insert(idx + 2, btnPosterQuick);
+                                parentPanel.Children.Insert(idx + 3, btnOpenMapGenQuick);
                             }
                         }
                     }
+
+                    // Podpięcie osobnej zakładki "🗺️ Generator Map Taktycznych" obok Trybu prostego i zaawansowanego
+                    TacticalMapGeneratorHost.AttachMapTabToMainWindow(win);
 
                     HookNativeValidityControls(win);
                     SyncNativeMeshtasticSelections(win);
@@ -475,8 +511,18 @@ namespace FieldTakHub.Builder.Services
             }
         }
 
+        public static async Task RefreshSourceSizeFromExternalAsync(Window win)
+        {
+            var res = await ForceSizeUpdateAsync(win);
+            if (_injectedRefreshButton != null)
+            {
+                _injectedRefreshButton.Content = $"Odśwież / Skalkuluj (Plików: {res.FileCount} | {FormatBytes(res.TotalBytes)})";
+                _injectedRefreshButton.ToolTip = $"Aktywny folder source: {res.SourcePath}";
+            }
+        }
+
         // =========================================================================
-        // DYNAMICZNY GENERATOR STRON KONFLIKTU (DODAWANIE / USUWANIE STRON + PLAKAT A4)
+        // DYNAMICZNY GENERATOR STRON KONFLIKTU (1..N STRON) + PLAKAT A4
         // =========================================================================
         private static UIElement BuildDynamicFactionsCard(Window win)
         {
@@ -880,13 +926,13 @@ namespace FieldTakHub.Builder.Services
             catch { }
         }
 
-        private static string GetPrimarySourceDirectory(Window win)
+        internal static string GetPrimarySourceDirectory(Window win)
         {
             var dirs = ResolveSourceDirectories(win);
             return dirs.FirstOrDefault(Directory.Exists) ?? dirs.FirstOrDefault() ?? Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "workspace", "source");
         }
 
-        private static string GetEventNameFromWindow(Window win)
+        internal static string GetEventNameFromWindow(Window win)
         {
             if (win == null) return "Operacja_TAK";
             try
@@ -912,7 +958,7 @@ namespace FieldTakHub.Builder.Services
             return "Operacja_TAK";
         }
 
-        private static string SanitizeFileName(string name)
+        internal static string SanitizeFileName(string name)
         {
             if (string.IsNullOrWhiteSpace(name)) return "Operacja_TAK";
             foreach (char c in Path.GetInvalidFileNameChars())
@@ -979,7 +1025,6 @@ namespace FieldTakHub.Builder.Services
                     string rel = Path.GetRelativePath(sourceDir, file).Replace('\\', '/');
                     string relLower = rel.ToLowerInvariant();
 
-                    // Odfiltrowanie nakładek KML należących do innych stron konfliktu
                     if (relLower.StartsWith("factions/") && !factionCode.Equals("ALL", StringComparison.OrdinalIgnoreCase) && !factionCode.Equals("ORGA", StringComparison.OrdinalIgnoreCase))
                     {
                         if (!relLower.StartsWith(targetFactionPrefix))
@@ -1180,13 +1225,13 @@ namespace FieldTakHub.Builder.Services
             encoder.Save(outStream);
         }
 
-        private static void DrawCenteredText(DrawingContext dc, string text, double fontSize, Brush brush, double centerX, double y, bool bold)
+        internal static void DrawCenteredText(DrawingContext dc, string text, double fontSize, Brush brush, double centerX, double y, bool bold)
         {
             var ft = new FormattedText(text ?? "", CultureInfo.InvariantCulture, FlowDirection.LeftToRight, new Typeface(new FontFamily("Segoe UI"), FontStyles.Normal, bold ? FontWeights.Bold : FontWeights.Normal, FontStretches.Normal), fontSize, brush, 1.0);
             dc.DrawText(ft, new Point(centerX - ft.Width / 2.0, y));
         }
 
-        private static void DrawLeftText(DrawingContext dc, string text, double fontSize, Brush brush, double x, double y, bool bold)
+        internal static void DrawLeftText(DrawingContext dc, string text, double fontSize, Brush brush, double x, double y, bool bold)
         {
             var ft = new FormattedText(text ?? "", CultureInfo.InvariantCulture, FlowDirection.LeftToRight, new Typeface(new FontFamily("Segoe UI"), FontStyles.Normal, bold ? FontWeights.Bold : FontWeights.Normal, FontStretches.Normal), fontSize, brush, 1.0);
             dc.DrawText(ft, new Point(x, y));
@@ -1221,7 +1266,7 @@ namespace FieldTakHub.Builder.Services
                     }
         }
 
-        private static void TryOpenFolderInExplorer(string folderPath)
+        internal static void TryOpenFolderInExplorer(string folderPath)
         {
             try
             {
@@ -1506,7 +1551,7 @@ namespace FieldTakHub.Builder.Services
             catch { }
         }
 
-        private static List<string> ResolveSourceDirectories(Window win)
+        internal static List<string> ResolveSourceDirectories(Window win)
         {
             var highPriorityDirs = new List<string>();
             var normalDirs = new List<string>();
@@ -1696,7 +1741,7 @@ namespace FieldTakHub.Builder.Services
             return combined;
         }
 
-        private class SourceStats
+        internal class SourceStats
         {
             public string SourcePath = "";
             public int FileCount;
@@ -1708,7 +1753,7 @@ namespace FieldTakHub.Builder.Services
             public long OtherBytes;
         }
 
-        private static async Task<SourceStats> ForceSizeUpdateAsync(Window win)
+        internal static async Task<SourceStats> ForceSizeUpdateAsync(Window win)
         {
             var emptyStats = new SourceStats();
             if (Application.Current == null || win == null) return emptyStats;
@@ -1830,7 +1875,7 @@ namespace FieldTakHub.Builder.Services
             return stats;
         }
 
-        private static string FormatBytes(long bytes)
+        internal static string FormatBytes(long bytes)
         {
             if (bytes <= 0) return "0 B";
             string[] units = { "B", "KB", "MB", "GB" };
@@ -2070,7 +2115,7 @@ namespace FieldTakHub.Builder.Services
             parentPanel.Children.Add(fwContainer);
         }
 
-        private static UIElement FieldBox(string label, UIElement ctrl)
+        internal static UIElement FieldBox(string label, UIElement ctrl)
         {
             var sp = new StackPanel { Margin = new Thickness(0, 0, 8, 6) };
             sp.Children.Add(new TextBlock { Text = label, Foreground = BrushMutedText, FontSize = 10.5, Margin = new Thickness(0, 0, 0, 3) });
@@ -2078,16 +2123,16 @@ namespace FieldTakHub.Builder.Services
             return sp;
         }
 
-        private static UIElement TextCtrl(string init, Action<string> onChg)
+        internal static UIElement TextCtrl(string init, Action<string> onChg)
         {
             var tb = new TextBox { Text = init, Height = 28, VerticalContentAlignment = VerticalAlignment.Center, Padding = new Thickness(6, 0, 6, 0), FontSize = 11, Background = BrushInputBg, Foreground = Brushes.White, BorderBrush = BrushInputBorder, BorderThickness = new Thickness(1) };
             tb.TextChanged += (_, __) => onChg(tb.Text);
             return tb;
         }
 
-        private static UIElement IntCtrl(int init, Action<int> onChg) => TextCtrl(init.ToString(), s => { if (int.TryParse(s.Trim(), out int v)) onChg(v); });
+        internal static UIElement IntCtrl(int init, Action<int> onChg) => TextCtrl(init.ToString(), s => { if (int.TryParse(s.Trim(), out int v)) onChg(v); });
 
-        private static UIElement ComboCtrl(string[] items, string init, Window win, Action<string> onChg)
+        internal static UIElement ComboCtrl(string[] items, string init, Window win, Action<string> onChg)
         {
             var cb = new ComboBox
             {
@@ -2103,7 +2148,7 @@ namespace FieldTakHub.Builder.Services
             return cb;
         }
 
-        private static UIElement TileSwitch(string title, bool init, Action<bool> onChg)
+        internal static UIElement TileSwitch(string title, bool init, Action<bool> onChg)
         {
             var b = new Border { Background = BrushItemBg, BorderBrush = BrushTileBorder, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(6), Padding = new Thickness(10, 6, 10, 6), Margin = new Thickness(0, 0, 8, 6) };
             var g = new Grid(); g.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) }); g.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
@@ -2134,7 +2179,7 @@ namespace FieldTakHub.Builder.Services
             WriteConfigsToDirectory(tgt);
         }
 
-        private static void WriteConfigsToDirectory(string tgt, string overrideFaction = null, string overrideChannel = null, string overridePsk = null)
+        internal static void WriteConfigsToDirectory(string tgt, string overrideFaction = null, string overrideChannel = null, string overridePsk = null)
         {
             if (string.IsNullOrWhiteSpace(tgt)) return;
             try
@@ -2168,7 +2213,6 @@ namespace FieldTakHub.Builder.Services
                     ? DateTimeOffset.UtcNow.AddYears(100).ToString("o")
                     : DateTimeOffset.UtcNow.AddHours(Current.PackageValidityHours).ToString("o");
 
-                // 1. Sekcja ATAK
                 JsonObject atak;
                 if (root.TryGetPropertyValue("atak", out var atakNode) && atakNode is JsonObject existingAtak)
                 {
@@ -2194,7 +2238,6 @@ namespace FieldTakHub.Builder.Services
                 atak["enableNonStreamingConnections"] = Current.EnableNonStreamingConnections;
                 atak["autoDisableMeshSAWhenStreaming"] = Current.AutoDisableMeshSAWhenStreaming;
 
-                // 2. Sekcja MESHTASTIC + LORA + STRONA KONFLIKTU
                 JsonObject mesh;
                 if (root.TryGetPropertyValue("meshtastic", out var meshNode) && meshNode is JsonObject existingMesh)
                 {
