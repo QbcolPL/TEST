@@ -96,7 +96,6 @@ namespace FieldTakHub.Builder.Services
             return client;
         }
 
-        // Tworzy niezawodny, zawsze widoczny pasek zakładek na samej górze okna (niezależnie od tego czy win.Content to Border, ScrollViewer czy Grid)
         public static void AttachFullScreenTab(Window win)
         {
             if (Application.Current == null || win == null) return;
@@ -116,7 +115,6 @@ namespace FieldTakHub.Builder.Services
                     masterGrid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(44) });
                     masterGrid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
 
-                    // Górny pasek zakładek głównych
                     var navBorder = new Border
                     {
                         Background = TacticalConfigPanel.BrushInputBg,
@@ -131,9 +129,9 @@ namespace FieldTakHub.Builder.Services
                         Text = "Field TAK Hub 2.4  •  Google / Geoportal Hi-Res / LIDAR / Topo / ESRI / OSM",
                         Foreground = TacticalConfigPanel.BrushMutedText,
                         FontSize = 11,
-                        VerticalAlignment = VerticalAlignment.Center,
-                        DockPanel.Dock = Dock.Right
+                        VerticalAlignment = VerticalAlignment.Center
                     };
+                    DockPanel.SetDock(rightInfo, Dock.Right);
                     navDock.Children.Add(rightInfo);
 
                     var tabsStack = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };

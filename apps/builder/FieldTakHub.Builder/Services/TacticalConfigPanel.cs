@@ -29,14 +29,12 @@ namespace FieldTakHub.Builder.Services
         public string Name { get; set; } = "BLUFOR";
         public string ColorHex { get; set; } = "#2684FF";
 
-        // Meshtastic Encrypted Channel
         public string ChannelName { get; set; } = "BLUFOR-TAK";
         public string Psk { get; set; } = TacticalConfigModel.GenerateRandomBase64Psk();
         public string LoraRegion { get; set; } = "EU_868";
         public string LoraModemPreset { get; set; } = "SHORT_FAST";
         public string DeviceRole { get; set; } = "Auto";
 
-        // OpenTAKServer & Enrollment
         public string OtsHost { get; set; } = "ggzstak.duckdns.org";
         public int OtsSslPort { get; set; } = 8089;
         public int OtsEnrollmentPort { get; set; } = 8446;
@@ -379,7 +377,6 @@ namespace FieldTakHub.Builder.Services
             {
                 try
                 {
-                    // 1. Podpięcie górnego paska nawigacji z pełnoekranową zakładką "🗺️ Generator Map Taktycznych"
                     TacticalMapGeneratorView.AttachFullScreenTab(win);
 
                     var combos = new List<ComboBox>();
@@ -523,7 +520,6 @@ namespace FieldTakHub.Builder.Services
 
             var stack = new StackPanel();
 
-            // Nagłówek modułu + szybki przycisk do Generatora Map
             var titleDock = new DockPanel { Margin = new Thickness(0, 0, 0, 6) };
             var btnJumpMap = new Button
             {
@@ -536,9 +532,9 @@ namespace FieldTakHub.Builder.Services
                 BorderThickness = new Thickness(1),
                 FontSize = 11,
                 FontWeight = FontWeights.Bold,
-                Cursor = Cursors.Hand,
-                DockPanel.Dock = Dock.Right
+                Cursor = Cursors.Hand
             };
+            DockPanel.SetDock(btnJumpMap, Dock.Right);
             btnJumpMap.Click += (s, e) => TacticalMapGeneratorView.ShowFullScreenMapTab(win);
             titleDock.Children.Add(btnJumpMap);
 
@@ -561,11 +557,9 @@ namespace FieldTakHub.Builder.Services
                 Margin = new Thickness(0, 0, 0, 12)
             });
 
-            // Pasek zakładek stron (BLUFOR | OPFOR | ORGA | + | −)
             _factionTabHeadersPanel = new WrapPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 8) };
             stack.Children.Add(_factionTabHeadersPanel);
 
-            // Kontener zawartości wybranej zakładki
             _factionTabContentHost = new Border
             {
                 Background = BrushItemBg,
@@ -579,7 +573,6 @@ namespace FieldTakHub.Builder.Services
 
             RebuildFactionTabsUI(win);
 
-            // Dolny pasek akcji zbiorczych
             var actionButtonsGrid = new UniformGrid { Columns = 3, Margin = new Thickness(0, 2, 0, 6) };
 
             var btnInitFolders = new Button
@@ -727,7 +720,6 @@ namespace FieldTakHub.Builder.Services
                 _factionTabHeadersPanel.Children.Add(tabBtn);
             }
 
-            // Przycisk "+" (Dodaj nową zakładkę strony)
             string[] defaultPalette = { "#2ECC71", "#9B59B6", "#E67E22", "#1ABC9C", "#E84393", "#00CEC9" };
             var btnAddFaction = new Button
             {
@@ -762,7 +754,6 @@ namespace FieldTakHub.Builder.Services
             };
             _factionTabHeadersPanel.Children.Add(btnAddFaction);
 
-            // Spójny przycisk "−" (Usuń aktywną zakładkę strony)
             var btnRemoveFaction = new Button
             {
                 Content = "− Usuń stronę",
@@ -796,7 +787,6 @@ namespace FieldTakHub.Builder.Services
             };
             _factionTabHeadersPanel.Children.Add(btnRemoveFaction);
 
-            // Zbudowanie zawartości dla aktualnie wybranej zakładki strony
             var activeFaction = _factions[_selectedFactionIndex];
             SyncActiveFactionToDefaultModel();
             _factionTabContentHost.Child = BuildSingleFactionTabContent(win, activeFaction);
@@ -806,7 +796,6 @@ namespace FieldTakHub.Builder.Services
         {
             var root = new StackPanel();
 
-            // 1. Pasek nagłówkowy karty strony: Nazwa strony + Wybór koloru RGB + Otwórz folder KML
             var sec1Title = new TextBlock
             {
                 Text = $"1. Identyfikacja Strony, Kolor Taktyczny RGB oraz Warstwy KML ({fac.Name})",
@@ -904,7 +893,6 @@ namespace FieldTakHub.Builder.Services
             topRow.Children.Add(kmlField);
             root.Children.Add(topRow);
 
-            // 2. Sekcja Meshtastic — Kanał Szyfrowany Strony
             root.Children.Add(new TextBlock
             {
                 Text = $"2. Meshtastic — Kanał Szyfrowany LoRa ({fac.Name})",
@@ -921,7 +909,6 @@ namespace FieldTakHub.Builder.Services
             meshRow1.Children.Add(FieldBox("Rola urządzenia Meshtastic:", ComboCtrl(new[] { "Auto", "TAK", "TAK_Tracker", "Client", "Router" }, fac.DeviceRole, win, v => { fac.DeviceRole = v; Current.DeviceRole = v; })));
             root.Children.Add(meshRow1);
 
-            // Pełnowymiarowy wiersz klucza PSK (nic nie ucina 44-znakowego klucza AES-256 Base64)
             var pskGrid = new Grid { Margin = new Thickness(0, 0, 0, 10) };
             pskGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
             pskGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(170) });
@@ -955,7 +942,6 @@ namespace FieldTakHub.Builder.Services
             pskGrid.Children.Add(btnRollPsk);
             root.Children.Add(pskGrid);
 
-            // 3. Sekcja OpenTAKServer (OTS) & Auto-Enrollment
             root.Children.Add(new TextBlock
             {
                 Text = $"3. OpenTAKServer (OTS) & Certyfikaty Enrollment ({fac.Name})",
@@ -1736,7 +1722,7 @@ namespace FieldTakHub.Builder.Services
         }
 
         // =========================================================================
-        // 3. KALKULATOR ROZMIARU Z ROZBICIEM NA 6 KATEGORII (PLIKI PACZKI, MAPY, PLUGINY, KONFIGURACJA, DANE TAKTYCZNE, POZOSTAŁE)
+        // 3. KALKULATOR ROZMIARU Z ROZBICIEM NA 6 KATEGORII
         // =========================================================================
         private class SourceStats
         {
@@ -1856,12 +1842,10 @@ namespace FieldTakHub.Builder.Services
                     stats.FileCount++;
                     stats.TotalBytes += len;
 
-                    // 1. PLUGINY: wyłącznie pliki .apk lub pliki w folderze plugins/
                     if (ext == ".apk" || rel.StartsWith("plugins/") || rel.StartsWith("wtyczki/"))
                     {
                         stats.PluginsBytes += len;
                     }
-                    // 2. MAPY: pliki w folderze maps/imagery/tiles lub formaty rastrowe/kafelkowe
                     else if (rel.StartsWith("maps/") || rel.StartsWith("mapy/") || rel.StartsWith("imagery/") || rel.StartsWith("tiles/") ||
                              ext == ".mbtiles" || ext == ".sqlite" || ext == ".sqlitedb" || ext == ".tif" || ext == ".tiff" || ext == ".geotiff" ||
                              ext == ".dt0" || ext == ".dt1" || ext == ".dt2" || ext == ".ecw" || ext == ".jp2" ||
@@ -1869,7 +1853,6 @@ namespace FieldTakHub.Builder.Services
                     {
                         stats.MapsBytes += len;
                     }
-                    // 3. KONFIGURACJA: pliki konfiguracyjne i certyfikaty
                     else if (rel.StartsWith("config/") || rel.StartsWith("konfiguracja/") || rel.StartsWith("certs/") || rel.StartsWith("cert/") || rel.StartsWith("meshtastic/") ||
                              ext == ".json" || ext == ".pref" || ext == ".cfg" || ext == ".conf" || ext == ".ini" ||
                              ext == ".p12" || ext == ".pem" || ext == ".crt" || ext == ".cer" || ext == ".key" ||
@@ -1877,13 +1860,11 @@ namespace FieldTakHub.Builder.Services
                     {
                         stats.ConfigBytes += len;
                     }
-                    // 4. DANE TAKTYCZNE: nakładki KML/KMZ/GPX/CoT/Shapefile oraz foldery atak/overlays/factions/data
                     else if (rel.StartsWith("atak/") || rel.StartsWith("overlays/") || rel.StartsWith("nakladki/") || rel.StartsWith("factions/") || rel.StartsWith("strony/") || rel.StartsWith("data/") ||
                              ext == ".kml" || ext == ".kmz" || ext == ".gpx" || ext == ".cot" || ext == ".geojson" || ext == ".shp" || ext == ".drw" || ext == ".ovl")
                     {
                         stats.TacticalBytes += len;
                     }
-                    // 5. POZOSTAŁE
                     else
                     {
                         stats.OtherBytes += len;
@@ -1946,7 +1927,6 @@ namespace FieldTakHub.Builder.Services
                     TextBlock matchedValueTb = null;
                     var parent = VisualTreeHelper.GetParent(labelTb);
 
-                    // Krok 1: Jeżeli wiersz ma własny kontener (np. DockPanel/Grid wierszowy z 2 TextBlockami)
                     if (parent != null)
                     {
                         var parentTbs = new List<TextBlock>();
@@ -1969,7 +1949,6 @@ namespace FieldTakHub.Builder.Services
                         }
                     }
 
-                    // Krok 2: Dopasowanie po współrzędnej pionowej Y na ekranie
                     if (matchedValueTb == null)
                     {
                         try
@@ -1991,7 +1970,6 @@ namespace FieldTakHub.Builder.Services
                         catch { }
                     }
 
-                    // Krok 3: Bezpośredni sąsiad w drzewie XAML
                     if (matchedValueTb == null)
                     {
                         int idx = cardTbs.IndexOf(labelTb);
@@ -2008,7 +1986,6 @@ namespace FieldTakHub.Builder.Services
                     }
                 }
 
-                // Fallback: jeżeli wszystkie 6 wartościowych TextBlocków jest w karcie, przypisz je w kolejności góra-dół
                 if (assignedValueTbs.Count < 6)
                 {
                     var allValueTbs = cardTbs.Where(t => !IsLabelOrHeader(t.Text) && t.Text != null && t.Text.Length <= 24).ToList();
@@ -2204,7 +2181,6 @@ namespace FieldTakHub.Builder.Services
                     ? DateTimeOffset.UtcNow.AddYears(100).ToString("o")
                     : DateTimeOffset.UtcNow.AddHours(Current.PackageValidityHours).ToString("o");
 
-                // 1. Sekcja ATAK
                 JsonObject atak;
                 if (root.TryGetPropertyValue("atak", out var atakNode) && atakNode is JsonObject existingAtak) atak = existingAtak;
                 else { atak = new JsonObject(); root["atak"] = atak; }
@@ -2223,7 +2199,6 @@ namespace FieldTakHub.Builder.Services
                 atak["enableNonStreamingConnections"] = Current.EnableNonStreamingConnections;
                 atak["autoDisableMeshSAWhenStreaming"] = Current.AutoDisableMeshSAWhenStreaming;
 
-                // 2. Sekcja OpenTAKServer (OTS) + Enrollment
                 JsonObject ots;
                 if (root.TryGetPropertyValue("openTakServer", out var otsNode) && otsNode is JsonObject existingOts) ots = existingOts;
                 else { ots = new JsonObject(); root["openTakServer"] = ots; }
@@ -2235,7 +2210,6 @@ namespace FieldTakHub.Builder.Services
                 ots["enrollmentUsername"] = fac.EnrollmentUsername;
                 ots["enrollmentPassword"] = fac.EnrollmentPassword;
 
-                // 3. Sekcja MESHTASTIC + LORA
                 JsonObject mesh;
                 if (root.TryGetPropertyValue("meshtastic", out var meshNode) && meshNode is JsonObject existingMesh) mesh = existingMesh;
                 else { mesh = new JsonObject(); root["meshtastic"] = mesh; }
