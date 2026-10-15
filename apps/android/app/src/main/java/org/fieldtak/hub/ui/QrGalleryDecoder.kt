@@ -35,7 +35,15 @@ object QrImageDecoder {
             if (boundsOptions.outWidth <= 0 || boundsOptions.outHeight <= 0) return null
 
             val decodeOptions = BitmapFactory.Options().apply {
-                inSampleSize = calculateInSampleSize(boundsOptions.outWidth, boundsOptions.outHeight, 1600)
+                var inSampleSize = 1
+                if (boundsOptions.outHeight > 1600 || boundsOptions.outWidth > 1600) {
+                    val halfHeight = boundsOptions.outHeight / 2
+                    val halfWidth = boundsOptions.outWidth / 2
+                    while ((halfHeight / inSampleSize) >= 1600 && (halfWidth / inSampleSize) >= 1600) {
+                        inSampleSize *= 2
+                    }
+                }
+                this.inSampleSize = inSampleSize
                 inPreferredConfig = Bitmap.Config.ARGB_8888
             }
 
@@ -43,98 +51,44 @@ object QrImageDecoder {
                 BitmapFactory.decodeStream(stream, null, decodeOptions)
             } ?: return null
 
-            decodeBitmapMultiPass(sampledBitmap)
+            val targetSizes = listOf(1400, 960, 640)
+            for (maxDim in targetSizes) {
+                var candidate: Bitmap? = null
+                try {
+                    val width = sampledBitmap.width
+                    val height = sampledBitmap.height
+                    if (width <= maxDim && height <= maxDim) {
+                        candidate = sampledBitmap
+                    } else {
+                        val ratio = width.toFloat() / height.toFloat()
+                        val newWidth = if (ratio > 1f) maxDim else (maxDim * ratio).toInt().coerceAtLeast(1)
+                        val newHeight = if (ratio > 1f) (maxDim / ratio).toInt().coerceAtLeast(1) else maxDim
+                        candidate = Bitmap.createScaledBitmap(sampledBitmap, newWidth, newHeight, true)
+                    }
+
+                    val pixels = IntArray(candidate.width * candidate.height)
+                    candidate.getPixels(pixels, 0, candidate.width, 0, 0, candidate.width, candidate.height)
+
+                    val source = RGBLuminanceSource(candidate.width, candidate.height, pixels)
+                    val hints = EnumMap<DecodeHintType, Any>(DecodeHintType::class.java).apply {
+                        put(DecodeHintType.TRY_HARDER, true)
+                        put(DecodeHintType.POSSIBLE_FORMATS, listOf(BarcodeFormat.QR_CODE))
+                        put(DecodeHintType.CHARACTER_SET, "UTF-8")
+                    }
+                    val reader = MultiFormatReader().apply { setHints(hints) }
+
+                    try { return reader.decodeWithState(BinaryBitmap(HybridBinarizer(source))).text } catch (_: Exception) { reader.reset() }
+                    try { return reader.decodeWithState(BinaryBitmap(GlobalHistogramBinarizer(source))).text } catch (_: Exception) { reader.reset() }
+                    try { return reader.decodeWithState(BinaryBitmap(HybridBinarizer(source.invert()))).text } catch (_: Exception) { reader.reset() }
+                } finally {
+                    if (candidate != null && candidate !== sampledBitmap) candidate.recycle()
+                }
+            }
+            null
         } catch (e: Exception) {
-            e.printStackTrace()
             null
         } finally {
             sampledBitmap?.recycle()
         }
-    }
-
-    fun decodeBitmapMultiPass(bitmap: Bitmap): String? {
-        val targetSizes = listOf(1400, 960, 640)
-        for (maxDim in targetSizes) {
-            var candidate: Bitmap? = null
-            try {
-                candidate = scaleBitmapDown(bitmap, maxDim)
-                val decoded = decodeSingleBitmap(candidate)
-                if (decoded != null) return decoded
-            } finally {
-                if (candidate != null && candidate !== bitmap) {
-                    candidate.recycle()
-                }
-            }
-        }
-        return null
-    }
-
-    private fun decodeSingleBitmap(bitmap: Bitmap): String? {
-        val width = bitmap.width
-        val height = bitmap.height
-        if (width <= 0 || height <= 0) return null
-
-        val pixels = IntArray(width * height)
-        bitmap.getPixels(pixels, 0, width, 0, 0, width, height)
-
-        val source = RGBLuminanceSource(width, height, pixels)
-        val hints = EnumMap<DecodeHintType, Any>(DecodeHintType::class.java).apply {
-            put(DecodeHintType.TRY_HARDER, true)
-            put(DecodeHintType.POSSIBLE_FORMATS, listOf(BarcodeFormat.QR_CODE))
-            put(DecodeHintType.CHARACTER_SET, "UTF-8")
-        }
-        val reader = MultiFormatReader().apply { setHints(hints) }
-
-        try {
-            return reader.decodeWithState(BinaryBitmap(HybridBinarizer(source))).text
-        } catch (_: Exception) {
-            reader.reset()
-        }
-
-        try {
-            return reader.decodeWithState(BinaryBitmap(GlobalHistogramBinarizer(source))).text
-        } catch (_: Exception) {
-            reader.reset()
-        }
-
-        try {
-            val inverted = source.invert()
-            return reader.decodeWithState(BinaryBitmap(HybridBinarizer(inverted))).text
-        } catch (_: Exception) {
-            reader.reset()
-        }
-
-        return null
-    }
-
-    private fun calculateInSampleSize(width: Int, height: Int, maxDim: Int): Int {
-        var inSampleSize = 1
-        if (height > maxDim || width > maxDim) {
-            val halfHeight = height / 2
-            val halfWidth = width / 2
-            while ((halfHeight / inSampleSize) >= maxDim && (halfWidth / inSampleSize) >= maxDim) {
-                inSampleSize *= 2
-            }
-        }
-        return inSampleSize
-    }
-
-    private fun scaleBitmapDown(bitmap: Bitmap, maxDimension: Int): Bitmap {
-        val width = bitmap.width
-        val height = bitmap.height
-        if (width <= maxDimension && height <= maxDimension) {
-            return bitmap
-        }
-        val ratio = width.toFloat() / height.toFloat()
-        val newWidth: Int
-        val newHeight: Int
-        if (ratio > 1f) {
-            newWidth = maxDimension
-            newHeight = (maxDimension / ratio).toInt().coerceAtLeast(1)
-        } else {
-            newHeight = maxDimension
-            newWidth = (maxDimension * ratio).toInt().coerceAtLeast(1)
-        }
-        return Bitmap.createScaledBitmap(bitmap, newWidth, newHeight, true)
     }
 }

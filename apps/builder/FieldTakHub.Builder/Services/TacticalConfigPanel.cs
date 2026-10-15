@@ -2,9 +2,13 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.Diagnostics;
+using System.Globalization;
 using System.IO;
+using System.IO.Compression;
 using System.Linq;
 using System.Reflection;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -17,6 +21,7 @@ using System.Windows.Documents;
 using System.Windows.Input;
 using System.Windows.Markup;
 using System.Windows.Media;
+using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 
 namespace FieldTakHub.Builder.Services
@@ -44,9 +49,20 @@ namespace FieldTakHub.Builder.Services
         public string FirmwareMin { get; set; } = "2.7.26";
         public string FirmwareMax { get; set; } = "2.8.0.47";
 
-        // 0 = Ważność bezterminowa (paczka .ftak oraz kod QR nigdy nie wygasają)
+        // 0 = Ważność bezterminowa
         public int PackageValidityHours { get; set; } = 0;
         public int QrValidityHours { get; set; } = 0;
+
+        public string ActiveFaction { get; set; } = "ALL";
+        public string DefaultChannelName { get; set; } = "BLUFOR-TAK";
+        public string DefaultPsk { get; set; } = GenerateRandomBase64Psk();
+
+        public static string GenerateRandomBase64Psk()
+        {
+            byte[] key = new byte[32];
+            RandomNumberGenerator.Fill(key);
+            return Convert.ToBase64String(key);
+        }
     }
 
     public static class TacticalConfigPanel
@@ -54,7 +70,7 @@ namespace FieldTakHub.Builder.Services
         public static TacticalConfigModel Current { get; set; } = new TacticalConfigModel();
         public static string LastKnownSourceDir { get; set; } = "";
 
-        // ZAMROŻONE PĘDZLE (Brak wycieków pamięci GDI / Dispatcher w WPF)
+        // Zamrożone pędzle (brak wycieków pamięci w WPF)
         private static readonly SolidColorBrush BrushInputBg = CreateFrozenBrush(8, 19, 22);
         private static readonly SolidColorBrush BrushInputBorder = CreateFrozenBrush(30, 66, 74);
         private static readonly SolidColorBrush BrushItemBg = CreateFrozenBrush(15, 32, 37);
@@ -66,6 +82,10 @@ namespace FieldTakHub.Builder.Services
         private static readonly SolidColorBrush BrushButtonAccent = CreateFrozenBrush(44, 229, 208);
         private static readonly SolidColorBrush BrushSwitchOff = CreateFrozenBrush(24, 44, 50);
         private static readonly SolidColorBrush BrushDarkFg = CreateFrozenBrush(6, 22, 24);
+        private static readonly SolidColorBrush BrushBlufor = CreateFrozenBrush(38, 132, 255);
+        private static readonly SolidColorBrush BrushOpfor = CreateFrozenBrush(235, 64, 52);
+        private static readonly SolidColorBrush BrushOrga = CreateFrozenBrush(245, 184, 46);
+        private static readonly SolidColorBrush BrushDanger = CreateFrozenBrush(235, 64, 52);
 
         private static SolidColorBrush CreateFrozenBrush(byte r, byte g, byte b)
         {
@@ -83,9 +103,21 @@ namespace FieldTakHub.Builder.Services
         private static TextBox _injectedPkgValidityBox = null;
         private static TextBox _injectedQrValidityBox = null;
         private static TextBlock _indefiniteStatusBadge = null;
+        private static TextBlock _factionStatusLabel = null;
         private static bool _syncingValidity = false;
 
         private static readonly Regex WindowsPathRegex = new Regex(@"[A-Za-z]:[\\/][^\r\n""<>|?*]+", RegexOptions.Compiled);
+
+        private class FactionRow
+        {
+            public TextBox NameBox;
+            public TextBox ChannelBox;
+            public TextBox PskBox;
+            public Grid UI;
+        }
+
+        private static readonly List<FactionRow> _factionRows = new List<FactionRow>();
+        private static StackPanel _factionsContainer = null;
 
         private const string DarkComboBoxXaml = @"
 <Style xmlns=""http://schemas.microsoft.com/winfx/2006/xaml/presentation""
@@ -292,18 +324,22 @@ namespace FieldTakHub.Builder.Services
                 {
                     var innerTbs = new List<TextBlock>();
                     FindVisualChildren(b, innerTbs);
-                    if (innerTbs.Count >= 6)
-                    {
-                        return b;
-                    }
-                    if (bestBorder == null && b.Background != null)
-                    {
-                        bestBorder = b;
-                    }
+                    if (innerTbs.Count >= 6) return b;
+                    if (bestBorder == null && b.Background != null) bestBorder = b;
                 }
                 cur = VisualTreeHelper.GetParent(cur) ?? LogicalTreeHelper.GetParent(cur);
             }
             return bestBorder;
+        }
+
+        private static bool HasInjectedTag(Panel panel, string tag)
+        {
+            foreach (UIElement child in panel.Children)
+            {
+                if (child is FrameworkElement fe && string.Equals(fe.Tag?.ToString(), tag, StringComparison.Ordinal))
+                    return true;
+            }
+            return false;
         }
 
         public static void AttachToMainWindow(Window win)
@@ -340,6 +376,7 @@ namespace FieldTakHub.Builder.Services
                                 {
                                     int idx = parentPanel.Children.IndexOf(cardBorder);
                                     parentPanel.Children.Insert(idx, BuildAtakCard(win));
+                                    parentPanel.Children.Insert(idx + 1, BuildDynamicFactionsCard(win));
                                 }
                             }
                         }
@@ -353,7 +390,7 @@ namespace FieldTakHub.Builder.Services
                                 {
                                     Content = "Odśwież / Skalkuluj zawartość (folder source)",
                                     Height = 32,
-                                    Margin = new Thickness(0, 8, 0, 14),
+                                    Margin = new Thickness(0, 8, 0, 6),
                                     Background = BrushButtonAccent,
                                     Foreground = BrushDarkFg,
                                     FontWeight = FontWeights.Bold,
@@ -373,8 +410,29 @@ namespace FieldTakHub.Builder.Services
                                     btnRefresh.IsEnabled = true;
                                 };
 
+                                var btnPosterQuick = new Button
+                                {
+                                    Content = "🖨️ Eksportuj plakat startowy (A4 PNG)",
+                                    Height = 30,
+                                    Margin = new Thickness(0, 0, 0, 14),
+                                    Background = BrushItemBg,
+                                    Foreground = Brushes.White,
+                                    BorderBrush = BrushAccent,
+                                    BorderThickness = new Thickness(1),
+                                    FontWeight = FontWeights.SemiBold,
+                                    Cursor = Cursors.Hand,
+                                    Tag = "INJECTED_POSTER_QUICK"
+                                };
+                                btnPosterQuick.Click += async (s, e) =>
+                                {
+                                    btnPosterQuick.IsEnabled = false;
+                                    await ExportSafezonePosterForCurrentAsync(win);
+                                    btnPosterQuick.IsEnabled = true;
+                                };
+
                                 int idx = parentPanel.Children.IndexOf(previewBorder);
                                 parentPanel.Children.Insert(idx + 1, btnRefresh);
+                                parentPanel.Children.Insert(idx + 2, btnPosterQuick);
                             }
                         }
                     }
@@ -391,7 +449,6 @@ namespace FieldTakHub.Builder.Services
             {
                 win.SetValue(IsHookedProperty, true);
 
-                // Przechwytywanie kliknięć przycisków Buduj / Generuj QR, aby 0 zawsze dawało ważność bezterminową
                 win.AddHandler(UIElement.PreviewMouseLeftButtonDownEvent, new MouseButtonEventHandler((s, e) =>
                 {
                     ApplyIndefiniteValidityBeforeAction(win);
@@ -418,7 +475,767 @@ namespace FieldTakHub.Builder.Services
             }
         }
 
-        // Wykrywa natywne pola ważności paczki .ftak oraz QR w oknie MainWindow i spina je z obsługą 0 = Bezterminowo
+        // =========================================================================
+        // DYNAMICZNY GENERATOR STRON KONFLIKTU (DODAWANIE / USUWANIE STRON + PLAKAT A4)
+        // =========================================================================
+        private static UIElement BuildDynamicFactionsCard(Window win)
+        {
+            var card = new Border
+            {
+                Background = BrushCardBg,
+                BorderBrush = BrushAccent,
+                BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(8),
+                Padding = new Thickness(14),
+                Margin = new Thickness(0, 0, 0, 14),
+                Tag = "INJECTED_FACTIONS"
+            };
+
+            var stack = new StackPanel();
+            stack.Children.Add(new TextBlock
+            {
+                Text = "Generator Stron Konfliktu (Dynamiczny: 1, 2, 3, 4+ stron) & Plakat Safezone A4",
+                Foreground = Brushes.White,
+                FontWeight = FontWeights.Bold,
+                FontSize = 14,
+                Margin = new Thickness(0, 0, 0, 4)
+            });
+            stack.Children.Add(new TextBlock
+            {
+                Text = "Dodawaj i usuwaj dowolną liczbę stron konfliktu. Każda strona otrzymuje własny kanał LoRa, klucz AES-256 PSK, osobny podfolder KML (source/factions/<strona>) oraz własną paczkę .ftak i plakat QR.",
+                Foreground = BrushMutedText,
+                FontSize = 11,
+                TextWrapping = TextWrapping.Wrap,
+                Margin = new Thickness(0, 0, 0, 10)
+            });
+
+            var headerGrid = new Grid { Margin = new Thickness(0, 0, 0, 4) };
+            headerGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(105) });
+            headerGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(140) });
+            headerGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            headerGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(34) });
+            headerGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(34) });
+
+            TextBlock Hdr(string t) => new TextBlock { Text = t, Foreground = BrushMutedText, FontSize = 10.5, FontWeight = FontWeights.SemiBold, VerticalAlignment = VerticalAlignment.Bottom };
+
+            var h1 = Hdr("Nazwa Strony"); Grid.SetColumn(h1, 0); headerGrid.Children.Add(h1);
+            var h2 = Hdr("Kanał LoRa"); Grid.SetColumn(h2, 1); headerGrid.Children.Add(h2);
+            var h3 = Hdr("Klucz Szyfrowania PSK (AES-256 Base64)"); Grid.SetColumn(h3, 2); headerGrid.Children.Add(h3);
+            stack.Children.Add(headerGrid);
+
+            _factionsContainer = new StackPanel { Margin = new Thickness(0, 0, 0, 8) };
+            _factionRows.Clear();
+            stack.Children.Add(_factionsContainer);
+
+            AddFactionRow("BLUFOR", "BLUFOR-TAK", TacticalConfigModel.GenerateRandomBase64Psk());
+            AddFactionRow("OPFOR", "OPFOR-TAK", TacticalConfigModel.GenerateRandomBase64Psk());
+            AddFactionRow("ORGA", "ORGA-HQ", TacticalConfigModel.GenerateRandomBase64Psk());
+
+            var topBar = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 10) };
+
+            var btnAddRow = new Button
+            {
+                Content = "➕ Dodaj stronę konfliktu",
+                Height = 28,
+                Margin = new Thickness(0, 0, 8, 0),
+                Padding = new Thickness(12, 0, 12, 0),
+                Background = BrushItemBg,
+                Foreground = BrushAccent,
+                BorderBrush = BrushAccent,
+                BorderThickness = new Thickness(1),
+                FontSize = 11,
+                FontWeight = FontWeights.Bold,
+                Cursor = Cursors.Hand
+            };
+            btnAddRow.Click += (s, e) =>
+            {
+                int nextNum = _factionRows.Count + 1;
+                AddFactionRow($"STRONA-{nextNum}", $"TAK-CH{nextNum}", TacticalConfigModel.GenerateRandomBase64Psk());
+            };
+
+            var btnInitFolders = new Button
+            {
+                Content = "📁 Przygotuj podfoldery KML (source/factions/...)",
+                Height = 28,
+                Padding = new Thickness(12, 0, 12, 0),
+                Background = BrushItemBg,
+                Foreground = Brushes.White,
+                BorderBrush = BrushTileBorder,
+                BorderThickness = new Thickness(1),
+                FontSize = 11,
+                FontWeight = FontWeights.SemiBold,
+                Cursor = Cursors.Hand
+            };
+
+            topBar.Children.Add(btnAddRow);
+            topBar.Children.Add(btnInitFolders);
+            stack.Children.Add(topBar);
+
+            var actionButtonsGrid = new UniformGrid { Columns = 3, Margin = new Thickness(0, 2, 0, 6) };
+
+            var btnRandomAllPsk = new Button
+            {
+                Content = "🎲 Losuj wszystkie PSK",
+                Height = 32,
+                Margin = new Thickness(0, 0, 5, 0),
+                Background = BrushItemBg,
+                Foreground = Brushes.White,
+                BorderBrush = BrushTileBorder,
+                BorderThickness = new Thickness(1),
+                FontWeight = FontWeights.SemiBold,
+                Cursor = Cursors.Hand
+            };
+
+            var btnExportPoster = new Button
+            {
+                Content = "🖨️ Eksportuj plakat A4 (PNG)",
+                Height = 32,
+                Margin = new Thickness(3, 0, 3, 0),
+                Background = BrushItemBg,
+                Foreground = Brushes.White,
+                BorderBrush = BrushAccent,
+                BorderThickness = new Thickness(1),
+                FontWeight = FontWeights.Bold,
+                Cursor = Cursors.Hand
+            };
+
+            var btnBuildAllFactions = new Button
+            {
+                Content = "⚡ Buduj wszystkie strony (.ftak + QR)",
+                Height = 32,
+                Margin = new Thickness(5, 0, 0, 0),
+                Background = BrushButtonAccent,
+                Foreground = BrushDarkFg,
+                BorderThickness = new Thickness(0),
+                FontWeight = FontWeights.Bold,
+                Cursor = Cursors.Hand
+            };
+
+            actionButtonsGrid.Children.Add(btnRandomAllPsk);
+            actionButtonsGrid.Children.Add(btnExportPoster);
+            actionButtonsGrid.Children.Add(btnBuildAllFactions);
+            stack.Children.Add(actionButtonsGrid);
+
+            _factionStatusLabel = new TextBlock
+            {
+                Text = "Gotowy do wygenerowania odizolowanych paczek .ftak oraz plakatów startowych Safezone A4.",
+                Foreground = BrushMutedText,
+                FontSize = 11,
+                TextWrapping = TextWrapping.Wrap,
+                Margin = new Thickness(0, 4, 0, 0)
+            };
+            stack.Children.Add(_factionStatusLabel);
+
+            btnRandomAllPsk.Click += (s, e) =>
+            {
+                foreach (var row in _factionRows)
+                {
+                    row.PskBox.Text = TacticalConfigModel.GenerateRandomBase64Psk();
+                }
+                SyncFirstFactionToDefaultModel();
+                _factionStatusLabel.Text = $"✓ Wygenerowano nowe klucze AES-256 (Base64) dla {_factionRows.Count} stron.";
+                _factionStatusLabel.Foreground = BrushAccent;
+            };
+
+            btnInitFolders.Click += async (s, e) =>
+            {
+                string srcDir = GetPrimarySourceDirectory(win);
+                var sides = _factionRows
+                    .Select(r => SanitizeFileName(r.NameBox.Text.Trim()).ToLowerInvariant())
+                    .Where(n => !string.IsNullOrEmpty(n))
+                    .Distinct()
+                    .ToList();
+                await Task.Run(() => EnsureFactionFoldersInitialized(srcDir, sides));
+                await ForceSizeUpdateAsync(win);
+                _factionStatusLabel.Text = $"✓ Utworzono podfoldery KML dla {sides.Count} stron w: {Path.Combine(srcDir, "factions")}";
+                _factionStatusLabel.Foreground = BrushAccent;
+                TryOpenFolderInExplorer(Path.Combine(srcDir, "factions"));
+            };
+
+            btnExportPoster.Click += async (s, e) =>
+            {
+                btnExportPoster.IsEnabled = false;
+                await ExportSafezonePosterForCurrentAsync(win);
+                btnExportPoster.IsEnabled = true;
+            };
+
+            btnBuildAllFactions.Click += async (s, e) =>
+            {
+                btnBuildAllFactions.IsEnabled = false;
+                string origText = btnBuildAllFactions.Content?.ToString();
+                btnBuildAllFactions.Content = "Budowanie stron...";
+                await BuildDynamicFactionsAsync(win);
+                btnBuildAllFactions.Content = origText;
+                btnBuildAllFactions.IsEnabled = true;
+            };
+
+            card.Child = stack;
+            return card;
+        }
+
+        private static void AddFactionRow(string name, string channel, string psk)
+        {
+            if (_factionsContainer == null) return;
+            var row = new FactionRow();
+            var grid = new Grid { Margin = new Thickness(0, 0, 0, 6) };
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(105) });
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(140) });
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(34) });
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(34) });
+
+            row.NameBox = (TextBox)TextCtrl(name, _ => SyncFirstFactionToDefaultModel());
+            row.NameBox.Margin = new Thickness(0, 0, 6, 0);
+            row.NameBox.FontWeight = FontWeights.Bold;
+            Grid.SetColumn(row.NameBox, 0);
+            grid.Children.Add(row.NameBox);
+
+            row.ChannelBox = (TextBox)TextCtrl(channel, _ => SyncFirstFactionToDefaultModel());
+            row.ChannelBox.Margin = new Thickness(0, 0, 6, 0);
+            Grid.SetColumn(row.ChannelBox, 1);
+            grid.Children.Add(row.ChannelBox);
+
+            row.PskBox = (TextBox)TextCtrl(psk, _ => SyncFirstFactionToDefaultModel());
+            row.PskBox.Margin = new Thickness(0, 0, 6, 0);
+            Grid.SetColumn(row.PskBox, 2);
+            grid.Children.Add(row.PskBox);
+
+            var btnRnd = new Button
+            {
+                Content = "🎲",
+                Height = 28,
+                Background = BrushItemBg,
+                Foreground = Brushes.White,
+                BorderBrush = BrushTileBorder,
+                BorderThickness = new Thickness(1),
+                Cursor = Cursors.Hand,
+                Margin = new Thickness(0, 0, 4, 0),
+                ToolTip = "Losuj nowy klucz PSK dla tej strony"
+            };
+            btnRnd.Click += (s, e) =>
+            {
+                row.PskBox.Text = TacticalConfigModel.GenerateRandomBase64Psk();
+                SyncFirstFactionToDefaultModel();
+            };
+            Grid.SetColumn(btnRnd, 3);
+            grid.Children.Add(btnRnd);
+
+            var btnDel = new Button
+            {
+                Content = "🗑️",
+                Height = 28,
+                Background = BrushDanger,
+                Foreground = Brushes.White,
+                BorderThickness = new Thickness(0),
+                Cursor = Cursors.Hand,
+                ToolTip = "Usuń tę stronę konfliktu"
+            };
+            btnDel.Click += (s, e) =>
+            {
+                if (_factionRows.Count <= 1)
+                {
+                    if (_factionStatusLabel != null)
+                    {
+                        _factionStatusLabel.Text = "⚠ Musi pozostać przynajmniej 1 strona na liście.";
+                        _factionStatusLabel.Foreground = BrushOrga;
+                    }
+                    return;
+                }
+                _factionsContainer.Children.Remove(grid);
+                _factionRows.Remove(row);
+                SyncFirstFactionToDefaultModel();
+            };
+            Grid.SetColumn(btnDel, 4);
+            grid.Children.Add(btnDel);
+
+            row.UI = grid;
+            _factionRows.Add(row);
+            _factionsContainer.Children.Add(grid);
+            SyncFirstFactionToDefaultModel();
+        }
+
+        private static void SyncFirstFactionToDefaultModel()
+        {
+            var first = _factionRows.FirstOrDefault();
+            if (first != null)
+            {
+                Current.ActiveFaction = string.IsNullOrWhiteSpace(first.NameBox?.Text) ? "ALL" : first.NameBox.Text.Trim();
+                Current.DefaultChannelName = string.IsNullOrWhiteSpace(first.ChannelBox?.Text) ? "TAK-MESH" : first.ChannelBox.Text.Trim();
+                Current.DefaultPsk = string.IsNullOrWhiteSpace(first.PskBox?.Text) ? Current.DefaultPsk : first.PskBox.Text.Trim();
+            }
+        }
+
+        private static async Task BuildDynamicFactionsAsync(Window win)
+        {
+            try
+            {
+                SyncNativeMeshtasticSelections(win);
+                string sourceDir = GetPrimarySourceDirectory(win);
+                string eventName = GetEventNameFromWindow(win);
+                string parentDir = Path.GetDirectoryName(Path.TrimEndingDirectorySeparator(sourceDir)) ?? AppDomain.CurrentDomain.BaseDirectory;
+                string outDir = Path.Combine(parentDir, "release_factions");
+
+                if (!Directory.Exists(outDir)) Directory.CreateDirectory(outDir);
+
+                var sidesToBuild = new List<(string Name, string Channel, string Psk)>();
+                foreach (var row in _factionRows)
+                {
+                    string n = SanitizeFileName(row.NameBox.Text.Trim());
+                    string c = string.IsNullOrWhiteSpace(row.ChannelBox.Text) ? $"{n}-TAK" : row.ChannelBox.Text.Trim();
+                    string p = string.IsNullOrWhiteSpace(row.PskBox.Text) ? TacticalConfigModel.GenerateRandomBase64Psk() : row.PskBox.Text.Trim();
+                    if (!string.IsNullOrEmpty(n)) sidesToBuild.Add((n, c, p));
+                }
+
+                if (sidesToBuild.Count == 0)
+                {
+                    if (_factionStatusLabel != null)
+                    {
+                        _factionStatusLabel.Text = "⚠ Brak zdefiniowanych stron do zbudowania.";
+                        _factionStatusLabel.Foreground = BrushDanger;
+                    }
+                    return;
+                }
+
+                string prevFaction = Current.ActiveFaction;
+                var allSidesLower = sidesToBuild.Select(s => s.Name.ToLowerInvariant()).Distinct().ToList();
+
+                foreach (var side in sidesToBuild)
+                {
+                    Current.ActiveFaction = side.Name;
+                    string ftakPath = Path.Combine(outDir, $"{eventName}_{side.Name}.ftak");
+                    string sha256 = await Task.Run(() =>
+                    {
+                        EnsureFactionFoldersInitialized(sourceDir, allSidesLower);
+                        WriteConfigsToDirectory(sourceDir, side.Name, side.Channel, side.Psk);
+                        BuildFilteredFactionFtakArchive(sourceDir, ftakPath, side.Name, eventName, side.Channel, side.Psk);
+                        return ComputeFileSha256(ftakPath);
+                    });
+
+                    string qrPayload = $"ftak://provision?event={Uri.EscapeDataString(eventName)}&faction={Uri.EscapeDataString(side.Name)}&channel={Uri.EscapeDataString(side.Channel)}&region={Current.LoraRegion}&preset={Current.LoraModemPreset}&sha256={sha256.Substring(0, 16)}";
+                    string posterPath = Path.Combine(outDir, $"Plakat_Safezone_A4_{eventName}_{side.Name}.png");
+                    RenderSafezoneA4PosterPng(win, posterPath, eventName, side.Name, side.Channel, qrPayload, sha256);
+                }
+
+                Current.ActiveFaction = prevFaction;
+                SyncFirstFactionToDefaultModel();
+                await Task.Run(() => WriteConfigsToDirectory(sourceDir));
+                await ForceSizeUpdateAsync(win);
+
+                if (_factionStatusLabel != null)
+                {
+                    _factionStatusLabel.Text = $"✓ Zbudowano {sidesToBuild.Count} paczek (.ftak) oraz {sidesToBuild.Count} plakatów A4 (PNG) w: {outDir}";
+                    _factionStatusLabel.Foreground = BrushAccent;
+                }
+
+                TryOpenFolderInExplorer(outDir);
+            }
+            catch (Exception ex)
+            {
+                if (_factionStatusLabel != null)
+                {
+                    _factionStatusLabel.Text = $"Błąd generowania stron: {ex.Message}";
+                    _factionStatusLabel.Foreground = BrushDanger;
+                }
+            }
+        }
+
+        private static async Task ExportSafezonePosterForCurrentAsync(Window win)
+        {
+            try
+            {
+                SyncNativeMeshtasticSelections(win);
+                SyncFirstFactionToDefaultModel();
+                string sourceDir = GetPrimarySourceDirectory(win);
+                string eventName = GetEventNameFromWindow(win);
+                string parentDir = Path.GetDirectoryName(Path.TrimEndingDirectorySeparator(sourceDir)) ?? AppDomain.CurrentDomain.BaseDirectory;
+                string outDir = Path.Combine(parentDir, "release_factions");
+                if (!Directory.Exists(outDir)) Directory.CreateDirectory(outDir);
+
+                string faction = SanitizeFileName(string.IsNullOrWhiteSpace(Current.ActiveFaction) ? "BLUFOR" : Current.ActiveFaction);
+                string channel = Current.DefaultChannelName;
+                string psk = Current.DefaultPsk;
+
+                string ftakPath = Path.Combine(outDir, $"{eventName}_{faction}.ftak");
+                string sha256 = await Task.Run(() =>
+                {
+                    WriteConfigsToDirectory(sourceDir, faction, channel, psk);
+                    BuildFilteredFactionFtakArchive(sourceDir, ftakPath, faction, eventName, channel, psk);
+                    return ComputeFileSha256(ftakPath);
+                });
+
+                string qrPayload = ExtractExistingQrTextFromWindow(win)
+                    ?? $"ftak://provision?event={Uri.EscapeDataString(eventName)}&faction={Uri.EscapeDataString(faction)}&channel={Uri.EscapeDataString(channel)}&region={Current.LoraRegion}&preset={Current.LoraModemPreset}&sha256={sha256.Substring(0, 16)}";
+
+                string posterPath = Path.Combine(outDir, $"Plakat_Safezone_A4_{eventName}_{faction}.png");
+                RenderSafezoneA4PosterPng(win, posterPath, eventName, faction, channel, qrPayload, sha256);
+
+                if (_factionStatusLabel != null)
+                {
+                    _factionStatusLabel.Text = $"✓ Wyeksportowano plakat startowy A4 PNG: {posterPath}";
+                    _factionStatusLabel.Foreground = BrushAccent;
+                }
+
+                TryOpenFolderInExplorer(outDir);
+            }
+            catch { }
+        }
+
+        private static string GetPrimarySourceDirectory(Window win)
+        {
+            var dirs = ResolveSourceDirectories(win);
+            return dirs.FirstOrDefault(Directory.Exists) ?? dirs.FirstOrDefault() ?? Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "workspace", "source");
+        }
+
+        private static string GetEventNameFromWindow(Window win)
+        {
+            if (win == null) return "Operacja_TAK";
+            try
+            {
+                var tbs = new List<TextBlock>();
+                FindVisualChildren(win, tbs);
+                foreach (var tb in tbs)
+                {
+                    if (tb.Text != null && (tb.Text.Contains("Nazwa wydarzenia") || tb.Text.Contains("Event Name") || tb.Text.Contains("Nazwa paczki") || tb.Text.Contains("Package ID")))
+                    {
+                        var parent = VisualTreeHelper.GetParent(tb);
+                        if (parent != null)
+                        {
+                            var siblings = new List<TextBox>();
+                            FindVisualChildren(parent, siblings);
+                            var nonEmpty = siblings.FirstOrDefault(x => !string.IsNullOrWhiteSpace(x.Text));
+                            if (nonEmpty != null) return SanitizeFileName(nonEmpty.Text.Trim());
+                        }
+                    }
+                }
+            }
+            catch { }
+            return "Operacja_TAK";
+        }
+
+        private static string SanitizeFileName(string name)
+        {
+            if (string.IsNullOrWhiteSpace(name)) return "Operacja_TAK";
+            foreach (char c in Path.GetInvalidFileNameChars())
+            {
+                name = name.Replace(c, '_');
+            }
+            return name;
+        }
+
+        private static void EnsureFactionFoldersInitialized(string sourceDir, List<string> sidesLower)
+        {
+            try
+            {
+                string factionsRoot = Path.Combine(sourceDir, "factions");
+                foreach (var side in sidesLower)
+                {
+                    if (string.IsNullOrWhiteSpace(side)) continue;
+                    string sideDir = Path.Combine(factionsRoot, side);
+                    if (!Directory.Exists(sideDir)) Directory.CreateDirectory(sideDir);
+
+                    string sampleKml = Path.Combine(sideDir, $"strefa_{side}.kml");
+                    if (!File.Exists(sampleKml))
+                    {
+                        string kmlContent = $@"<?xml version=""1.0"" encoding=""UTF-8""?>
+<kml xmlns=""http://www.opengis.net/kml/2.2"">
+  <Document>
+    <name>Warstwa Taktyczna {side.ToUpperInvariant()}</name>
+    <Placemark>
+      <name>HQ {side.ToUpperInvariant()}</name>
+      <description>Punkt dowodzenia strony {side.ToUpperInvariant()}</description>
+      <Point><coordinates>19.0238,49.9135,0</coordinates></Point>
+    </Placemark>
+  </Document>
+</kml>";
+                        File.WriteAllText(sampleKml, kmlContent, Encoding.UTF8);
+                    }
+                }
+            }
+            catch { }
+        }
+
+        private static void BuildFilteredFactionFtakArchive(string sourceDir, string destinationFtakPath, string factionCode, string eventName, string channelName, string psk)
+        {
+            if (File.Exists(destinationFtakPath)) File.Delete(destinationFtakPath);
+
+            using var fs = new FileStream(destinationFtakPath, FileMode.CreateNew, FileAccess.ReadWrite, FileShare.None);
+            using var archive = new ZipArchive(fs, ZipArchiveMode.Create, false, Encoding.UTF8);
+
+            if (Directory.Exists(sourceDir))
+            {
+                var allFiles = Directory.GetFiles(sourceDir, "*", SearchOption.AllDirectories);
+                string targetFactionPrefix = $"factions/{factionCode.ToLowerInvariant()}/";
+
+                foreach (var file in allFiles)
+                {
+                    string fileName = Path.GetFileName(file);
+                    if (fileName.StartsWith(".", StringComparison.Ordinal) ||
+                        fileName.Equals("WORKSPACE_HELP.txt", StringComparison.OrdinalIgnoreCase) ||
+                        fileName.EndsWith(".fthproj", StringComparison.OrdinalIgnoreCase))
+                    {
+                        continue;
+                    }
+
+                    string rel = Path.GetRelativePath(sourceDir, file).Replace('\\', '/');
+                    string relLower = rel.ToLowerInvariant();
+
+                    // Odfiltrowanie nakładek KML należących do innych stron konfliktu
+                    if (relLower.StartsWith("factions/") && !factionCode.Equals("ALL", StringComparison.OrdinalIgnoreCase) && !factionCode.Equals("ORGA", StringComparison.OrdinalIgnoreCase))
+                    {
+                        if (!relLower.StartsWith(targetFactionPrefix))
+                            continue;
+                    }
+
+                    var entry = archive.CreateEntry($"source/{rel}", CompressionLevel.Optimal);
+                    using var entryStream = entry.Open();
+                    using var fileStream = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+                    fileStream.CopyTo(entryStream);
+                }
+            }
+
+            var manifestObj = new JsonObject
+            {
+                ["schemaVersion"] = "2.4",
+                ["packageId"] = $"{eventName.ToLowerInvariant()}-{factionCode.ToLowerInvariant()}",
+                ["packageName"] = $"{eventName} ({factionCode})",
+                ["faction"] = factionCode,
+                ["channelName"] = channelName,
+                ["psk"] = psk,
+                ["loraRegion"] = Current.LoraRegion,
+                ["loraModemPreset"] = Current.LoraModemPreset,
+                ["createdAt"] = DateTimeOffset.UtcNow.ToString("o"),
+                ["neverExpires"] = (Current.PackageValidityHours == 0),
+                ["expiresAt"] = (Current.PackageValidityHours == 0)
+                    ? DateTimeOffset.UtcNow.AddYears(100).ToString("o")
+                    : DateTimeOffset.UtcNow.AddHours(Current.PackageValidityHours).ToString("o")
+            };
+
+            var manifestEntry = archive.CreateEntry("manifest.json", CompressionLevel.Optimal);
+            using (var ms = new StreamWriter(manifestEntry.Open(), Encoding.UTF8))
+            {
+                ms.Write(manifestObj.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
+            }
+        }
+
+        private static string ComputeFileSha256(string filePath)
+        {
+            if (!File.Exists(filePath)) return "BRAK-PLIKU";
+            using var sha = SHA256.Create();
+            using var stream = File.OpenRead(filePath);
+            byte[] hash = sha.ComputeHash(stream);
+            return Convert.ToHexString(hash);
+        }
+
+        private static string ExtractExistingQrTextFromWindow(Window win)
+        {
+            if (win == null) return null;
+            try
+            {
+                var tbs = new List<TextBox>();
+                FindVisualChildren(win, tbs);
+                foreach (var tb in tbs)
+                {
+                    if (!string.IsNullOrWhiteSpace(tb.Text) && (tb.Text.StartsWith("http://") || tb.Text.StartsWith("https://") || tb.Text.StartsWith("ftak://")))
+                    {
+                        return tb.Text.Trim();
+                    }
+                }
+            }
+            catch { }
+            return null;
+        }
+
+        private static ImageSource TryGetQrImageSource(Window win, string payload)
+        {
+            try
+            {
+                var qrType = typeof(TacticalConfigPanel).Assembly.GetTypes()
+                    .FirstOrDefault(t => t.Name.Contains("QrService", StringComparison.OrdinalIgnoreCase));
+                if (qrType != null)
+                {
+                    object instance = null;
+                    if (!qrType.IsAbstract)
+                    {
+                        try { instance = Activator.CreateInstance(qrType); } catch { }
+                    }
+                    foreach (var m in qrType.GetMethods(BindingFlags.Public | BindingFlags.Static | BindingFlags.Instance))
+                    {
+                        var pars = m.GetParameters();
+                        if (pars.Length == 1 && pars[0].ParameterType == typeof(string))
+                        {
+                            var res = m.Invoke(m.IsStatic ? null : instance, new object[] { payload });
+                            if (res is ImageSource imgSrc) return imgSrc;
+                            if (res is byte[] pngBytes && pngBytes.Length > 0)
+                            {
+                                var bmp = new BitmapImage();
+                                using var mem = new MemoryStream(pngBytes);
+                                bmp.BeginInit();
+                                bmp.CacheOption = BitmapCacheOption.OnLoad;
+                                bmp.StreamSource = mem;
+                                bmp.EndInit();
+                                bmp.Freeze();
+                                return bmp;
+                            }
+                        }
+                    }
+                }
+            }
+            catch { }
+
+            if (win != null)
+            {
+                try
+                {
+                    var imgs = new List<Image>();
+                    FindVisualChildren(win, imgs);
+                    foreach (var im in imgs)
+                    {
+                        if (im.Source != null && im.ActualWidth >= 90 && Math.Abs(im.ActualWidth - im.ActualHeight) < 20)
+                        {
+                            string n = (im.Name ?? "").ToLowerInvariant();
+                            if (n.Contains("qr")) return im.Source;
+                        }
+                    }
+                }
+                catch { }
+            }
+
+            return null;
+        }
+
+        private static void RenderSafezoneA4PosterPng(Window win, string outputPath, string eventName, string factionCode, string channelName, string qrPayload, string sha256Hex)
+        {
+            const int width = 1240;
+            const int height = 1754;
+
+            var visual = new DrawingVisual();
+            using (DrawingContext dc = visual.RenderOpen())
+            {
+                dc.DrawRectangle(BrushCardBg, null, new Rect(0, 0, width, height));
+                dc.DrawRoundedRectangle(null, new Pen(BrushAccent, 4), new Rect(30, 30, width - 60, height - 60), 18, 18);
+
+                Brush bannerBrush = BrushAccent;
+                if (factionCode.Equals("BLUFOR", StringComparison.OrdinalIgnoreCase)) bannerBrush = BrushBlufor;
+                else if (factionCode.Equals("OPFOR", StringComparison.OrdinalIgnoreCase)) bannerBrush = BrushOpfor;
+                else if (factionCode.Equals("ORGA", StringComparison.OrdinalIgnoreCase)) bannerBrush = BrushOrga;
+                else
+                {
+                    int hsh = Math.Abs(factionCode.GetHashCode());
+                    bannerBrush = CreateFrozenBrush((byte)(hsh % 160 + 60), (byte)((hsh / 255) % 160 + 60), (byte)((hsh / 65025) % 160 + 60));
+                }
+
+                dc.DrawRoundedRectangle(bannerBrush, null, new Rect(70, 70, width - 140, 120), 12, 12);
+                DrawCenteredText(dc, "FIELD TAK HUB 2.4 — KARTA WDROŻENIOWA SAFEZONE", 24, Brushes.White, width / 2.0, 92, true);
+                DrawCenteredText(dc, $"OPERACJA: {eventName.ToUpperInvariant()}   |   STRONA: {factionCode.ToUpperInvariant()}", 34, Brushes.White, width / 2.0, 130, true);
+
+                DrawCenteredText(dc, "SKANUJESZ  ➔  KONFIGURUJESZ  ➔  SPRAWDZASZ  ➔  JESTEŚ GOTOWY", 20, BrushAccent, width / 2.0, 220, true);
+
+                double qrBoxSize = 620;
+                double qrBoxX = (width - qrBoxSize) / 2.0;
+                double qrBoxY = 275;
+                dc.DrawRoundedRectangle(Brushes.White, new Pen(BrushAccent, 4), new Rect(qrBoxX, qrBoxY, qrBoxSize, qrBoxSize), 16, 16);
+
+                ImageSource qrImg = TryGetQrImageSource(win, qrPayload);
+                if (qrImg != null)
+                {
+                    dc.DrawImage(qrImg, new Rect(qrBoxX + 35, qrBoxY + 35, qrBoxSize - 70, qrBoxSize - 70));
+                }
+                else
+                {
+                    DrawDeterministicQrMatrix(dc, qrPayload, qrBoxX + 45, qrBoxY + 45, qrBoxSize - 90);
+                }
+
+                double stepsY = 935;
+                dc.DrawRoundedRectangle(BrushItemBg, new Pen(BrushTileBorder, 2), new Rect(70, stepsY, width - 140, 340), 12, 12);
+                DrawCenteredText(dc, "INSTRUKCJA SZYBKIEGO WDROŻENIA DLA UCZESTNIKA (3 KROKI)", 24, BrushAccent, width / 2.0, stepsY + 24, true);
+
+                DrawLeftText(dc, "1. ZESKANUJ KOD QR:", 22, Brushes.White, 110, stepsY + 85, true);
+                DrawLeftText(dc, "Otwórz aplikację Field TAK Hub i zeskanuj powyższy kod QR (lub użyj trybu P2P Hotspot od kolegi).", 19, BrushMutedText, 110, stepsY + 118, false);
+
+                DrawLeftText(dc, "2. PODŁĄCZ RADIO MESHTASTIC (LORA):", 22, Brushes.White, 110, stepsY + 170, true);
+                DrawLeftText(dc, "Włącz Bluetooth lub podepnij kabel USB. Aplikacja sama rozpozna model i wgra klucze strony.", 19, BrushMutedText, 110, stepsY + 203, false);
+
+                DrawLeftText(dc, "3. ZIELONY EKRAN = GOTOWY DO GRY:", 22, Brushes.White, 110, stepsY + 255, true);
+                DrawLeftText(dc, "Sprawdź status końcowy:  ✓ ATAK gotowy   ✓ Meshtastic gotowy   ✓ Serwer dostępny.", 19, BrushAccent, 110, stepsY + 288, true);
+
+                double techY = 1310;
+                dc.DrawRoundedRectangle(BrushInputBg, new Pen(BrushInputBorder, 2), new Rect(70, techY, width - 140, 360), 12, 12);
+                DrawCenteredText(dc, "PARAMETRY TECHNICZNE PACZKI I RADIA LORA", 22, Brushes.White, width / 2.0, techY + 22, true);
+
+                string validityText = Current.PackageValidityHours == 0 ? "BEZTERMINOWA (0)" : $"{Current.PackageValidityHours} godz.";
+                DrawLeftText(dc, $"• Strona konfliktu:   {factionCode}   (Kanał LoRa: {channelName})", 20, Brushes.White, 110, techY + 75, true);
+                DrawLeftText(dc, $"• Pasmo / Modem:      Region {Current.LoraRegion}   |   Preset {Current.LoraModemPreset}", 20, Brushes.White, 110, techY + 118, false);
+                DrawLeftText(dc, $"• Sprzęt / Firmware:  Rola {Current.DeviceRole}   |   FW {Current.FirmwareMin} – {Current.FirmwareMax}", 20, Brushes.White, 110, techY + 161, false);
+                DrawLeftText(dc, $"• Strategia PLI ATAK: {Current.LocationReportingStrategy}   |   Ważność paczki: {validityText}", 20, Brushes.White, 110, techY + 204, false);
+                DrawLeftText(dc, $"• SHA-256 (.ftak):    {(sha256Hex.Length > 48 ? sha256Hex.Substring(0, 48) + "..." : sha256Hex)}", 17, BrushMutedText, 110, techY + 255, false);
+                DrawLeftText(dc, $"• Wygenerowano:       {DateTime.Now:yyyy-MM-dd HH:mm}   |   Field TAK Hub Builder 2.4", 16, BrushMutedText, 110, techY + 295, false);
+            }
+
+            var rtb = new RenderTargetBitmap(width, height, 96, 96, PixelFormats.Pbgra32);
+            rtb.Render(visual);
+
+            var encoder = new PngBitmapEncoder();
+            encoder.Frames.Add(BitmapFrame.Create(rtb));
+            using var outStream = new FileStream(outputPath, FileMode.Create, FileAccess.Write);
+            encoder.Save(outStream);
+        }
+
+        private static void DrawCenteredText(DrawingContext dc, string text, double fontSize, Brush brush, double centerX, double y, bool bold)
+        {
+            var ft = new FormattedText(text ?? "", CultureInfo.InvariantCulture, FlowDirection.LeftToRight, new Typeface(new FontFamily("Segoe UI"), FontStyles.Normal, bold ? FontWeights.Bold : FontWeights.Normal, FontStretches.Normal), fontSize, brush, 1.0);
+            dc.DrawText(ft, new Point(centerX - ft.Width / 2.0, y));
+        }
+
+        private static void DrawLeftText(DrawingContext dc, string text, double fontSize, Brush brush, double x, double y, bool bold)
+        {
+            var ft = new FormattedText(text ?? "", CultureInfo.InvariantCulture, FlowDirection.LeftToRight, new Typeface(new FontFamily("Segoe UI"), FontStyles.Normal, bold ? FontWeights.Bold : FontWeights.Normal, FontStretches.Normal), fontSize, brush, 1.0);
+            dc.DrawText(ft, new Point(x, y));
+        }
+
+        private static void DrawDeterministicQrMatrix(DrawingContext dc, string payload, double startX, double startY, double size)
+        {
+            const int modules = 29;
+            double cell = size / modules;
+            byte[] hash = SHA256.HashData(Encoding.UTF8.GetBytes(payload ?? "FieldTakHub"));
+
+            bool IsFinder(int r, int c) => (r < 7 && c < 7) || (r < 7 && c >= modules - 7) || (r >= modules - 7 && c < 7);
+
+            void DrawFinder(int rOff, int cOff)
+            {
+                for (int r = 0; r < 7; r++)
+                    for (int c = 0; c < 7; c++)
+                        if ((r == 0 || r == 6 || c == 0 || c == 6) || (r >= 2 && r <= 4 && c >= 2 && c <= 4))
+                            dc.DrawRectangle(Brushes.Black, null, new Rect(startX + (cOff + c) * cell, startY + (rOff + r) * cell, cell + 0.4, cell + 0.4));
+            }
+
+            DrawFinder(0, 0); DrawFinder(0, modules - 7); DrawFinder(modules - 7, 0);
+
+            int bitIdx = 0;
+            for (int r = 0; r < modules; r++)
+                for (int c = 0; c < modules; c++)
+                    if (!IsFinder(r, c) && r != 7 && c != 7)
+                    {
+                        if (((hash[(bitIdx / 8) % hash.Length] >> (bitIdx % 8)) & 1) == 1)
+                            dc.DrawRectangle(Brushes.Black, null, new Rect(startX + c * cell, startY + r * cell, cell + 0.4, cell + 0.4));
+                        bitIdx++;
+                    }
+        }
+
+        private static void TryOpenFolderInExplorer(string folderPath)
+        {
+            try
+            {
+                if (Directory.Exists(folderPath))
+                {
+                    Process.Start(new ProcessStartInfo { FileName = folderPath, UseShellExecute = true });
+                }
+            }
+            catch { }
+        }
+
+        // =========================================================================
+        // WAŻNOŚĆ BEZTERMINOWA (0 = BEZTERMINOWO)
+        // =========================================================================
         private static List<TextBox> FindNativeValidityTextBoxes(Window win)
         {
             var result = new List<TextBox>();
@@ -467,15 +1284,6 @@ namespace FieldTakHub.Builder.Services
 
                 tb.ToolTip = "Wpisz 0, aby ustawić ważność bezterminową (brak wygasania paczki .ftak oraz kodu QR).";
 
-                if (int.TryParse(tb.Text?.Trim(), out int initVal) && initVal >= 0)
-                {
-                    if (_injectedPkgValidityBox != null && Current.PackageValidityHours == 0 && initVal > 0)
-                    {
-                        Current.PackageValidityHours = initVal;
-                        Current.QrValidityHours = initVal;
-                    }
-                }
-
                 tb.TextChanged += (s, e) =>
                 {
                     if (_syncingValidity) return;
@@ -502,32 +1310,6 @@ namespace FieldTakHub.Builder.Services
                         }
                     }
                 };
-            }
-
-            // Obsługa ewentualnych ComboBoxów z czasem ważności
-            var combos = new List<ComboBox>();
-            FindVisualChildren(win, combos);
-            foreach (var cb in combos)
-            {
-                if (cb.Tag?.ToString() == "INJECTED") continue;
-                string name = (cb.Name ?? "").ToLowerInvariant();
-                if (name.Contains("valid") || name.Contains("expir") || name.Contains("ttl"))
-                {
-                    bool hasZero = false;
-                    foreach (var item in cb.Items)
-                    {
-                        string s = (item is ComboBoxItem cbi) ? cbi.Content?.ToString() : item?.ToString();
-                        if (s != null && (s == "0" || s.StartsWith("0 ") || s.Contains("Bezterminow", StringComparison.OrdinalIgnoreCase)))
-                        {
-                            hasZero = true;
-                            break;
-                        }
-                    }
-                    if (!hasZero && cb.ItemsSource == null)
-                    {
-                        cb.Items.Insert(0, new ComboBoxItem { Content = "0 (Bezterminowo)", Foreground = Brushes.White, Background = BrushItemBg });
-                    }
-                }
             }
         }
 
@@ -576,7 +1358,6 @@ namespace FieldTakHub.Builder.Services
             }
         }
 
-        // Zapewnia, że przy wartości 0 wewnętrzny generator paczki .ftak i kodu QR otrzymuje 100 lat ważności (brak wygasania)
         private static void ApplyIndefiniteValidityBeforeAction(Window win)
         {
             if (win == null) return;
@@ -598,7 +1379,6 @@ namespace FieldTakHub.Builder.Services
                 bool isIndefinite = (Current.PackageValidityHours == 0 || Current.QrValidityHours == 0 || boxesRestoredToZero.Count > 0);
                 if (!isIndefinite) return;
 
-                // Jeżeli natywne pole ma "0", na ułamek sekundy przekazujemy 876000h (100 lat), aby ominąć każdą blokadę <= 0 w MainWindow
                 _syncingValidity = true;
                 try
                 {
@@ -612,7 +1392,6 @@ namespace FieldTakHub.Builder.Services
                     _syncingValidity = false;
                 }
 
-                // Ustawienie właściwości ważności w modelu projektu w pamięci (MainWindow / FieldTakProject)
                 var flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
                 var targets = new List<object> { win };
                 if (win.DataContext != null) targets.Add(win.DataContext);
@@ -663,7 +1442,6 @@ namespace FieldTakHub.Builder.Services
                     }
                 }
 
-                // Przywrócenie "0" w kontrolkach UI po wykonaniu akcji kliknięcia
                 _ = win.Dispatcher.BeginInvoke(new Action(() =>
                 {
                     _syncingValidity = true;
@@ -689,16 +1467,9 @@ namespace FieldTakHub.Builder.Services
             catch { }
         }
 
-        private static bool HasInjectedTag(Panel panel, string tag)
-        {
-            foreach (UIElement child in panel.Children)
-            {
-                if (child is FrameworkElement fe && string.Equals(fe.Tag?.ToString(), tag, StringComparison.Ordinal))
-                    return true;
-            }
-            return false;
-        }
-
+        // =========================================================================
+        // KALKULATOR ROZMIARU FOLDERU SOURCE (PODGLĄD ZAWARTOŚCI)
+        // =========================================================================
         private static void SyncNativeMeshtasticSelections(Window win)
         {
             if (win == null) return;
@@ -945,6 +1716,7 @@ namespace FieldTakHub.Builder.Services
             try
             {
                 SyncNativeMeshtasticSelections(win);
+                SyncFirstFactionToDefaultModel();
                 var sourceDirs = ResolveSourceDirectories(win);
 
                 SourceStats bestStats = null;
@@ -1044,7 +1816,7 @@ namespace FieldTakHub.Builder.Services
                     {
                         stats.ConfigBytes += len;
                     }
-                    else if (ext == ".kml" || ext == ".kmz" || ext == ".gpx" || ext == ".cot" || ext == ".geojson" || ext == ".shp" || rel.StartsWith("atak/") || rel.StartsWith("overlays/") || rel.StartsWith("data/"))
+                    else if (ext == ".kml" || ext == ".kmz" || ext == ".gpx" || ext == ".cot" || ext == ".geojson" || ext == ".shp" || rel.StartsWith("atak/") || rel.StartsWith("overlays/") || rel.StartsWith("data/") || rel.StartsWith("factions/"))
                     {
                         stats.TacticalBytes += len;
                     }
@@ -1192,6 +1964,9 @@ namespace FieldTakHub.Builder.Services
             catch { }
         }
 
+        // =========================================================================
+        // KARTA ATAK-CIV ORAZ KONTROLKI LO-RA / FIRMWARE
+        // =========================================================================
         private static UIElement BuildAtakCard(Window win)
         {
             var m = Current;
@@ -1211,7 +1986,6 @@ namespace FieldTakHub.Builder.Services
             gAtak.Children.Add(FieldBox("TCP/UDP Timeout (s)", IntCtrl(m.TcpConnectTimeout, v => { m.TcpConnectTimeout = v; })));
             lStack.Children.Add(gAtak);
 
-            // Sekcja ważności paczki .ftak oraz kodu QR (0 = Bezterminowo)
             var gValidity = new UniformGrid { Columns = 2, Margin = new Thickness(0, 2, 0, 4) };
             _injectedPkgValidityBox = ValidityTextCtrl(m.PackageValidityHours, v =>
             {
@@ -1360,7 +2134,7 @@ namespace FieldTakHub.Builder.Services
             WriteConfigsToDirectory(tgt);
         }
 
-        private static void WriteConfigsToDirectory(string tgt)
+        private static void WriteConfigsToDirectory(string tgt, string overrideFaction = null, string overrideChannel = null, string overridePsk = null)
         {
             if (string.IsNullOrWhiteSpace(tgt)) return;
             try
@@ -1380,7 +2154,12 @@ namespace FieldTakHub.Builder.Services
                 }
                 if (root == null) root = new JsonObject();
 
-                // 0. Ważność paczki .ftak oraz kodu QR (0 = Bezterminowo)
+                SyncFirstFactionToDefaultModel();
+                string activeFaction = overrideFaction ?? Current.ActiveFaction ?? "ALL";
+                string activeChannel = overrideChannel ?? Current.DefaultChannelName ?? "BLUFOR-TAK";
+                string activePsk = overridePsk ?? Current.DefaultPsk;
+
+                root["faction"] = activeFaction;
                 root["packageValidityHours"] = Current.PackageValidityHours;
                 root["qrValidityHours"] = Current.QrValidityHours;
                 root["neverExpires"] = (Current.PackageValidityHours == 0);
@@ -1415,7 +2194,7 @@ namespace FieldTakHub.Builder.Services
                 atak["enableNonStreamingConnections"] = Current.EnableNonStreamingConnections;
                 atak["autoDisableMeshSAWhenStreaming"] = Current.AutoDisableMeshSAWhenStreaming;
 
-                // 2. Sekcja MESHTASTIC + LORA
+                // 2. Sekcja MESHTASTIC + LORA + STRONA KONFLIKTU
                 JsonObject mesh;
                 if (root.TryGetPropertyValue("meshtastic", out var meshNode) && meshNode is JsonObject existingMesh)
                 {
@@ -1437,6 +2216,8 @@ namespace FieldTakHub.Builder.Services
                 mesh["loraRegion"] = Current.LoraRegion;
                 mesh["modemPreset"] = Current.LoraModemPreset;
                 mesh["loraModemPreset"] = Current.LoraModemPreset;
+                mesh["channelName"] = activeChannel;
+                mesh["psk"] = activePsk;
                 mesh["usePreset"] = true;
 
                 JsonObject lora;
@@ -1452,6 +2233,8 @@ namespace FieldTakHub.Builder.Services
 
                 lora["region"] = Current.LoraRegion;
                 lora["modemPreset"] = Current.LoraModemPreset;
+                lora["channelName"] = activeChannel;
+                lora["psk"] = activePsk;
                 lora["usePreset"] = true;
                 lora["hopLimit"] = 3;
                 lora["txEnabled"] = true;
@@ -1469,6 +2252,8 @@ namespace FieldTakHub.Builder.Services
 
                 rootLora["region"] = Current.LoraRegion;
                 rootLora["modemPreset"] = Current.LoraModemPreset;
+                rootLora["channelName"] = activeChannel;
+                rootLora["psk"] = activePsk;
                 rootLora["usePreset"] = true;
 
                 var options = new JsonSerializerOptions { WriteIndented = true };

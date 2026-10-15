@@ -62,6 +62,7 @@ class MainActivity:AppCompatActivity(){
 
   override fun onCreate(savedInstanceState:Bundle?){
     super.onCreate(savedInstanceState)
+        org.fieldtak.hub.ui.FieldTakTacticalExtensions.attachToActivity(this)
     val filter=IntentFilter().apply { addAction(Intent.ACTION_PACKAGE_ADDED); addAction(Intent.ACTION_PACKAGE_REPLACED); addAction(Intent.ACTION_PACKAGE_REMOVED); addDataScheme("package") }
     ContextCompat.registerReceiver(this,packageReceiver,filter,ContextCompat.RECEIVER_EXPORTED)
     setContent{FieldTakHubTheme{FieldTakApp(vm,this)}}
