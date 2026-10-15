@@ -24,30 +24,25 @@ using System.Windows.Threading;
 
 namespace FieldTakHub.Builder.Services
 {
-    public class FactionConfigProfile
+    public class FactionProfileModel
     {
         public string Name { get; set; } = "BLUFOR";
         public string ColorHex { get; set; } = "#2684FF";
 
-        // Meshtastic
+        // Meshtastic Encrypted Channel
         public string ChannelName { get; set; } = "BLUFOR-TAK";
         public string Psk { get; set; } = TacticalConfigModel.GenerateRandomBase64Psk();
         public string LoraRegion { get; set; } = "EU_868";
         public string LoraModemPreset { get; set; } = "SHORT_FAST";
         public string DeviceRole { get; set; } = "Auto";
-        public string HardwareModel { get; set; } = "generic_meshtastic";
-        public string FirmwareMin { get; set; } = "2.7.26";
-        public string FirmwareMax { get; set; } = "2.8.0.47";
 
-        // OpenTAKServer (OTS) + Enrollment
+        // OpenTAKServer & Enrollment
         public string OtsHost { get; set; } = "ggzstak.duckdns.org";
         public int OtsSslPort { get; set; } = 8089;
-        public int OtsEnrollPort { get; set; } = 8443;
-        public string OtsEnrollmentMode { get; set; } = "Auto-Enrollment (Login + Hasło OTS)";
-        public string OtsUsername { get; set; } = "";
-        public string OtsPasswordOrToken { get; set; } = "";
-        public string OtsGroupName { get; set; } = "BLUFOR";
-        public bool OtsUseSsl { get; set; } = true;
+        public int OtsEnrollmentPort { get; set; } = 8446;
+        public bool EnableAutoEnrollment { get; set; } = true;
+        public string EnrollmentUsername { get; set; } = "blufor";
+        public string EnrollmentPassword { get; set; } = "";
     }
 
     public class TacticalConfigModel
@@ -138,12 +133,19 @@ namespace FieldTakHub.Builder.Services
         private static TextBlock _indefiniteStatusBadge = null;
         private static TextBlock _factionStatusLabel = null;
         private static bool _syncingValidity = false;
+        private static FileSystemWatcher _sourceWatcher = null;
+        private static string _watchedDir = "";
 
-        // Kolekcja profili stron konfliktu obsługiwana przez zakładki (karty)
-        private static readonly List<FactionConfigProfile> _factions = new List<FactionConfigProfile>();
+        private static readonly List<FactionProfileModel> _factions = new List<FactionProfileModel>();
         private static int _selectedFactionIndex = 0;
-        private static WrapPanel _factionTabHeaderStrip = null;
+        private static WrapPanel _factionTabHeadersPanel = null;
         private static Border _factionTabContentHost = null;
+
+        public static List<FactionProfileModel> GetFactionsList()
+        {
+            EnsureDefaultFactions();
+            return _factions;
+        }
 
         public static List<(string Name, string Channel, string ColorHex, string Psk)> GetConfiguredFactions()
         {
@@ -154,32 +156,30 @@ namespace FieldTakHub.Builder.Services
         private static void EnsureDefaultFactions()
         {
             if (_factions.Count > 0) return;
-            _factions.Add(new FactionConfigProfile
+            _factions.Add(new FactionProfileModel
             {
                 Name = "BLUFOR",
                 ColorHex = "#2684FF",
                 ChannelName = "BLUFOR-TAK",
-                OtsGroupName = "BLUFOR",
-                OtsUsername = "blufor_op",
-                Psk = TacticalConfigModel.GenerateRandomBase64Psk()
+                Psk = TacticalConfigModel.GenerateRandomBase64Psk(),
+                EnrollmentUsername = "blufor_op"
             });
-            _factions.Add(new FactionConfigProfile
+            _factions.Add(new FactionProfileModel
             {
                 Name = "OPFOR",
                 ColorHex = "#EB4034",
                 ChannelName = "OPFOR-TAK",
-                OtsGroupName = "OPFOR",
-                OtsUsername = "opfor_op",
-                Psk = TacticalConfigModel.GenerateRandomBase64Psk()
+                Psk = TacticalConfigModel.GenerateRandomBase64Psk(),
+                EnrollmentUsername = "opfor_op"
             });
-            _factions.Add(new FactionConfigProfile
+            _factions.Add(new FactionProfileModel
             {
                 Name = "ORGA",
                 ColorHex = "#F5B82E",
                 ChannelName = "ORGA-HQ",
-                OtsGroupName = "ORGA",
-                OtsUsername = "orga_hq",
-                Psk = TacticalConfigModel.GenerateRandomBase64Psk()
+                Psk = TacticalConfigModel.GenerateRandomBase64Psk(),
+                DeviceRole = "TAK",
+                EnrollmentUsername = "orga_hq"
             });
         }
 
@@ -316,21 +316,48 @@ namespace FieldTakHub.Builder.Services
             }
         }
 
-        private static Border GetOuterCardBorder(DependencyObject startElement)
+        private static Border GetOuterCardBorder(DependencyObject startElement, int minTextBlocks = 6)
         {
             Border bestBorder = null;
             DependencyObject cur = startElement;
             while (cur != null)
             {
-                if (cur is Border b && b.Background != null)
+                if (cur is Border b)
                 {
-                    bestBorder = b;
-                    if (VisualTreeHelper.GetParent(b) is Panel p && p.Children.Count > 1)
-                        return b;
+                    var innerTbs = new List<TextBlock>();
+                    FindVisualChildren(b, innerTbs);
+                    if (innerTbs.Count >= minTextBlocks) return b;
+                    if (bestBorder == null && b.Background != null) bestBorder = b;
                 }
                 cur = VisualTreeHelper.GetParent(cur) ?? LogicalTreeHelper.GetParent(cur);
             }
             return bestBorder;
+        }
+
+        private static Border GetPreviewCardBorder(Window win)
+        {
+            var allBorders = new List<Border>();
+            FindVisualChildren(win, allBorders);
+            Border bestMatch = null;
+            int smallestCount = int.MaxValue;
+
+            foreach (var b in allBorders)
+            {
+                var tbs = new List<TextBlock>();
+                FindVisualChildren(b, tbs);
+                if (tbs.Count < 12) continue;
+
+                bool hasTotal = tbs.Any(t => t.Text != null && t.Text.Trim().StartsWith("Pliki paczki", StringComparison.OrdinalIgnoreCase));
+                bool hasMaps = tbs.Any(t => t.Text != null && t.Text.Trim().StartsWith("Mapy", StringComparison.OrdinalIgnoreCase));
+                bool hasOther = tbs.Any(t => t.Text != null && t.Text.Trim().StartsWith("Pozostałe", StringComparison.OrdinalIgnoreCase));
+
+                if (hasTotal && hasMaps && hasOther && tbs.Count < smallestCount)
+                {
+                    smallestCount = tbs.Count;
+                    bestMatch = b;
+                }
+            }
+            return bestMatch;
         }
 
         private static bool HasInjectedTag(Panel panel, string tag)
@@ -352,7 +379,7 @@ namespace FieldTakHub.Builder.Services
             {
                 try
                 {
-                    // 1. Gwarantowany górny pasek zakładek (Konfigurator Paczki vs Pełnoekranowy Generator Map)
+                    // 1. Podpięcie górnego paska nawigacji z pełnoekranową zakładką "🗺️ Generator Map Taktycznych"
                     TacticalMapGeneratorView.AttachFullScreenTab(win);
 
                     var combos = new List<ComboBox>();
@@ -366,69 +393,74 @@ namespace FieldTakHub.Builder.Services
                     {
                         if (tb.Text != null && tb.Text.Contains("Konfiguracja Meshtastic"))
                         {
-                            Border cardBorder = GetOuterCardBorder(tb);
-                            if (cardBorder != null && VisualTreeHelper.GetParent(cardBorder) is Panel parentPanel && !HasInjectedTag(parentPanel, "INJECTED_ATAK"))
+                            Border cardBorder = GetOuterCardBorder(tb, 4);
+                            if (cardBorder != null)
                             {
-                                int idx = parentPanel.Children.IndexOf(cardBorder);
-                                parentPanel.Children.Insert(idx, BuildAtakCard(win));
-                                parentPanel.Children.Insert(idx + 1, BuildTabbedFactionsCard(win));
+                                if (cardBorder.Child is Panel innerPanel && !HasInjectedTag(innerPanel, "INJECTED_FW"))
+                                {
+                                    InjectMeshtasticFields(innerPanel, win);
+                                }
+
+                                if (VisualTreeHelper.GetParent(cardBorder) is Panel parentPanel && !HasInjectedTag(parentPanel, "INJECTED_ATAK"))
+                                {
+                                    int idx = parentPanel.Children.IndexOf(cardBorder);
+                                    parentPanel.Children.Insert(idx, BuildAtakCard(win));
+                                    parentPanel.Children.Insert(idx + 1, BuildTabbedFactionsCard(win));
+                                }
                             }
                         }
+                    }
 
-                        if (tb.Text != null && (tb.Text.Contains("Podgląd zawartości") || tb.Text.Equals("Pliki paczki", StringComparison.OrdinalIgnoreCase)))
+                    Border previewBorder = GetPreviewCardBorder(win);
+                    if (previewBorder != null && VisualTreeHelper.GetParent(previewBorder) is Panel previewParent && !HasInjectedTag(previewParent, "INJECTED_BTN"))
+                    {
+                        var btnRefresh = new Button
                         {
-                            Border previewBorder = FindPreviewCardContainer(tb);
-                            if (previewBorder != null && VisualTreeHelper.GetParent(previewBorder) is Panel parentPanel && !HasInjectedTag(parentPanel, "INJECTED_BTN"))
-                            {
-                                var btnRefresh = new Button
-                                {
-                                    Content = "🔄 Odśwież / Skalkuluj zawartość (folder source)",
-                                    Height = 32,
-                                    Margin = new Thickness(0, 8, 0, 6),
-                                    Background = BrushButtonAccent,
-                                    Foreground = BrushDarkFg,
-                                    FontWeight = FontWeights.Bold,
-                                    Cursor = Cursors.Hand,
-                                    BorderThickness = new Thickness(0),
-                                    Tag = "INJECTED_BTN"
-                                };
-                                _injectedRefreshButton = btnRefresh;
+                            Content = "Odśwież / Skalkuluj zawartość (folder source)",
+                            Height = 32,
+                            Margin = new Thickness(0, 8, 0, 6),
+                            Background = BrushButtonAccent,
+                            Foreground = BrushDarkFg,
+                            FontWeight = FontWeights.Bold,
+                            Cursor = Cursors.Hand,
+                            BorderThickness = new Thickness(0),
+                            Tag = "INJECTED_BTN"
+                        };
+                        _injectedRefreshButton = btnRefresh;
 
-                                btnRefresh.Click += async (s, e) =>
-                                {
-                                    btnRefresh.Content = "Przeliczanie zawartości source...";
-                                    btnRefresh.IsEnabled = false;
-                                    var result = await ForceSizeUpdateAsync(win);
-                                    btnRefresh.Content = $"🔄 Odśwież / Skalkuluj (Plików: {result.FileCount} | {FormatBytes(result.TotalBytes)})";
-                                    btnRefresh.ToolTip = BuildStatsTooltip(result);
-                                    btnRefresh.IsEnabled = true;
-                                };
+                        btnRefresh.Click += async (s, e) =>
+                        {
+                            btnRefresh.Content = "Przeliczanie zawartości source...";
+                            btnRefresh.IsEnabled = false;
+                            var result = await ForceSizeUpdateAsync(win);
+                            btnRefresh.Content = $"Odśwież / Skalkuluj (Plików: {result.FileCount} | {FormatBytes(result.TotalBytes)})";
+                            btnRefresh.ToolTip = $"Aktywny folder source: {result.SourcePath}";
+                            btnRefresh.IsEnabled = true;
+                        };
 
-                                var btnPosterQuick = new Button
-                                {
-                                    Content = "🖨️ Eksportuj plakat startowy A4 (PNG)",
-                                    Height = 30,
-                                    Margin = new Thickness(0, 0, 0, 14),
-                                    Background = BrushItemBg,
-                                    Foreground = Brushes.White,
-                                    BorderBrush = BrushAccent,
-                                    BorderThickness = new Thickness(1),
-                                    FontWeight = FontWeights.SemiBold,
-                                    Cursor = Cursors.Hand,
-                                    Tag = "INJECTED_POSTER_QUICK"
-                                };
-                                btnPosterQuick.Click += async (s, e) =>
-                                {
-                                    btnPosterQuick.IsEnabled = false;
-                                    await ExportSafezonePosterForActiveFactionAsync(win);
-                                    btnPosterQuick.IsEnabled = true;
-                                };
+                        var btnPosterQuick = new Button
+                        {
+                            Content = "🖨️ Eksportuj plakat startowy A4 aktywnej strony (PNG)",
+                            Height = 30,
+                            Margin = new Thickness(0, 0, 0, 14),
+                            Background = BrushItemBg,
+                            Foreground = Brushes.White,
+                            BorderBrush = BrushAccent,
+                            BorderThickness = new Thickness(1),
+                            FontWeight = FontWeights.SemiBold,
+                            Cursor = Cursors.Hand,
+                            Tag = "INJECTED_POSTER_QUICK"
+                        };
+                        btnPosterQuick.Click += async (s, e) =>
+                        {
+                            btnPosterQuick.IsEnabled = false;
+                            await ExportSafezonePosterForCurrentAsync(win);
+                            btnPosterQuick.IsEnabled = true;
+                        };
 
-                                int idx = parentPanel.Children.IndexOf(previewBorder);
-                                parentPanel.Children.Insert(idx + 1, btnRefresh);
-                                parentPanel.Children.Insert(idx + 2, btnPosterQuick);
-                            }
-                        }
+                        int idx = previewParent.Children.IndexOf(previewBorder);
+                        previewParent.Children.Insert(idx + 1, btnRefresh);
+                        previewParent.Children.Insert(idx + 2, btnPosterQuick);
                     }
 
                     HookNativeValidityControls(win);
@@ -454,8 +486,8 @@ namespace FieldTakHub.Builder.Services
                     var res = await ForceSizeUpdateAsync(win);
                     if (_injectedRefreshButton != null)
                     {
-                        _injectedRefreshButton.Content = $"🔄 Odśwież / Skalkuluj (Plików: {res.FileCount} | {FormatBytes(res.TotalBytes)})";
-                        _injectedRefreshButton.ToolTip = BuildStatsTooltip(res);
+                        _injectedRefreshButton.Content = $"Odśwież / Skalkuluj (Plików: {res.FileCount} | {FormatBytes(res.TotalBytes)})";
+                        _injectedRefreshButton.ToolTip = $"Aktywny folder source: {res.SourcePath}";
                     }
                 };
             }
@@ -466,13 +498,13 @@ namespace FieldTakHub.Builder.Services
             var res = await ForceSizeUpdateAsync(win);
             if (_injectedRefreshButton != null)
             {
-                _injectedRefreshButton.Content = $"🔄 Odśwież / Skalkuluj (Plików: {res.FileCount} | {FormatBytes(res.TotalBytes)})";
-                _injectedRefreshButton.ToolTip = BuildStatsTooltip(res);
+                _injectedRefreshButton.Content = $"Odśwież / Skalkuluj (Plików: {res.FileCount} | {FormatBytes(res.TotalBytes)})";
+                _injectedRefreshButton.ToolTip = $"Aktywny folder source: {res.SourcePath}";
             }
         }
 
         // =========================================================================
-        // 1. ZAKŁADKOWY GENERATOR STRON KONFLIKTU (KARTY STRON: MESHTASTIC + OTS ENROLLMENT)
+        // 1. ZAKŁADKOWY GENERATOR STRON KONFLIKTU (KARTA DLA KAŻDEJ STRONY: MESHTASTIC + OTS ENROLLMENT)
         // =========================================================================
         private static UIElement BuildTabbedFactionsCard(Window win)
         {
@@ -491,77 +523,70 @@ namespace FieldTakHub.Builder.Services
 
             var stack = new StackPanel();
 
-            // Nagłówek sekcji
-            stack.Children.Add(new TextBlock
+            // Nagłówek modułu + szybki przycisk do Generatora Map
+            var titleDock = new DockPanel { Margin = new Thickness(0, 0, 0, 6) };
+            var btnJumpMap = new Button
             {
-                Text = "Strony Konfliktu — Karty Konfiguracji (Meshtastic + OpenTAKServer Enrollment + KML)",
+                Content = "🗺️ Otwórz Generator Map (Pełny Ekran)",
+                Height = 28,
+                Padding = new Thickness(12, 0, 12, 0),
+                Background = BrushItemBg,
+                Foreground = BrushAccent,
+                BorderBrush = BrushAccent,
+                BorderThickness = new Thickness(1),
+                FontSize = 11,
+                FontWeight = FontWeights.Bold,
+                Cursor = Cursors.Hand,
+                DockPanel.Dock = Dock.Right
+            };
+            btnJumpMap.Click += (s, e) => TacticalMapGeneratorView.ShowFullScreenMapTab(win);
+            titleDock.Children.Add(btnJumpMap);
+
+            titleDock.Children.Add(new TextBlock
+            {
+                Text = "Generator Stron Konfliktu (Karty Stron: Meshtastic + OpenTAKServer Enrollment)",
                 Foreground = Brushes.White,
                 FontWeight = FontWeights.Bold,
                 FontSize = 14,
-                Margin = new Thickness(0, 0, 0, 4)
+                VerticalAlignment = VerticalAlignment.Center
             });
+            stack.Children.Add(titleDock);
+
             stack.Children.Add(new TextBlock
             {
-                Text = "Wybierz zakładkę strony konfliktu poniżej. Każda strona posiada własny kolor RGB, szyfrowany kanał Meshtastic (PSK), ustawienia OpenTAKServer z Enrollmentem oraz osobny folder warstw KML.",
+                Text = "Każda strona konfliktu posiada własną zakładkę z ustawieniami szyfrowanego kanału Meshtastic (PSK), kolorem RGB, autoryzacją OpenTAKServer (Enrollment) oraz własnym folderem nakładek KML.",
                 Foreground = BrushMutedText,
                 FontSize = 11,
                 TextWrapping = TextWrapping.Wrap,
                 Margin = new Thickness(0, 0, 0, 12)
             });
 
-            // Pasek zakładek (Kart stron) + przyciski [ + Dodaj stronę ] i [ − Usuń stronę ]
-            _factionTabHeaderStrip = new WrapPanel
-            {
-                Orientation = Orientation.Horizontal,
-                Margin = new Thickness(0, 0, 0, 0)
-            };
-            stack.Children.Add(_factionTabHeaderStrip);
+            // Pasek zakładek stron (BLUFOR | OPFOR | ORGA | + | −)
+            _factionTabHeadersPanel = new WrapPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 8) };
+            stack.Children.Add(_factionTabHeadersPanel);
 
-            // Kontener na zawartość wybranej zakładki strony
+            // Kontener zawartości wybranej zakładki
             _factionTabContentHost = new Border
             {
                 Background = BrushItemBg,
                 BorderBrush = BrushTileBorder,
                 BorderThickness = new Thickness(1),
-                CornerRadius = new CornerRadius(0, 8, 8, 8),
+                CornerRadius = new CornerRadius(8),
                 Padding = new Thickness(14),
                 Margin = new Thickness(0, 0, 0, 12)
             };
             stack.Children.Add(_factionTabContentHost);
 
-            // Dolny pasek akcji dla stron konfliktu
-            var actionGrid = new UniformGrid { Columns = 3, Margin = new Thickness(0, 0, 0, 6) };
+            RebuildFactionTabsUI(win);
 
-            var btnBuildSingle = new Button
+            // Dolny pasek akcji zbiorczych
+            var actionButtonsGrid = new UniformGrid { Columns = 3, Margin = new Thickness(0, 2, 0, 6) };
+
+            var btnInitFolders = new Button
             {
-                Content = "⚡ Buduj aktywną stronę (.ftak + A4)",
+                Content = "📁 Przygotuj podfoldery KML stron",
                 Height = 32,
                 Margin = new Thickness(0, 0, 5, 0),
-                Background = BrushItemBg,
-                Foreground = BrushAccent,
-                BorderBrush = BrushAccent,
-                BorderThickness = new Thickness(1),
-                FontWeight = FontWeights.Bold,
-                Cursor = Cursors.Hand
-            };
-
-            var btnBuildAll = new Button
-            {
-                Content = "🚀 Buduj WSZYSTKIE strony (.ftak + QR)",
-                Height = 32,
-                Margin = new Thickness(3, 0, 3, 0),
-                Background = BrushButtonAccent,
-                Foreground = BrushDarkFg,
-                BorderThickness = new Thickness(0),
-                FontWeight = FontWeights.Bold,
-                Cursor = Cursors.Hand
-            };
-
-            var btnOpenMap = new Button
-            {
-                Content = "🗺️ Otwórz Generator Map (Pełny Ekran)",
-                Height = 32,
-                Margin = new Thickness(5, 0, 0, 0),
                 Background = BrushItemBg,
                 Foreground = Brushes.White,
                 BorderBrush = BrushTileBorder,
@@ -570,41 +595,73 @@ namespace FieldTakHub.Builder.Services
                 Cursor = Cursors.Hand
             };
 
-            actionGrid.Children.Add(btnBuildSingle);
-            actionGrid.Children.Add(btnBuildAll);
-            actionGrid.Children.Add(btnOpenMap);
-            stack.Children.Add(actionGrid);
+            var btnExportPoster = new Button
+            {
+                Content = "🖨️ Eksportuj plakat A4 strony (PNG)",
+                Height = 32,
+                Margin = new Thickness(3, 0, 3, 0),
+                Background = BrushItemBg,
+                Foreground = Brushes.White,
+                BorderBrush = BrushAccent,
+                BorderThickness = new Thickness(1),
+                FontWeight = FontWeights.Bold,
+                Cursor = Cursors.Hand
+            };
+
+            var btnBuildAllFactions = new Button
+            {
+                Content = "⚡ Buduj wszystkie strony (.ftak + QR)",
+                Height = 32,
+                Margin = new Thickness(5, 0, 0, 0),
+                Background = BrushButtonAccent,
+                Foreground = BrushDarkFg,
+                BorderThickness = new Thickness(0),
+                FontWeight = FontWeights.Bold,
+                Cursor = Cursors.Hand
+            };
+
+            actionButtonsGrid.Children.Add(btnInitFolders);
+            actionButtonsGrid.Children.Add(btnExportPoster);
+            actionButtonsGrid.Children.Add(btnBuildAllFactions);
+            stack.Children.Add(actionButtonsGrid);
 
             _factionStatusLabel = new TextBlock
             {
-                Text = "Gotowy. Wybierz kartę strony konfliktu lub kliknij 'Buduj WSZYSTKIE strony'.",
+                Text = "Gotowy. Wybierz zakładkę strony powyżej, skonfiguruj kanał szyfrowany i OTS Enrollment, a następnie zbuduj paczki.",
                 Foreground = BrushMutedText,
                 FontSize = 11,
                 TextWrapping = TextWrapping.Wrap,
-                Margin = new Thickness(0, 2, 0, 0)
+                Margin = new Thickness(0, 4, 0, 0)
             };
             stack.Children.Add(_factionStatusLabel);
 
-            btnBuildSingle.Click += async (s, e) =>
+            btnInitFolders.Click += async (s, e) =>
             {
-                btnBuildSingle.IsEnabled = false;
-                await ExportSafezonePosterForActiveFactionAsync(win);
-                btnBuildSingle.IsEnabled = true;
+                string srcDir = GetPrimarySourceDirectory(win);
+                var sides = _factions.Select(f => (SanitizeFileName(f.Name).ToLowerInvariant(), f.ColorHex)).ToList();
+                await Task.Run(() => EnsureFactionFoldersInitialized(srcDir, sides));
+                await ForceSizeUpdateAsync(win);
+                _factionStatusLabel.Text = $"✓ Utworzono podfoldery KML dla {_factions.Count} stron w: {Path.Combine(srcDir, "factions")}";
+                _factionStatusLabel.Foreground = BrushAccent;
+                TryOpenFolderInExplorer(Path.Combine(srcDir, "factions"));
             };
 
-            btnBuildAll.Click += async (s, e) =>
+            btnExportPoster.Click += async (s, e) =>
             {
-                btnBuildAll.IsEnabled = false;
-                string orig = btnBuildAll.Content?.ToString();
-                btnBuildAll.Content = "Budowanie wszystkich stron...";
-                await BuildAllFactionsAsync(win);
-                btnBuildAll.Content = orig;
-                btnBuildAll.IsEnabled = true;
+                btnExportPoster.IsEnabled = false;
+                await ExportSafezonePosterForCurrentAsync(win);
+                btnExportPoster.IsEnabled = true;
             };
 
-            btnOpenMap.Click += (s, e) => TacticalMapGeneratorView.ShowFullScreenMapTab(win);
-
-            RebuildFactionTabsUI(win);
+            btnBuildAllFactions.Click += async (s, e) =>
+            {
+                btnBuildAllFactions.IsEnabled = false;
+                string origText = btnBuildAllFactions.Content?.ToString();
+                btnBuildAllFactions.Content = "Budowanie wszystkich stron...";
+                await BuildDynamicFactionsAsync(win);
+                btnBuildAllFactions.Content = origText;
+                btnBuildAllFactions.IsEnabled = true;
+            };
 
             card.Child = stack;
             return card;
@@ -612,24 +669,22 @@ namespace FieldTakHub.Builder.Services
 
         private static void RebuildFactionTabsUI(Window win)
         {
-            if (_factionTabHeaderStrip == null || _factionTabContentHost == null) return;
+            if (_factionTabHeadersPanel == null || _factionTabContentHost == null) return;
             EnsureDefaultFactions();
+            _selectedFactionIndex = Math.Clamp(_selectedFactionIndex, 0, _factions.Count - 1);
 
-            if (_selectedFactionIndex < 0 || _selectedFactionIndex >= _factions.Count)
-                _selectedFactionIndex = 0;
-
-            _factionTabHeaderStrip.Children.Clear();
+            _factionTabHeadersPanel.Children.Clear();
 
             for (int i = 0; i < _factions.Count; i++)
             {
-                int capturedIdx = i;
+                int idx = i;
                 var fac = _factions[i];
-                bool isSelected = (i == _selectedFactionIndex);
+                bool isSelected = (idx == _selectedFactionIndex);
 
                 var dot = new Border
                 {
-                    Width = 11,
-                    Height = 11,
+                    Width = 12,
+                    Height = 12,
                     CornerRadius = new CornerRadius(6),
                     Background = BrushFromHex(fac.ColorHex, Color.FromRgb(38, 132, 255)),
                     BorderBrush = Brushes.White,
@@ -640,90 +695,90 @@ namespace FieldTakHub.Builder.Services
 
                 var lbl = new TextBlock
                 {
-                    Text = string.IsNullOrWhiteSpace(fac.Name) ? $"STRONA-{i + 1}" : fac.Name.ToUpperInvariant(),
+                    Text = string.IsNullOrWhiteSpace(fac.Name) ? $"STRONA-{idx + 1}" : fac.Name,
                     Foreground = isSelected ? BrushAccent : Brushes.White,
-                    FontWeight = isSelected ? FontWeights.Bold : FontWeights.SemiBold,
+                    FontWeight = FontWeights.Bold,
                     FontSize = 12,
                     VerticalAlignment = VerticalAlignment.Center
                 };
 
-                var tabContent = new StackPanel { Orientation = Orientation.Horizontal };
-                tabContent.Children.Add(dot);
-                tabContent.Children.Add(lbl);
+                var tabStack = new StackPanel { Orientation = Orientation.Horizontal };
+                tabStack.Children.Add(dot);
+                tabStack.Children.Add(lbl);
 
                 var tabBtn = new Button
                 {
-                    Content = tabContent,
+                    Content = tabStack,
                     Height = 32,
                     Padding = new Thickness(14, 0, 14, 0),
-                    Margin = new Thickness(0, 0, 4, 0),
-                    Background = isSelected ? BrushItemBg : BrushInputBg,
-                    BorderBrush = isSelected ? BrushAccent : BrushInputBorder,
-                    BorderThickness = isSelected ? new Thickness(1, 2, 1, 0) : new Thickness(1, 1, 1, 1),
-                    Cursor = Cursors.Hand
+                    Margin = new Thickness(0, 0, 6, 4),
+                    Background = isSelected ? BrushInputBg : BrushItemBg,
+                    BorderBrush = isSelected ? BrushAccent : BrushTileBorder,
+                    BorderThickness = new Thickness(isSelected ? 2 : 1),
+                    Cursor = Cursors.Hand,
+                    ToolTip = $"Przełącz na kartę strony {fac.Name}"
                 };
-                tabBtn.Click += (s, e) =>
+                tabBtn.Click += (_, __) =>
                 {
-                    _selectedFactionIndex = capturedIdx;
-                    SyncActiveFactionToModel();
+                    _selectedFactionIndex = idx;
+                    SyncActiveFactionToDefaultModel();
                     RebuildFactionTabsUI(win);
                 };
-                _factionTabHeaderStrip.Children.Add(tabBtn);
+                _factionTabHeadersPanel.Children.Add(tabBtn);
             }
 
-            // Przycisk [ + Dodaj stronę ]
+            // Przycisk "+" (Dodaj nową zakładkę strony)
             string[] defaultPalette = { "#2ECC71", "#9B59B6", "#E67E22", "#1ABC9C", "#E84393", "#00CEC9" };
-            var btnAddTab = new Button
+            var btnAddFaction = new Button
             {
                 Content = "+ Dodaj stronę",
-                Height = 30,
+                Height = 32,
                 Padding = new Thickness(12, 0, 12, 0),
-                Margin = new Thickness(4, 1, 4, 0),
+                Margin = new Thickness(2, 0, 6, 4),
                 Background = BrushInputBg,
                 Foreground = BrushAccent,
-                BorderBrush = BrushInputBorder,
+                BorderBrush = BrushAccent,
                 BorderThickness = new Thickness(1),
-                FontSize = 11,
+                FontSize = 11.5,
                 FontWeight = FontWeights.Bold,
                 Cursor = Cursors.Hand,
                 ToolTip = "Dodaj nową zakładkę strony konfliktu"
             };
-            btnAddTab.Click += (s, e) =>
+            btnAddFaction.Click += (_, __) =>
             {
-                int n = _factions.Count + 1;
-                string col = defaultPalette[(n - 1) % defaultPalette.Length];
-                _factions.Add(new FactionConfigProfile
+                int nextNum = _factions.Count + 1;
+                string hex = defaultPalette[(nextNum - 1) % defaultPalette.Length];
+                _factions.Add(new FactionProfileModel
                 {
-                    Name = $"STRONA-{n}",
-                    ColorHex = col,
-                    ChannelName = $"TAK-CH{n}",
-                    OtsGroupName = $"STRONA-{n}",
-                    OtsUsername = $"op_{n}",
-                    Psk = TacticalConfigModel.GenerateRandomBase64Psk()
+                    Name = $"STRONA-{nextNum}",
+                    ColorHex = hex,
+                    ChannelName = $"TAK-CH{nextNum}",
+                    Psk = TacticalConfigModel.GenerateRandomBase64Psk(),
+                    EnrollmentUsername = $"strona{nextNum}"
                 });
                 _selectedFactionIndex = _factions.Count - 1;
-                SyncActiveFactionToModel();
+                SyncActiveFactionToDefaultModel();
                 RebuildFactionTabsUI(win);
             };
-            _factionTabHeaderStrip.Children.Add(btnAddTab);
+            _factionTabHeadersPanel.Children.Add(btnAddFaction);
 
-            // Spójny przycisk [ − Usuń stronę ]
-            var btnRemoveTab = new Button
+            // Spójny przycisk "−" (Usuń aktywną zakładkę strony)
+            var btnRemoveFaction = new Button
             {
                 Content = "− Usuń stronę",
-                Height = 30,
+                Height = 32,
                 Padding = new Thickness(12, 0, 12, 0),
-                Margin = new Thickness(0, 1, 0, 0),
+                Margin = new Thickness(0, 0, 0, 4),
                 Background = BrushInputBg,
                 Foreground = Brushes.White,
-                BorderBrush = BrushInputBorder,
+                BorderBrush = BrushTileBorder,
                 BorderThickness = new Thickness(1),
-                FontSize = 11,
-                FontWeight = FontWeights.SemiBold,
+                FontSize = 11.5,
+                FontWeight = FontWeights.Bold,
                 Cursor = Cursors.Hand,
                 ToolTip = "Usuń aktualnie wybraną zakładkę strony konfliktu"
             };
-            btnRemoveTab.Click += (s, e) =>
+            btnRemoveFaction.Click += (_, __) =>
             {
                 if (_factions.Count <= 1)
                 {
@@ -735,141 +790,153 @@ namespace FieldTakHub.Builder.Services
                     return;
                 }
                 _factions.RemoveAt(_selectedFactionIndex);
-                if (_selectedFactionIndex >= _factions.Count) _selectedFactionIndex = _factions.Count - 1;
-                SyncActiveFactionToModel();
+                _selectedFactionIndex = Math.Clamp(_selectedFactionIndex, 0, _factions.Count - 1);
+                SyncActiveFactionToDefaultModel();
                 RebuildFactionTabsUI(win);
             };
-            _factionTabHeaderStrip.Children.Add(btnRemoveTab);
+            _factionTabHeadersPanel.Children.Add(btnRemoveFaction);
 
-            // Zbudowanie zawartości dla aktywnej zakładki
+            // Zbudowanie zawartości dla aktualnie wybranej zakładki strony
             var activeFaction = _factions[_selectedFactionIndex];
-            SyncActiveFactionToModel();
-            _factionTabContentHost.Child = BuildSingleFactionTabEditor(win, activeFaction);
+            SyncActiveFactionToDefaultModel();
+            _factionTabContentHost.Child = BuildSingleFactionTabContent(win, activeFaction);
         }
 
-        private static UIElement BuildSingleFactionTabEditor(Window win, FactionConfigProfile fac)
+        private static UIElement BuildSingleFactionTabContent(Window win, FactionProfileModel fac)
         {
-            var panel = new StackPanel();
+            var root = new StackPanel();
 
-            // --- SEKCJA A: IDENTYFIKACJA STRONY, KOLOR RGB ORAZ FOLDER KML ---
-            panel.Children.Add(CreateSubSectionHeader($"1. Identyfikacja strony ({fac.Name}) & Warstwy Taktyczne KML", fac.ColorHex));
+            // 1. Pasek nagłówkowy karty strony: Nazwa strony + Wybór koloru RGB + Otwórz folder KML
+            var sec1Title = new TextBlock
+            {
+                Text = $"1. Identyfikacja Strony, Kolor Taktyczny RGB oraz Warstwy KML ({fac.Name})",
+                Foreground = BrushAccent,
+                FontWeight = FontWeights.Bold,
+                FontSize = 12,
+                Margin = new Thickness(0, 0, 0, 8)
+            };
+            root.Children.Add(sec1Title);
 
-            var idGrid = new Grid { Margin = new Thickness(0, 0, 0, 8) };
-            idGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-            idGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(180) });
-            idGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(220) });
+            var topRow = new Grid { Margin = new Thickness(0, 0, 0, 10) };
+            topRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            topRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(185) });
+            topRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(210) });
 
             var nameBox = (TextBox)TextCtrl(fac.Name, val =>
             {
                 fac.Name = val.Trim();
-                SyncActiveFactionToModel();
+                SyncActiveFactionToDefaultModel();
             });
+            nameBox.FontWeight = FontWeights.Bold;
             nameBox.LostFocus += (_, __) => RebuildFactionTabsUI(win);
-            var nameField = FieldBox("Nazwa strony konfliktu (ID):", nameBox);
+            var nameField = FieldBox("Nazwa strony / frakcji (np. BLUFOR, OPFOR, ORGA):", nameBox);
             Grid.SetColumn(nameField, 0);
-            idGrid.Children.Add(nameField);
+            topRow.Children.Add(nameField);
 
-            // Przycisk wyboru koloru RGB
-            var swatch = new Border
+            var colorSwatch = new Border
             {
                 Width = 16,
                 Height = 16,
-                CornerRadius = new CornerRadius(3),
+                CornerRadius = new CornerRadius(4),
                 Background = BrushFromHex(fac.ColorHex, Color.FromRgb(38, 132, 255)),
                 BorderBrush = Brushes.White,
                 BorderThickness = new Thickness(1),
                 Margin = new Thickness(0, 0, 8, 0),
                 VerticalAlignment = VerticalAlignment.Center
             };
-            var hexText = new TextBlock
+            var colorLabel = new TextBlock
             {
-                Text = $"Kolor RGB ({fac.ColorHex.ToUpperInvariant()})",
+                Text = $"Paleta RGB ({fac.ColorHex.ToUpperInvariant()})",
                 Foreground = Brushes.White,
                 FontSize = 11,
                 FontWeight = FontWeights.SemiBold,
                 VerticalAlignment = VerticalAlignment.Center
             };
-            var colorBtnStack = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Center };
-            colorBtnStack.Children.Add(swatch);
-            colorBtnStack.Children.Add(hexText);
+            var colorStack = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Center };
+            colorStack.Children.Add(colorSwatch);
+            colorStack.Children.Add(colorLabel);
 
-            var btnColor = new Button
+            var colorBtn = new Button
             {
-                Content = colorBtnStack,
+                Content = colorStack,
                 Height = 28,
                 Background = BrushInputBg,
                 BorderBrush = BrushInputBorder,
                 BorderThickness = new Thickness(1),
-                Cursor = Cursors.Hand
+                Cursor = Cursors.Hand,
+                ToolTip = "Wybierz kolor strony z palety RGB"
             };
-            btnColor.Click += (s, e) =>
+            colorBtn.Click += (_, __) =>
             {
                 string picked = ShowRgbColorPickerDialog(win, fac.Name, fac.ColorHex);
                 if (!string.IsNullOrEmpty(picked))
                 {
                     fac.ColorHex = picked;
-                    SyncActiveFactionToModel();
+                    SyncActiveFactionToDefaultModel();
                     RebuildFactionTabsUI(win);
                 }
             };
-            var colorField = FieldBox("Kolor taktyczny strony (Paleta RGB):", btnColor);
+            var colorField = FieldBox("Kolor taktyczny strony (RGB):", colorBtn);
             Grid.SetColumn(colorField, 1);
-            idGrid.Children.Add(colorField);
+            topRow.Children.Add(colorField);
 
-            var btnOpenKmlFolder = new Button
+            var btnOpenFactionKml = new Button
             {
-                Content = $"📁 Folder KML (factions/{SanitizeFileName(fac.Name).ToLowerInvariant()})",
+                Content = $"📁 source/factions/{SanitizeFileName(fac.Name).ToLowerInvariant()}",
                 Height = 28,
                 Background = BrushInputBg,
-                Foreground = BrushAccent,
+                Foreground = Brushes.White,
                 BorderBrush = BrushInputBorder,
                 BorderThickness = new Thickness(1),
-                FontSize = 11,
-                FontWeight = FontWeights.SemiBold,
-                Cursor = Cursors.Hand
+                FontSize = 10.5,
+                Cursor = Cursors.Hand,
+                ToolTip = "Otwórz dedykowany folder nakładek KML dla tej strony"
             };
-            btnOpenKmlFolder.Click += async (s, e) =>
+            btnOpenFactionKml.Click += async (_, __) =>
             {
                 string srcDir = GetPrimarySourceDirectory(win);
                 string sideLower = SanitizeFileName(fac.Name).ToLowerInvariant();
                 await Task.Run(() => EnsureFactionFoldersInitialized(srcDir, new List<(string, string)> { (sideLower, fac.ColorHex) }));
-                await ForceSizeUpdateAsync(win);
                 TryOpenFolderInExplorer(Path.Combine(srcDir, "factions", sideLower));
             };
-            var kmlField = FieldBox("Dedykowane nakładki KML strony:", btnOpenKmlFolder);
+            var kmlField = FieldBox("Dedykowane nakładki KML strony:", btnOpenFactionKml);
             Grid.SetColumn(kmlField, 2);
-            idGrid.Children.Add(kmlField);
+            topRow.Children.Add(kmlField);
+            root.Children.Add(topRow);
 
-            panel.Children.Add(idGrid);
-
-            // --- SEKCJA B: MESHTASTIC (KANAŁ SZYFROWANY STRONY) ---
-            panel.Children.Add(CreateSubSectionHeader("2. Konfiguracja Meshtastic — Szyfrowany Kanał LoRa Strony", "#1FE0C5"));
+            // 2. Sekcja Meshtastic — Kanał Szyfrowany Strony
+            root.Children.Add(new TextBlock
+            {
+                Text = $"2. Meshtastic — Kanał Szyfrowany LoRa ({fac.Name})",
+                Foreground = BrushAccent,
+                FontWeight = FontWeights.Bold,
+                FontSize = 12,
+                Margin = new Thickness(0, 4, 0, 8)
+            });
 
             var meshRow1 = new UniformGrid { Columns = 4, Margin = new Thickness(0, 0, 0, 4) };
-            meshRow1.Children.Add(FieldBox("Nazwa kanału LoRa:", TextCtrl(fac.ChannelName, v => { fac.ChannelName = v; SyncActiveFactionToModel(); })));
+            meshRow1.Children.Add(FieldBox("Nazwa kanału szyfrowanego LoRa:", TextCtrl(fac.ChannelName, v => { fac.ChannelName = v.Trim(); SyncActiveFactionToDefaultModel(); })));
             meshRow1.Children.Add(FieldBox("Region LoRa:", ComboCtrl(new[] { "EU_868", "US_915", "EU_433", "ANZ_915", "RU_864", "KR_920" }, fac.LoraRegion, win, v => { fac.LoraRegion = v; Current.LoraRegion = v; })));
-            meshRow1.Children.Add(FieldBox("Preset modemu LoRa:", ComboCtrl(new[] { "SHORT_FAST", "LONG_FAST", "MEDIUM_FAST", "MEDIUM_SLOW", "LONG_SLOW" }, fac.LoraModemPreset, win, v => { fac.LoraModemPreset = v; Current.LoraModemPreset = v; })));
-            meshRow1.Children.Add(FieldBox("Rola urządzenia:", ComboCtrl(new[] { "Auto", "TAK", "CLIENT", "CLIENT_MUTE", "TRACKER", "ROUTER" }, fac.DeviceRole, win, v => { fac.DeviceRole = v; Current.DeviceRole = v; })));
-            panel.Children.Add(meshRow1);
+            meshRow1.Children.Add(FieldBox("Modem Preset:", ComboCtrl(new[] { "SHORT_FAST", "LONG_FAST", "MEDIUM_FAST", "MEDIUM_SLOW", "LONG_SLOW" }, fac.LoraModemPreset, win, v => { fac.LoraModemPreset = v; Current.LoraModemPreset = v; })));
+            meshRow1.Children.Add(FieldBox("Rola urządzenia Meshtastic:", ComboCtrl(new[] { "Auto", "TAK", "TAK_Tracker", "Client", "Router" }, fac.DeviceRole, win, v => { fac.DeviceRole = v; Current.DeviceRole = v; })));
+            root.Children.Add(meshRow1);
 
-            // Pełnej szerokości wiersz na Klucz szyfrujący PSK (nic nie ucina!)
-            var pskGrid = new Grid { Margin = new Thickness(0, 0, 0, 8) };
+            // Pełnowymiarowy wiersz klucza PSK (nic nie ucina 44-znakowego klucza AES-256 Base64)
+            var pskGrid = new Grid { Margin = new Thickness(0, 0, 0, 10) };
             pskGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
             pskGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(170) });
-            pskGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(110) });
-            pskGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(110) });
 
-            var pskBox = (TextBox)TextCtrl(fac.Psk, v => { fac.Psk = v; SyncActiveFactionToModel(); });
-            var pskField = FieldBox("Klucz szyfrujący kanału Meshtastic PSK (AES-256 Base64):", pskBox);
+            var pskBox = (TextBox)TextCtrl(fac.Psk, v => { fac.Psk = v.Trim(); SyncActiveFactionToDefaultModel(); });
+            pskBox.FontFamily = new FontFamily("Consolas");
+            var pskField = FieldBox("Klucz szyfrujący PSK kanału Meshtastic (AES-256 Base64 — pełna szerokość):", pskBox);
             Grid.SetColumn(pskField, 0);
             pskGrid.Children.Add(pskField);
 
-            var btnGenPsk = new Button
+            var btnRollPsk = new Button
             {
                 Content = "🎲 Losuj nowy klucz PSK",
                 Height = 28,
-                Margin = new Thickness(0, 0, 8, 6),
-                VerticalAlignment = VerticalAlignment.Bottom,
+                Margin = new Thickness(0, 14, 0, 6),
                 Background = BrushInputBg,
                 Foreground = BrushAccent,
                 BorderBrush = BrushAccent,
@@ -878,98 +945,60 @@ namespace FieldTakHub.Builder.Services
                 FontWeight = FontWeights.Bold,
                 Cursor = Cursors.Hand
             };
-            btnGenPsk.Click += (s, e) =>
+            btnRollPsk.Click += (_, __) =>
             {
                 fac.Psk = TacticalConfigModel.GenerateRandomBase64Psk();
                 pskBox.Text = fac.Psk;
-                SyncActiveFactionToModel();
+                SyncActiveFactionToDefaultModel();
             };
-            Grid.SetColumn(btnGenPsk, 1);
-            pskGrid.Children.Add(btnGenPsk);
+            Grid.SetColumn(btnRollPsk, 1);
+            pskGrid.Children.Add(btnRollPsk);
+            root.Children.Add(pskGrid);
 
-            var fwMinField = FieldBox("Firmware MIN:", TextCtrl(fac.FirmwareMin, v => { fac.FirmwareMin = v; Current.FirmwareMin = v; }));
-            Grid.SetColumn(fwMinField, 2);
-            pskGrid.Children.Add(fwMinField);
-
-            var fwMaxField = FieldBox("Firmware MAX:", TextCtrl(fac.FirmwareMax, v => { fac.FirmwareMax = v; Current.FirmwareMax = v; }));
-            Grid.SetColumn(fwMaxField, 3);
-            pskGrid.Children.Add(fwMaxField);
-
-            panel.Children.Add(pskGrid);
-
-            // --- SEKCJA C: OPENTAKSERVER (OTS) Z ENROLLMENTEM DLA STRONY ---
-            panel.Children.Add(CreateSubSectionHeader("3. Ustawienia OpenTAKServer (OTS) & Auto-Enrollment dla Strony", "#1FE0C5"));
+            // 3. Sekcja OpenTAKServer (OTS) & Auto-Enrollment
+            root.Children.Add(new TextBlock
+            {
+                Text = $"3. OpenTAKServer (OTS) & Certyfikaty Enrollment ({fac.Name})",
+                Foreground = BrushAccent,
+                FontWeight = FontWeights.Bold,
+                FontSize = 12,
+                Margin = new Thickness(0, 4, 0, 8)
+            });
 
             var otsRow1 = new Grid { Margin = new Thickness(0, 0, 0, 4) };
-            otsRow1.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1.6, GridUnitType.Star) });
-            otsRow1.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(110) });
+            otsRow1.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
             otsRow1.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(130) });
-            otsRow1.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1.4, GridUnitType.Star) });
+            otsRow1.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(150) });
 
-            var hostField = FieldBox("Adres serwera OpenTAKServer (Host / Domena):", TextCtrl(fac.OtsHost, v => fac.OtsHost = v));
-            Grid.SetColumn(hostField, 0);
-            otsRow1.Children.Add(hostField);
-
+            var hostField = FieldBox("Adres serwera OpenTAKServer (Host / IP / Domena):", TextCtrl(fac.OtsHost, v => fac.OtsHost = v.Trim()));
             var sslPortField = FieldBox("Port SSL CoT:", IntCtrl(fac.OtsSslPort, v => fac.OtsSslPort = v));
+            var enrollPortField = FieldBox("Port Enrollment (HTTPS):", IntCtrl(fac.OtsEnrollmentPort, v => fac.OtsEnrollmentPort = v));
+            Grid.SetColumn(hostField, 0);
             Grid.SetColumn(sslPortField, 1);
-            otsRow1.Children.Add(sslPortField);
-
-            var enrollPortField = FieldBox("Port Enrollmentu:", IntCtrl(fac.OtsEnrollPort, v => fac.OtsEnrollPort = v));
             Grid.SetColumn(enrollPortField, 2);
+            otsRow1.Children.Add(hostField);
+            otsRow1.Children.Add(sslPortField);
             otsRow1.Children.Add(enrollPortField);
+            root.Children.Add(otsRow1);
 
-            var modeField = FieldBox("Tryb autoryzacji i Enrollmentu OTS:", ComboCtrl(new[]
-            {
-                "Auto-Enrollment (Login + Hasło OTS)",
-                "Certyfikat strony (.p12 z paczki)",
-                "Tylko połączenie TCP/SSL"
-            }, fac.OtsEnrollmentMode, win, v => fac.OtsEnrollmentMode = v));
-            Grid.SetColumn(modeField, 3);
-            otsRow1.Children.Add(modeField);
-            panel.Children.Add(otsRow1);
+            var otsRow2 = new Grid();
+            otsRow2.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(250) });
+            otsRow2.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            otsRow2.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
 
-            var otsRow2 = new UniformGrid { Columns = 3 };
-            otsRow2.Children.Add(FieldBox("Login Enrollmentu OTS (Użytkownik):", TextCtrl(fac.OtsUsername, v => fac.OtsUsername = v)));
-            otsRow2.Children.Add(FieldBox("Hasło Enrollmentu / Token OTS:", TextCtrl(fac.OtsPasswordOrToken, v => fac.OtsPasswordOrToken = v)));
-            otsRow2.Children.Add(FieldBox("Grupa na serwerze OTS (Marti Group):", TextCtrl(fac.OtsGroupName, v => fac.OtsGroupName = v)));
-            panel.Children.Add(otsRow2);
+            var swEnroll = TileSwitch("Włącz Auto-Enrollment OTS", fac.EnableAutoEnrollment, v => fac.EnableAutoEnrollment = v);
+            swEnroll.Margin = new Thickness(0, 10, 8, 6);
+            var userField = FieldBox("Użytkownik / Grupa Enrollment (OTS):", TextCtrl(fac.EnrollmentUsername, v => fac.EnrollmentUsername = v.Trim()));
+            var passField = FieldBox("Hasło Enrollment / Hasło certyfikatu (opcjonalnie):", TextCtrl(fac.EnrollmentPassword, v => fac.EnrollmentPassword = v));
+            Grid.SetColumn(swEnroll, 0);
+            Grid.SetColumn(userField, 1);
+            Grid.SetColumn(passField, 2);
+            otsRow2.Children.Add(swEnroll);
+            otsRow2.Children.Add(userField);
+            otsRow2.Children.Add(passField);
+            root.Children.Add(otsRow2);
 
-            return panel;
-        }
-
-        private static UIElement CreateSubSectionHeader(string text, string accentHex)
-        {
-            var border = new Border
-            {
-                BorderBrush = BrushFromHex(accentHex, Color.FromRgb(31, 224, 197)),
-                BorderThickness = new Thickness(3, 0, 0, 0),
-                Padding = new Thickness(8, 2, 0, 2),
-                Margin = new Thickness(0, 6, 0, 6)
-            };
-            border.Child = new TextBlock
-            {
-                Text = text,
-                Foreground = Brushes.White,
-                FontWeight = FontWeights.Bold,
-                FontSize = 11.5
-            };
-            return border;
-        }
-
-        private static void SyncActiveFactionToModel()
-        {
-            EnsureDefaultFactions();
-            if (_selectedFactionIndex < 0 || _selectedFactionIndex >= _factions.Count) _selectedFactionIndex = 0;
-            var f = _factions[_selectedFactionIndex];
-            Current.ActiveFaction = string.IsNullOrWhiteSpace(f.Name) ? "BLUFOR" : f.Name.Trim();
-            Current.DefaultChannelName = string.IsNullOrWhiteSpace(f.ChannelName) ? "BLUFOR-TAK" : f.ChannelName.Trim();
-            Current.DefaultPsk = string.IsNullOrWhiteSpace(f.Psk) ? Current.DefaultPsk : f.Psk.Trim();
-            Current.DefaultFactionColorHex = string.IsNullOrWhiteSpace(f.ColorHex) ? "#2684FF" : f.ColorHex.Trim();
-            Current.LoraRegion = f.LoraRegion;
-            Current.LoraModemPreset = f.LoraModemPreset;
-            Current.DeviceRole = f.DeviceRole;
-            Current.FirmwareMin = f.FirmwareMin;
-            Current.FirmwareMax = f.FirmwareMax;
+            return root;
         }
 
         private static string ShowRgbColorPickerDialog(Window owner, string factionName, string initialHex)
@@ -1138,23 +1167,35 @@ namespace FieldTakHub.Builder.Services
             return confirmed ? selectedHex : null;
         }
 
-        private static async Task BuildAllFactionsAsync(Window win)
+        private static void SyncActiveFactionToDefaultModel()
+        {
+            EnsureDefaultFactions();
+            var active = _factions[Math.Clamp(_selectedFactionIndex, 0, _factions.Count - 1)];
+            Current.ActiveFaction = string.IsNullOrWhiteSpace(active.Name) ? "BLUFOR" : active.Name.Trim();
+            Current.DefaultChannelName = string.IsNullOrWhiteSpace(active.ChannelName) ? "BLUFOR-TAK" : active.ChannelName.Trim();
+            Current.DefaultPsk = string.IsNullOrWhiteSpace(active.Psk) ? Current.DefaultPsk : active.Psk.Trim();
+            Current.DefaultFactionColorHex = string.IsNullOrWhiteSpace(active.ColorHex) ? "#2684FF" : active.ColorHex;
+        }
+
+        private static async Task BuildDynamicFactionsAsync(Window win)
         {
             try
             {
                 EnsureDefaultFactions();
+                SyncNativeMeshtasticSelections(win);
                 string sourceDir = GetPrimarySourceDirectory(win);
                 string eventName = GetEventNameFromWindow(win);
                 string parentDir = Path.GetDirectoryName(Path.TrimEndingDirectorySeparator(sourceDir)) ?? AppDomain.CurrentDomain.BaseDirectory;
                 string outDir = Path.Combine(parentDir, "release_factions");
-                Directory.CreateDirectory(outDir);
 
-                var allSides = _factions.Select(f => (SanitizeFileName(f.Name).ToLowerInvariant(), f.ColorHex)).ToList();
+                if (!Directory.Exists(outDir)) Directory.CreateDirectory(outDir);
+
+                var allSides = _factions.Select(s => (SanitizeFileName(s.Name).ToLowerInvariant(), s.ColorHex)).ToList();
 
                 foreach (var fac in _factions)
                 {
-                    string safeName = SanitizeFileName(fac.Name);
-                    string ftakPath = Path.Combine(outDir, $"{eventName}_{safeName}.ftak");
+                    string cleanName = SanitizeFileName(fac.Name);
+                    string ftakPath = Path.Combine(outDir, $"{eventName}_{cleanName}.ftak");
                     string sha256 = await Task.Run(() =>
                     {
                         EnsureFactionFoldersInitialized(sourceDir, allSides);
@@ -1163,13 +1204,14 @@ namespace FieldTakHub.Builder.Services
                         return ComputeFileSha256(ftakPath);
                     });
 
-                    string qrPayload = $"ftak://provision?event={Uri.EscapeDataString(eventName)}&faction={Uri.EscapeDataString(safeName)}&color={Uri.EscapeDataString(fac.ColorHex)}&channel={Uri.EscapeDataString(fac.ChannelName)}&ots={Uri.EscapeDataString(fac.OtsHost)}:{fac.OtsSslPort}&region={fac.LoraRegion}&preset={fac.LoraModemPreset}&sha256={sha256.Substring(0, 16)}";
-                    string posterPath = Path.Combine(outDir, $"Plakat_Safezone_A4_{eventName}_{safeName}.png");
+                    string qrPayload = $"ftak://provision?event={Uri.EscapeDataString(eventName)}&faction={Uri.EscapeDataString(cleanName)}&color={Uri.EscapeDataString(fac.ColorHex)}&channel={Uri.EscapeDataString(fac.ChannelName)}&ots={Uri.EscapeDataString(fac.OtsHost)}&region={fac.LoraRegion}&preset={fac.LoraModemPreset}&sha256={sha256.Substring(0, 16)}";
+                    string posterPath = Path.Combine(outDir, $"Plakat_Safezone_A4_{eventName}_{cleanName}.png");
                     RenderSafezoneA4PosterPng(win, posterPath, eventName, fac, qrPayload, sha256);
                 }
 
-                SyncActiveFactionToModel();
-                await Task.Run(() => WriteConfigsToDirectory(sourceDir, _factions[_selectedFactionIndex]));
+                SyncActiveFactionToDefaultModel();
+                var activeFac = _factions[Math.Clamp(_selectedFactionIndex, 0, _factions.Count - 1)];
+                await Task.Run(() => WriteConfigsToDirectory(sourceDir, activeFac));
                 await ForceSizeUpdateAsync(win);
 
                 if (_factionStatusLabel != null)
@@ -1190,22 +1232,23 @@ namespace FieldTakHub.Builder.Services
             }
         }
 
-        private static async Task ExportSafezonePosterForActiveFactionAsync(Window win)
+        private static async Task ExportSafezonePosterForCurrentAsync(Window win)
         {
             try
             {
                 EnsureDefaultFactions();
-                SyncActiveFactionToModel();
+                SyncNativeMeshtasticSelections(win);
+                SyncActiveFactionToDefaultModel();
                 var fac = _factions[Math.Clamp(_selectedFactionIndex, 0, _factions.Count - 1)];
 
                 string sourceDir = GetPrimarySourceDirectory(win);
                 string eventName = GetEventNameFromWindow(win);
                 string parentDir = Path.GetDirectoryName(Path.TrimEndingDirectorySeparator(sourceDir)) ?? AppDomain.CurrentDomain.BaseDirectory;
                 string outDir = Path.Combine(parentDir, "release_factions");
-                Directory.CreateDirectory(outDir);
+                if (!Directory.Exists(outDir)) Directory.CreateDirectory(outDir);
 
-                string safeName = SanitizeFileName(fac.Name);
-                string ftakPath = Path.Combine(outDir, $"{eventName}_{safeName}.ftak");
+                string cleanName = SanitizeFileName(fac.Name);
+                string ftakPath = Path.Combine(outDir, $"{eventName}_{cleanName}.ftak");
                 string sha256 = await Task.Run(() =>
                 {
                     WriteConfigsToDirectory(sourceDir, fac);
@@ -1213,13 +1256,13 @@ namespace FieldTakHub.Builder.Services
                     return ComputeFileSha256(ftakPath);
                 });
 
-                string qrPayload = $"ftak://provision?event={Uri.EscapeDataString(eventName)}&faction={Uri.EscapeDataString(safeName)}&color={Uri.EscapeDataString(fac.ColorHex)}&channel={Uri.EscapeDataString(fac.ChannelName)}&ots={Uri.EscapeDataString(fac.OtsHost)}:{fac.OtsSslPort}&region={fac.LoraRegion}&preset={fac.LoraModemPreset}&sha256={sha256.Substring(0, 16)}";
-                string posterPath = Path.Combine(outDir, $"Plakat_Safezone_A4_{eventName}_{safeName}.png");
+                string qrPayload = $"ftak://provision?event={Uri.EscapeDataString(eventName)}&faction={Uri.EscapeDataString(cleanName)}&channel={Uri.EscapeDataString(fac.ChannelName)}&ots={Uri.EscapeDataString(fac.OtsHost)}&region={fac.LoraRegion}&preset={fac.LoraModemPreset}&sha256={sha256.Substring(0, 16)}";
+                string posterPath = Path.Combine(outDir, $"Plakat_Safezone_A4_{eventName}_{cleanName}.png");
                 RenderSafezoneA4PosterPng(win, posterPath, eventName, fac, qrPayload, sha256);
 
                 if (_factionStatusLabel != null)
                 {
-                    _factionStatusLabel.Text = $"✓ Zbudowano paczkę i plakat A4 dla strony {safeName}: {posterPath}";
+                    _factionStatusLabel.Text = $"✓ Wyeksportowano plakat startowy A4 PNG dla strony {fac.Name}: {posterPath}";
                     _factionStatusLabel.Foreground = BrushAccent;
                 }
 
@@ -1311,19 +1354,18 @@ namespace FieldTakHub.Builder.Services
             catch { }
         }
 
-        private static void BuildFilteredFactionFtakArchive(string sourceDir, string destinationFtakPath, FactionConfigProfile fac, string eventName)
+        private static void BuildFilteredFactionFtakArchive(string sourceDir, string destinationFtakPath, FactionProfileModel fac, string eventName)
         {
             if (File.Exists(destinationFtakPath)) File.Delete(destinationFtakPath);
 
+            string cleanName = SanitizeFileName(fac.Name);
             using var fs = new FileStream(destinationFtakPath, FileMode.CreateNew, FileAccess.ReadWrite, FileShare.None);
             using var archive = new ZipArchive(fs, ZipArchiveMode.Create, false, Encoding.UTF8);
-
-            string factionCode = SanitizeFileName(fac.Name);
 
             if (Directory.Exists(sourceDir))
             {
                 var allFiles = Directory.GetFiles(sourceDir, "*", SearchOption.AllDirectories);
-                string targetFactionPrefix = $"factions/{factionCode.ToLowerInvariant()}/";
+                string targetFactionPrefix = $"factions/{cleanName.ToLowerInvariant()}/";
 
                 foreach (var file in allFiles)
                 {
@@ -1338,7 +1380,7 @@ namespace FieldTakHub.Builder.Services
                     string rel = Path.GetRelativePath(sourceDir, file).Replace('\\', '/');
                     string relLower = rel.ToLowerInvariant();
 
-                    if (relLower.StartsWith("factions/") && !factionCode.Equals("ALL", StringComparison.OrdinalIgnoreCase) && !factionCode.Equals("ORGA", StringComparison.OrdinalIgnoreCase))
+                    if (relLower.StartsWith("factions/") && !cleanName.Equals("ALL", StringComparison.OrdinalIgnoreCase) && !cleanName.Equals("ORGA", StringComparison.OrdinalIgnoreCase))
                     {
                         if (!relLower.StartsWith(targetFactionPrefix)) continue;
                     }
@@ -1353,9 +1395,9 @@ namespace FieldTakHub.Builder.Services
             var manifestObj = new JsonObject
             {
                 ["schemaVersion"] = "2.4",
-                ["packageId"] = $"{eventName.ToLowerInvariant()}-{factionCode.ToLowerInvariant()}",
-                ["packageName"] = $"{eventName} ({factionCode})",
-                ["faction"] = factionCode,
+                ["packageId"] = $"{eventName.ToLowerInvariant()}-{cleanName.ToLowerInvariant()}",
+                ["packageName"] = $"{eventName} ({fac.Name})",
+                ["faction"] = fac.Name,
                 ["factionColor"] = fac.ColorHex,
                 ["channelName"] = fac.ChannelName,
                 ["psk"] = fac.Psk,
@@ -1363,9 +1405,9 @@ namespace FieldTakHub.Builder.Services
                 ["loraModemPreset"] = fac.LoraModemPreset,
                 ["otsHost"] = fac.OtsHost,
                 ["otsSslPort"] = fac.OtsSslPort,
-                ["otsEnrollPort"] = fac.OtsEnrollPort,
-                ["otsEnrollmentMode"] = fac.OtsEnrollmentMode,
-                ["otsGroupName"] = fac.OtsGroupName,
+                ["otsEnrollmentPort"] = fac.OtsEnrollmentPort,
+                ["enableAutoEnrollment"] = fac.EnableAutoEnrollment,
+                ["enrollmentUsername"] = fac.EnrollmentUsername,
                 ["createdAt"] = DateTimeOffset.UtcNow.ToString("o"),
                 ["neverExpires"] = (Current.PackageValidityHours == 0),
                 ["expiresAt"] = (Current.PackageValidityHours == 0)
@@ -1388,7 +1430,7 @@ namespace FieldTakHub.Builder.Services
             return Convert.ToHexString(sha.ComputeHash(stream));
         }
 
-        private static void RenderSafezoneA4PosterPng(Window win, string outputPath, string eventName, FactionConfigProfile fac, string qrPayload, string sha256Hex)
+        private static void RenderSafezoneA4PosterPng(Window win, string outputPath, string eventName, FactionProfileModel fac, string qrPayload, string sha256Hex)
         {
             const int width = 1240;
             const int height = 1754;
@@ -1421,16 +1463,16 @@ namespace FieldTakHub.Builder.Services
                 DrawLeftText(dc, "2. PODŁĄCZ RADIO MESHTASTIC (LORA):", 22, Brushes.White, 110, stepsY + 170, true);
                 DrawLeftText(dc, "Włącz Bluetooth lub podepnij kabel USB. Aplikacja sama rozpozna model i wgra klucze strony.", 19, BrushMutedText, 110, stepsY + 203, false);
                 DrawLeftText(dc, "3. ZIELONY EKRAN = GOTOWY DO GRY:", 22, Brushes.White, 110, stepsY + 255, true);
-                DrawLeftText(dc, "Sprawdź status końcowy:  ✓ ATAK gotowy   ✓ Meshtastic gotowy   ✓ Serwer OTS dostępny.", 19, BrushAccent, 110, stepsY + 288, true);
+                DrawLeftText(dc, "Sprawdź status końcowy:  ✓ ATAK gotowy   ✓ Meshtastic gotowy   ✓ Serwer dostępny.", 19, BrushAccent, 110, stepsY + 288, true);
 
                 double techY = 1310;
                 dc.DrawRoundedRectangle(BrushInputBg, new Pen(BrushInputBorder, 2), new Rect(70, techY, width - 140, 360), 12, 12);
                 DrawCenteredText(dc, "PARAMETRY TECHNICZNE PACZKI, SERWERA OTS I RADIA LORA", 22, Brushes.White, width / 2.0, techY + 22, true);
 
                 string validityText = Current.PackageValidityHours == 0 ? "BEZTERMINOWA (0)" : $"{Current.PackageValidityHours} godz.";
-                DrawLeftText(dc, $"• Strona konfliktu:   {fac.Name} ({fac.ColorHex})   |   Kanał LoRa: {fac.ChannelName}", 20, Brushes.White, 110, techY + 75, true);
-                DrawLeftText(dc, $"• Serwer OTS:         {fac.OtsHost}:{fac.OtsSslPort} (Enrollment: {fac.OtsEnrollPort} | Grupa: {fac.OtsGroupName})", 20, Brushes.White, 110, techY + 118, false);
-                DrawLeftText(dc, $"• Pasmo / Modem:      Region {fac.LoraRegion}   |   Preset {fac.LoraModemPreset}   |   Rola {fac.DeviceRole}", 20, Brushes.White, 110, techY + 161, false);
+                DrawLeftText(dc, $"• Strona konfliktu:   {fac.Name}   |   Kolor: {fac.ColorHex}   |   Kanał LoRa: {fac.ChannelName}", 20, Brushes.White, 110, techY + 75, true);
+                DrawLeftText(dc, $"• Pasmo / Modem:      Region {fac.LoraRegion}   |   Preset {fac.LoraModemPreset}   |   Rola: {fac.DeviceRole}", 20, Brushes.White, 110, techY + 118, false);
+                DrawLeftText(dc, $"• Serwer OTS:         {fac.OtsHost}:{fac.OtsSslPort} (Enrollment: {fac.OtsEnrollmentPort} / User: {fac.EnrollmentUsername})", 20, Brushes.White, 110, techY + 161, false);
                 DrawLeftText(dc, $"• Strategia PLI ATAK: {Current.LocationReportingStrategy}   |   Ważność paczki: {validityText}", 20, Brushes.White, 110, techY + 204, false);
                 DrawLeftText(dc, $"• SHA-256 (.ftak):    {(sha256Hex.Length > 48 ? sha256Hex.Substring(0, 48) + "..." : sha256Hex)}", 17, BrushMutedText, 110, techY + 255, false);
                 DrawLeftText(dc, $"• Wygenerowano:       {DateTime.Now:yyyy-MM-dd HH:mm}   |   Field TAK Hub Builder 2.4", 16, BrushMutedText, 110, techY + 295, false);
@@ -1495,406 +1537,6 @@ namespace FieldTakHub.Builder.Services
                 }
             }
             catch { }
-        }
-
-        // =========================================================================
-        // 3. NAPRAWIONY KALKULATOR I PODGLĄD ZAWARTOŚCI PACZKI (ROZBICIE NA KATEGORIE)
-        // =========================================================================
-        private class SourceStats
-        {
-            public string SourcePath = "";
-            public int FileCount;
-            public long TotalBytes;
-            public long MapsBytes;
-            public long PluginsBytes;
-            public long ConfigBytes;
-            public long TacticalBytes;
-            public long OtherBytes;
-        }
-
-        private static string BuildStatsTooltip(SourceStats s)
-        {
-            return $"Aktywny folder source: {s.SourcePath}\n" +
-                   $"• Pliki paczki (Suma): {FormatBytes(s.TotalBytes)} ({s.FileCount} plików)\n" +
-                   $"• Mapy: {FormatBytes(s.MapsBytes)}\n" +
-                   $"• Pluginy (.apk): {FormatBytes(s.PluginsBytes)}\n" +
-                   $"• Konfiguracja: {FormatBytes(s.ConfigBytes)}\n" +
-                   $"• Dane taktyczne (KML/KMZ/GPX/CoT): {FormatBytes(s.TacticalBytes)}\n" +
-                   $"• Pozostałe: {FormatBytes(s.OtherBytes)}";
-        }
-
-        private static Border FindPreviewCardContainer(DependencyObject startElement)
-        {
-            Border bestBorder = null;
-            DependencyObject cur = startElement;
-            while (cur != null)
-            {
-                if (cur is Border b)
-                {
-                    var tbs = new List<TextBlock>();
-                    FindVisualChildren(b, tbs);
-                    bool hasTotal = tbs.Any(t => t.Text != null && t.Text.Trim().StartsWith("Pliki paczki", StringComparison.OrdinalIgnoreCase));
-                    bool hasOther = tbs.Any(t => t.Text != null && t.Text.Trim().StartsWith("Pozostałe", StringComparison.OrdinalIgnoreCase));
-                    if (hasTotal && hasOther) return b;
-                    if (bestBorder == null && tbs.Count >= 10) bestBorder = b;
-                }
-                cur = VisualTreeHelper.GetParent(cur) ?? LogicalTreeHelper.GetParent(cur);
-            }
-            return bestBorder;
-        }
-
-        private static List<string> ResolveSourceDirectories(Window win)
-        {
-            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            var list = new List<string>();
-
-            void AddCandidate(string raw)
-            {
-                if (string.IsNullOrWhiteSpace(raw) || raw.Length < 3) return;
-                try
-                {
-                    string clean = Path.TrimEndingDirectorySeparator(raw.Trim().Trim('"'));
-                    if (!Path.IsPathRooted(clean)) return;
-                    if (File.Exists(clean)) clean = Path.GetDirectoryName(clean) ?? "";
-                    if (Directory.Exists(clean))
-                    {
-                        string dirToAdd = string.Equals(Path.GetFileName(clean), "source", StringComparison.OrdinalIgnoreCase)
-                            ? clean
-                            : Path.Combine(clean, "source");
-                        if (seen.Add(dirToAdd)) list.Add(dirToAdd);
-                    }
-                }
-                catch { }
-            }
-
-            if (!string.IsNullOrWhiteSpace(LastKnownSourceDir)) AddCandidate(LastKnownSourceDir);
-
-            if (win != null)
-            {
-                var visited = new HashSet<object>();
-                void InspectObj(object obj, int depth)
-                {
-                    if (obj == null || depth > 3 || !visited.Add(obj)) return;
-                    Type t = obj.GetType();
-                    if (t.IsPrimitive || t.IsEnum || obj is Brush || obj is Style) return;
-                    if (obj is string str) { AddCandidate(str); return; }
-                    if (depth > 0 && t.Namespace != null && t.Namespace.StartsWith("System.Windows")) return;
-
-                    var flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
-                    foreach (var f in t.GetFields(flags))
-                    {
-                        try
-                        {
-                            var v = f.GetValue(obj);
-                            if (v is string sv) AddCandidate(sv);
-                            else if (v != null && t.Namespace != null && t.Namespace.StartsWith("FieldTakHub")) InspectObj(v, depth + 1);
-                        }
-                        catch { }
-                    }
-                    foreach (var p in t.GetProperties(flags))
-                    {
-                        if (p.GetIndexParameters().Length > 0) continue;
-                        try
-                        {
-                            var v = p.GetValue(obj);
-                            if (v is string sv) AddCandidate(sv);
-                        }
-                        catch { }
-                    }
-                }
-
-                InspectObj(win, 0);
-
-                var textBoxes = new List<TextBox>();
-                FindVisualChildren(win, textBoxes);
-                foreach (var tbx in textBoxes) AddCandidate(tbx.Text);
-
-                var textBlocks = new List<TextBlock>();
-                FindVisualChildren(win, textBlocks);
-                foreach (var tb in textBlocks) AddCandidate(tb.Text);
-            }
-
-            if (list.Count == 0)
-            {
-                list.Add(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "workspace", "source"));
-            }
-            return list;
-        }
-
-        private static async Task<SourceStats> ForceSizeUpdateAsync(Window win)
-        {
-            var empty = new SourceStats();
-            if (Application.Current == null || win == null) return empty;
-
-            try
-            {
-                SyncNativeMeshtasticSelections(win);
-                SyncActiveFactionToModel();
-                var sourceDirs = ResolveSourceDirectories(win);
-                var activeProfile = _factions[Math.Clamp(_selectedFactionIndex, 0, _factions.Count - 1)];
-
-                SourceStats bestStats = null;
-                await Task.Run(() =>
-                {
-                    foreach (var sDir in sourceDirs)
-                    {
-                        try
-                        {
-                            if (!Directory.Exists(sDir)) Directory.CreateDirectory(sDir);
-                            WriteConfigsToDirectory(sDir, activeProfile);
-                            var st = CalculateSourceFolderStats(sDir);
-                            if (bestStats == null || st.FileCount > bestStats.FileCount)
-                                bestStats = st;
-                        }
-                        catch { }
-                    }
-                });
-
-                bestStats ??= empty;
-                UpdatePreviewCardLabels(win, bestStats);
-
-                _ = win.Dispatcher.BeginInvoke(new Action(() =>
-                {
-                    UpdatePreviewCardLabels(win, bestStats);
-                }), DispatcherPriority.ApplicationIdle);
-
-                return bestStats;
-            }
-            catch { return empty; }
-        }
-
-        private static SourceStats CalculateSourceFolderStats(string sourceDir)
-        {
-            var stats = new SourceStats { SourcePath = sourceDir };
-            if (string.IsNullOrWhiteSpace(sourceDir) || !Directory.Exists(sourceDir)) return stats;
-
-            try
-            {
-                foreach (var file in Directory.GetFiles(sourceDir, "*", SearchOption.AllDirectories))
-                {
-                    string fileName = Path.GetFileName(file);
-                    if (string.IsNullOrEmpty(fileName) ||
-                        fileName.StartsWith(".", StringComparison.Ordinal) ||
-                        fileName.StartsWith("README", StringComparison.OrdinalIgnoreCase) ||
-                        fileName.EndsWith(".fthproj", StringComparison.OrdinalIgnoreCase) ||
-                        fileName.Equals("WORKSPACE_HELP.txt", StringComparison.OrdinalIgnoreCase))
-                    {
-                        continue;
-                    }
-
-                    long len = 0;
-                    try { len = new FileInfo(file).Length; } catch { continue; }
-
-                    string rel = Path.GetRelativePath(sourceDir, file).Replace('\\', '/').ToLowerInvariant();
-                    string ext = Path.GetExtension(fileName).ToLowerInvariant();
-                    string nameLower = fileName.ToLowerInvariant();
-
-                    stats.FileCount++;
-
-                    // 1. PLUGIN: wyłącznie pliki .apk (lub pliki binarne w katalogu plugins/)
-                    if (ext == ".apk" || (rel.StartsWith("plugins/") && ext != ".kml" && ext != ".kmz" && ext != ".gpx" && ext != ".mbtiles" && ext != ".sqlite" && ext != ".json" && ext != ".pref"))
-                    {
-                        stats.PluginsBytes += len;
-                    }
-                    // 2. MAPY: bazy kafelków, GeoTIFF, źródła map XML oraz cały podfolder maps/
-                    else if (ext == ".mbtiles" || ext == ".sqlite" || ext == ".sqlitedb" || ext == ".tif" || ext == ".tiff" || ext == ".geotiff" ||
-                             ext == ".dt0" || ext == ".dt1" || ext == ".dt2" || ext == ".ovr" || ext == ".ecw" || ext == ".jp2" ||
-                             rel.StartsWith("maps/") || rel.StartsWith("mapy/") || rel.StartsWith("imagery/") ||
-                             (ext == ".xml" && (nameLower.Contains("map") || nameLower.Contains("tile") || nameLower.Contains("online"))) ||
-                             (ext == ".kmz" && (rel.StartsWith("maps/") || nameLower.Contains("mapa") || nameLower.Contains("orto") || nameLower.Contains("lidar") || nameLower.Contains("topo"))))
-                    {
-                        stats.MapsBytes += len;
-                    }
-                    // 3. KONFIGURACJA: profile JSON/PREF, certyfikaty .p12/.pem/.crt, server.txt oraz foldery config/ i certs/
-                    else if (ext == ".json" || ext == ".pref" || ext == ".cfg" || ext == ".conf" || ext == ".ini" ||
-                             ext == ".p12" || ext == ".pfx" || ext == ".pem" || ext == ".crt" || ext == ".cer" || ext == ".key" || ext == ".ovpn" ||
-                             nameLower == "server.txt" || rel.StartsWith("config/") || rel.StartsWith("certs/") || rel.StartsWith("cert/"))
-                    {
-                        stats.ConfigBytes += len;
-                    }
-                    // 4. DANE TAKTYCZNE: warstwy KML/KMZ, ślady GPX, obiekty CoT, GeoJSON, Shapefile oraz foldery atak/, overlays/, factions/
-                    else if (ext == ".kml" || ext == ".kmz" || ext == ".gpx" || ext == ".cot" || ext == ".geojson" ||
-                             ext == ".shp" || ext == ".shx" || ext == ".dbf" || ext == ".csv" ||
-                             rel.StartsWith("atak/") || rel.StartsWith("overlays/") || rel.StartsWith("factions/") || rel.StartsWith("data/"))
-                    {
-                        stats.TacticalBytes += len;
-                    }
-                    // 5. POZOSTAŁE
-                    else
-                    {
-                        stats.OtherBytes += len;
-                    }
-                }
-
-                stats.TotalBytes = stats.MapsBytes + stats.PluginsBytes + stats.ConfigBytes + stats.TacticalBytes + stats.OtherBytes;
-            }
-            catch { }
-            return stats;
-        }
-
-        private static string FormatBytes(long bytes)
-        {
-            if (bytes <= 0) return "0 B";
-            string[] units = { "B", "KB", "MB", "GB" };
-            double val = bytes;
-            int idx = 0;
-            while (val >= 1024 && idx < units.Length - 1) { val /= 1024; idx++; }
-            return idx == 0 ? $"{bytes} B" : $"{val:0.#} {units[idx]}";
-        }
-
-        // Precyzyjne przypisanie każdego wiersza w "Podgląd zawartości" do jego bezpośredniego TextBlocka wartości
-        private static void UpdatePreviewCardLabels(Window win, SourceStats stats)
-        {
-            if (win == null || stats == null) return;
-            try
-            {
-                var allTbs = new List<TextBlock>();
-                FindVisualChildren(win, allTbs);
-
-                Border previewBorder = null;
-                foreach (var tb in allTbs)
-                {
-                    if (tb.Text != null && (tb.Text.Equals("Pliki paczki", StringComparison.OrdinalIgnoreCase) || tb.Text.Contains("Podgląd zawartości")))
-                    {
-                        previewBorder = FindPreviewCardContainer(tb);
-                        if (previewBorder != null) break;
-                    }
-                }
-
-                var searchScope = previewBorder != null ? new List<TextBlock>() : allTbs;
-                if (previewBorder != null) FindVisualChildren(previewBorder, searchScope);
-
-                var rows = new (string LabelPrefix, string FormattedVal)[]
-                {
-                    ("Pliki paczki", FormatBytes(stats.TotalBytes)),
-                    ("Mapy", FormatBytes(stats.MapsBytes)),
-                    ("Pluginy", FormatBytes(stats.PluginsBytes)),
-                    ("Konfiguracja", FormatBytes(stats.ConfigBytes)),
-                    ("Dane taktyczne", FormatBytes(stats.TacticalBytes)),
-                    ("Pozostałe", FormatBytes(stats.OtherBytes))
-                };
-
-                bool IsKnownLabel(string text)
-                {
-                    if (string.IsNullOrWhiteSpace(text)) return true;
-                    string tr = text.Trim();
-                    if (tr.Contains("Podgląd zawartości", StringComparison.OrdinalIgnoreCase)) return true;
-                    return rows.Any(r => tr.StartsWith(r.LabelPrefix, StringComparison.OrdinalIgnoreCase));
-                }
-
-                foreach (var row in rows)
-                {
-                    int labelIdx = searchScope.FindIndex(t => t.Text != null && t.Text.Trim().StartsWith(row.LabelPrefix, StringComparison.OrdinalIgnoreCase));
-                    if (labelIdx < 0) continue;
-
-                    TextBlock labelTb = searchScope[labelIdx];
-                    TextBlock targetValTb = null;
-
-                    // 1. W drzewie XAML wartość stoi bezpośrednio po etykiecie (searchScope[labelIdx + 1])
-                    if (labelIdx + 1 < searchScope.Count && !IsKnownLabel(searchScope[labelIdx + 1].Text))
-                    {
-                        targetValTb = searchScope[labelIdx + 1];
-                    }
-
-                    // 2. Fallback po współrzędnej Y na ekranie (gdyby kolumny były zdefiniowane osobno w XAML)
-                    if (targetValTb == null && previewBorder != null)
-                    {
-                        try
-                        {
-                            Point lblPt = labelTb.TranslatePoint(new Point(0, 0), previewBorder);
-                            double bestDist = double.MaxValue;
-                            foreach (var cand in searchScope)
-                            {
-                                if (cand == labelTb || IsKnownLabel(cand.Text)) continue;
-                                Point cPt = cand.TranslatePoint(new Point(0, 0), previewBorder);
-                                double dy = Math.Abs(cPt.Y - lblPt.Y);
-                                if (dy <= 12 && cPt.X > lblPt.X + 10 && dy < bestDist)
-                                {
-                                    bestDist = dy;
-                                    targetValTb = cand;
-                                }
-                            }
-                        }
-                        catch { }
-                    }
-
-                    if (targetValTb != null)
-                    {
-                        targetValTb.Text = row.FormattedVal;
-                        targetValTb.ToolTip = BuildStatsTooltip(stats);
-                    }
-                }
-            }
-            catch { }
-        }
-
-        // =========================================================================
-        // KARTA ATAK-CIV ORAZ WAŻNOŚĆ BEZTERMINOWA (0 = BEZTERMINOWO)
-        // =========================================================================
-        private static UIElement BuildAtakCard(Window win)
-        {
-            var m = Current;
-            var card = new Border { Background = BrushCardBg, BorderBrush = BrushCardBorder, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(8), Padding = new Thickness(14), Margin = new Thickness(0, 0, 0, 14), Tag = "INJECTED_ATAK" };
-            var lStack = new StackPanel();
-            lStack.Children.Add(new TextBlock { Text = "Konfiguracja ATAK-CIV (PLI, siec oraz waznosc paczki/QR)", Foreground = Brushes.White, FontWeight = FontWeights.Bold, FontSize = 14, Margin = new Thickness(0, 0, 0, 4) });
-            lStack.Children.Add(new TextBlock { Text = "Czysty profil ATAK bez wymuszania wtyczek. Wpisanie 0 w polach waznosci oznacza waznosc bezterminowa.", Foreground = BrushMutedText, FontSize = 11, Margin = new Thickness(0, 0, 0, 10) });
-
-            var gAtak = new UniformGrid { Columns = 3, Margin = new Thickness(0, 0, 0, 8) };
-            gAtak.Children.Add(FieldBox("Strategia PLI", ComboCtrl(new[] { "Constant", "Dynamic" }, m.LocationReportingStrategy, win, v => { m.LocationReportingStrategy = v; })));
-            gAtak.Children.Add(FieldBox("Const Rel/LTE (s)", IntCtrl(m.ConstantReportingRateReliable, v => { m.ConstantReportingRateReliable = v; })));
-            gAtak.Children.Add(FieldBox("Const Unrel/Mesh (s)", IntCtrl(m.ConstantReportingRateUnreliable, v => { m.ConstantReportingRateUnreliable = v; })));
-            gAtak.Children.Add(FieldBox("Dynamic Max (s)", IntCtrl(m.DynamicReportingRateMaxReliable, v => { m.DynamicReportingRateMaxReliable = v; })));
-            gAtak.Children.Add(FieldBox("Dynamic Min (s)", IntCtrl(m.DynamicReportingRateMinReliable, v => { m.DynamicReportingRateMinReliable = v; })));
-            gAtak.Children.Add(FieldBox("Postoj Rel (s)", IntCtrl(m.DynamicReportingRateStationaryReliable, v => { m.DynamicReportingRateStationaryReliable = v; })));
-            gAtak.Children.Add(FieldBox("Postoj Mesh (s)", IntCtrl(m.DynamicReportingRateStationaryUnreliable, v => { m.DynamicReportingRateStationaryUnreliable = v; })));
-            gAtak.Children.Add(FieldBox("TCP/UDP Timeout (s)", IntCtrl(m.TcpConnectTimeout, v => { m.TcpConnectTimeout = v; })));
-            lStack.Children.Add(gAtak);
-
-            var gValidity = new UniformGrid { Columns = 2, Margin = new Thickness(0, 2, 0, 4) };
-            _injectedPkgValidityBox = ValidityTextCtrl(m.PackageValidityHours, v => { m.PackageValidityHours = v; SyncValidityToNativeControls(win); });
-            _injectedQrValidityBox = ValidityTextCtrl(m.QrValidityHours, v => { m.QrValidityHours = v; SyncValidityToNativeControls(win); });
-
-            gValidity.Children.Add(FieldBox("Ważność paczki .ftak (godz., 0 = bezterminowo)", _injectedPkgValidityBox));
-            gValidity.Children.Add(FieldBox("Ważność kodu QR (godz., 0 = bezterminowo)", _injectedQrValidityBox));
-            lStack.Children.Add(gValidity);
-
-            _indefiniteStatusBadge = new TextBlock { FontSize = 11, FontWeight = FontWeights.SemiBold, Margin = new Thickness(0, 0, 0, 8) };
-            UpdateIndefiniteBadge();
-            lStack.Children.Add(_indefiniteStatusBadge);
-
-            var gSw = new UniformGrid { Columns = 2 };
-            gSw.Children.Add(TileSwitch("Wysylaj pozycje na zewnatrz", m.DispatchLocationCotExternal, v => { m.DispatchLocationCotExternal = v; }));
-            gSw.Children.Add(TileSwitch("Polaczenia bezstrumieniowe Mesh", m.EnableNonStreamingConnections, v => { m.EnableNonStreamingConnections = v; }));
-            lStack.Children.Add(gSw);
-
-            card.Child = lStack;
-            return card;
-        }
-
-        private static TextBox ValidityTextCtrl(int init, Action<int> onChg)
-        {
-            var tb = new TextBox
-            {
-                Text = init.ToString(),
-                Height = 28,
-                VerticalContentAlignment = VerticalAlignment.Center,
-                Padding = new Thickness(6, 0, 6, 0),
-                FontSize = 11,
-                Background = BrushInputBg,
-                Foreground = Brushes.White,
-                BorderBrush = (init == 0) ? BrushAccent : BrushInputBorder,
-                BorderThickness = new Thickness(1),
-                Tag = "INJECTED_VALIDITY"
-            };
-            tb.TextChanged += (_, __) =>
-            {
-                if (int.TryParse(tb.Text.Trim(), out int v) && v >= 0)
-                {
-                    tb.BorderBrush = (v == 0) ? BrushAccent : BrushInputBorder;
-                    onChg(v);
-                }
-            };
-            return tb;
         }
 
         private static List<TextBox> FindNativeValidityTextBoxes(Window win)
@@ -2041,9 +1683,431 @@ namespace FieldTakHub.Builder.Services
                     string vLower = val.ToLowerInvariant();
                     if (vLower.Contains("tbeam") || vLower.Contains("heltec") || vLower.Contains("meshtracker") || vLower.Contains("rak") || vLower.Contains("generic") || vLower == "other")
                         Current.HardwareModel = val;
+                    else if (vLower == "auto" || vLower.Contains("tak") || vLower.Contains("client") || vLower.Contains("router") || vLower.Contains("tracker"))
+                        Current.DeviceRole = val;
                 }
             }
             catch { }
+        }
+
+        private static List<string> ResolveSourceDirectories(Window win)
+        {
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var list = new List<string>();
+
+            void AddCandidate(string raw)
+            {
+                if (string.IsNullOrWhiteSpace(raw) || raw.Length < 3) return;
+                try
+                {
+                    string clean = Path.TrimEndingDirectorySeparator(raw.Trim().Trim('"'));
+                    if (!Path.IsPathRooted(clean)) return;
+                    if (File.Exists(clean)) clean = Path.GetDirectoryName(clean) ?? "";
+                    if (Directory.Exists(clean))
+                    {
+                        string dirToAdd = string.Equals(Path.GetFileName(clean), "source", StringComparison.OrdinalIgnoreCase)
+                            ? clean
+                            : Path.Combine(clean, "source");
+                        if (seen.Add(dirToAdd)) list.Add(dirToAdd);
+                    }
+                }
+                catch { }
+            }
+
+            if (!string.IsNullOrWhiteSpace(LastKnownSourceDir)) AddCandidate(LastKnownSourceDir);
+
+            if (win != null)
+            {
+                var flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+                foreach (var f in win.GetType().GetFields(flags))
+                {
+                    try { if (f.GetValue(win) is string s) AddCandidate(s); } catch { }
+                }
+                var textBoxes = new List<TextBox>();
+                FindVisualChildren(win, textBoxes);
+                foreach (var tbx in textBoxes) AddCandidate(tbx.Text);
+            }
+
+            if (list.Count == 0)
+            {
+                list.Add(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "workspace", "source"));
+            }
+            return list;
+        }
+
+        // =========================================================================
+        // 3. KALKULATOR ROZMIARU Z ROZBICIEM NA 6 KATEGORII (PLIKI PACZKI, MAPY, PLUGINY, KONFIGURACJA, DANE TAKTYCZNE, POZOSTAŁE)
+        // =========================================================================
+        private class SourceStats
+        {
+            public string SourcePath = "";
+            public int FileCount;
+            public long TotalBytes;
+            public long MapsBytes;
+            public long PluginsBytes;
+            public long ConfigBytes;
+            public long TacticalBytes;
+            public long OtherBytes;
+        }
+
+        private static void EnsureWatcherForDirectory(Window win, string sourceDir)
+        {
+            if (string.IsNullOrWhiteSpace(sourceDir) || !Directory.Exists(sourceDir)) return;
+            if (string.Equals(_watchedDir, sourceDir, StringComparison.OrdinalIgnoreCase)) return;
+
+            try
+            {
+                _sourceWatcher?.Dispose();
+                _watchedDir = sourceDir;
+                _sourceWatcher = new FileSystemWatcher(sourceDir)
+                {
+                    IncludeSubdirectories = true,
+                    EnableRaisingEvents = true
+                };
+
+                void OnFsChange(object sender, FileSystemEventArgs e)
+                {
+                    if (e.Name != null && e.Name.EndsWith("tactical_config.json", StringComparison.OrdinalIgnoreCase)) return;
+                    win?.Dispatcher?.BeginInvoke(new Action(async () =>
+                    {
+                        var st = await Task.Run(() => CalculateSourceFolderStats(sourceDir));
+                        UpdatePreviewCardLabels(win, st);
+                    }), DispatcherPriority.Background);
+                }
+
+                _sourceWatcher.Created += OnFsChange;
+                _sourceWatcher.Deleted += OnFsChange;
+                _sourceWatcher.Changed += OnFsChange;
+                _sourceWatcher.Renamed += (s, e) => OnFsChange(s, e);
+            }
+            catch { }
+        }
+
+        private static async Task<SourceStats> ForceSizeUpdateAsync(Window win)
+        {
+            var empty = new SourceStats();
+            if (Application.Current == null || win == null) return empty;
+
+            try
+            {
+                EnsureDefaultFactions();
+                SyncNativeMeshtasticSelections(win);
+                SyncActiveFactionToDefaultModel();
+                var activeFac = _factions[Math.Clamp(_selectedFactionIndex, 0, _factions.Count - 1)];
+                var sourceDirs = ResolveSourceDirectories(win);
+
+                SourceStats bestStats = null;
+                await Task.Run(() =>
+                {
+                    foreach (var sDir in sourceDirs)
+                    {
+                        try
+                        {
+                            if (!Directory.Exists(sDir)) Directory.CreateDirectory(sDir);
+                            WriteConfigsToDirectory(sDir, activeFac);
+                            var st = CalculateSourceFolderStats(sDir);
+                            if (bestStats == null || st.FileCount > bestStats.FileCount || st.TotalBytes > bestStats.TotalBytes)
+                                bestStats = st;
+                        }
+                        catch { }
+                    }
+                });
+
+                bestStats ??= empty;
+                EnsureWatcherForDirectory(win, bestStats.SourcePath);
+                UpdatePreviewCardLabels(win, bestStats);
+
+                _ = win.Dispatcher.BeginInvoke(new Action(() =>
+                {
+                    UpdatePreviewCardLabels(win, bestStats);
+                }), DispatcherPriority.ApplicationIdle);
+
+                return bestStats;
+            }
+            catch { return empty; }
+        }
+
+        private static SourceStats CalculateSourceFolderStats(string sourceDir)
+        {
+            var stats = new SourceStats { SourcePath = sourceDir };
+            if (string.IsNullOrWhiteSpace(sourceDir) || !Directory.Exists(sourceDir)) return stats;
+
+            try
+            {
+                foreach (var file in Directory.GetFiles(sourceDir, "*", SearchOption.AllDirectories))
+                {
+                    string fileName = Path.GetFileName(file);
+                    if (string.IsNullOrEmpty(fileName) ||
+                        fileName.StartsWith(".", StringComparison.Ordinal) ||
+                        fileName.StartsWith("README", StringComparison.OrdinalIgnoreCase) ||
+                        fileName.EndsWith(".fthproj", StringComparison.OrdinalIgnoreCase) ||
+                        fileName.Equals("WORKSPACE_HELP.txt", StringComparison.OrdinalIgnoreCase))
+                    {
+                        continue;
+                    }
+
+                    long len = 0;
+                    try { len = new FileInfo(file).Length; } catch { continue; }
+
+                    string rel = Path.GetRelativePath(sourceDir, file).Replace('\\', '/').ToLowerInvariant();
+                    string ext = Path.GetExtension(fileName).ToLowerInvariant();
+                    string nameLower = fileName.ToLowerInvariant();
+
+                    stats.FileCount++;
+                    stats.TotalBytes += len;
+
+                    // 1. PLUGINY: wyłącznie pliki .apk lub pliki w folderze plugins/
+                    if (ext == ".apk" || rel.StartsWith("plugins/") || rel.StartsWith("wtyczki/"))
+                    {
+                        stats.PluginsBytes += len;
+                    }
+                    // 2. MAPY: pliki w folderze maps/imagery/tiles lub formaty rastrowe/kafelkowe
+                    else if (rel.StartsWith("maps/") || rel.StartsWith("mapy/") || rel.StartsWith("imagery/") || rel.StartsWith("tiles/") ||
+                             ext == ".mbtiles" || ext == ".sqlite" || ext == ".sqlitedb" || ext == ".tif" || ext == ".tiff" || ext == ".geotiff" ||
+                             ext == ".dt0" || ext == ".dt1" || ext == ".dt2" || ext == ".ecw" || ext == ".jp2" ||
+                             ((ext == ".kmz" || ext == ".xml" || ext == ".pdf") && (nameLower.Contains("map") || nameLower.Contains("orto") || nameLower.Contains("lidar") || nameLower.Contains("topo"))))
+                    {
+                        stats.MapsBytes += len;
+                    }
+                    // 3. KONFIGURACJA: pliki konfiguracyjne i certyfikaty
+                    else if (rel.StartsWith("config/") || rel.StartsWith("konfiguracja/") || rel.StartsWith("certs/") || rel.StartsWith("cert/") || rel.StartsWith("meshtastic/") ||
+                             ext == ".json" || ext == ".pref" || ext == ".cfg" || ext == ".conf" || ext == ".ini" ||
+                             ext == ".p12" || ext == ".pem" || ext == ".crt" || ext == ".cer" || ext == ".key" ||
+                             nameLower == "server.txt" || nameLower == "manifest.xml")
+                    {
+                        stats.ConfigBytes += len;
+                    }
+                    // 4. DANE TAKTYCZNE: nakładki KML/KMZ/GPX/CoT/Shapefile oraz foldery atak/overlays/factions/data
+                    else if (rel.StartsWith("atak/") || rel.StartsWith("overlays/") || rel.StartsWith("nakladki/") || rel.StartsWith("factions/") || rel.StartsWith("strony/") || rel.StartsWith("data/") ||
+                             ext == ".kml" || ext == ".kmz" || ext == ".gpx" || ext == ".cot" || ext == ".geojson" || ext == ".shp" || ext == ".drw" || ext == ".ovl")
+                    {
+                        stats.TacticalBytes += len;
+                    }
+                    // 5. POZOSTAŁE
+                    else
+                    {
+                        stats.OtherBytes += len;
+                    }
+                }
+            }
+            catch { }
+            return stats;
+        }
+
+        private static string FormatBytes(long bytes)
+        {
+            if (bytes <= 0) return "0 B";
+            string[] units = { "B", "KB", "MB", "GB" };
+            double val = bytes;
+            int idx = 0;
+            while (val >= 1024 && idx < units.Length - 1) { val /= 1024; idx++; }
+            return idx == 0 ? $"{bytes} B" : $"{val:0.#} {units[idx]}";
+        }
+
+        private static void UpdatePreviewCardLabels(Window win, SourceStats stats)
+        {
+            if (win == null || stats == null) return;
+            try
+            {
+                Border previewBorder = GetPreviewCardBorder(win);
+                if (previewBorder == null) return;
+
+                previewBorder.UpdateLayout();
+
+                var cardTbs = new List<TextBlock>();
+                FindVisualChildren(previewBorder, cardTbs);
+
+                string[] rowLabels = { "Pliki paczki", "Mapy", "Pluginy", "Konfiguracja", "Dane taktyczne", "Pozostałe" };
+                string[] rowValues = {
+                    FormatBytes(stats.TotalBytes),
+                    FormatBytes(stats.MapsBytes),
+                    FormatBytes(stats.PluginsBytes),
+                    FormatBytes(stats.ConfigBytes),
+                    FormatBytes(stats.TacticalBytes),
+                    FormatBytes(stats.OtherBytes)
+                };
+
+                bool IsLabelOrHeader(string text)
+                {
+                    if (string.IsNullOrWhiteSpace(text)) return true;
+                    string tr = text.Trim();
+                    if (tr.Contains("Podgląd zawartości", StringComparison.OrdinalIgnoreCase) || tr.Contains("Content preview", StringComparison.OrdinalIgnoreCase))
+                        return true;
+                    return rowLabels.Any(l => tr.StartsWith(l, StringComparison.OrdinalIgnoreCase));
+                }
+
+                var assignedValueTbs = new HashSet<TextBlock>();
+
+                for (int r = 0; r < rowLabels.Length; r++)
+                {
+                    var labelTb = cardTbs.FirstOrDefault(t => t.Text != null && t.Text.Trim().StartsWith(rowLabels[r], StringComparison.OrdinalIgnoreCase));
+                    if (labelTb == null) continue;
+
+                    TextBlock matchedValueTb = null;
+                    var parent = VisualTreeHelper.GetParent(labelTb);
+
+                    // Krok 1: Jeżeli wiersz ma własny kontener (np. DockPanel/Grid wierszowy z 2 TextBlockami)
+                    if (parent != null)
+                    {
+                        var parentTbs = new List<TextBlock>();
+                        FindVisualChildren(parent, parentTbs);
+                        if (parentTbs.Count == 2)
+                        {
+                            matchedValueTb = parentTbs.FirstOrDefault(x => x != labelTb && !IsLabelOrHeader(x.Text));
+                        }
+                        else if (parent is Grid grid && grid.RowDefinitions.Count >= 6)
+                        {
+                            int targetRow = Grid.GetRow(labelTb);
+                            foreach (UIElement child in grid.Children)
+                            {
+                                if (child is TextBlock sib && sib != labelTb && Grid.GetRow(sib) == targetRow && !IsLabelOrHeader(sib.Text))
+                                {
+                                    matchedValueTb = sib;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+
+                    // Krok 2: Dopasowanie po współrzędnej pionowej Y na ekranie
+                    if (matchedValueTb == null)
+                    {
+                        try
+                        {
+                            Point lblPt = labelTb.TranslatePoint(new Point(0, labelTb.ActualHeight / 2.0), previewBorder);
+                            double bestDy = double.MaxValue;
+                            foreach (var cand in cardTbs)
+                            {
+                                if (cand == labelTb || assignedValueTbs.Contains(cand) || IsLabelOrHeader(cand.Text)) continue;
+                                Point candPt = cand.TranslatePoint(new Point(0, cand.ActualHeight / 2.0), previewBorder);
+                                double dy = Math.Abs(candPt.Y - lblPt.Y);
+                                if (dy <= 16.0 && candPt.X > lblPt.X + 5.0 && dy < bestDy)
+                                {
+                                    bestDy = dy;
+                                    matchedValueTb = cand;
+                                }
+                            }
+                        }
+                        catch { }
+                    }
+
+                    // Krok 3: Bezpośredni sąsiad w drzewie XAML
+                    if (matchedValueTb == null)
+                    {
+                        int idx = cardTbs.IndexOf(labelTb);
+                        if (idx >= 0 && idx + 1 < cardTbs.Count && !IsLabelOrHeader(cardTbs[idx + 1].Text) && !assignedValueTbs.Contains(cardTbs[idx + 1]))
+                        {
+                            matchedValueTb = cardTbs[idx + 1];
+                        }
+                    }
+
+                    if (matchedValueTb != null)
+                    {
+                        matchedValueTb.Text = rowValues[r];
+                        assignedValueTbs.Add(matchedValueTb);
+                    }
+                }
+
+                // Fallback: jeżeli wszystkie 6 wartościowych TextBlocków jest w karcie, przypisz je w kolejności góra-dół
+                if (assignedValueTbs.Count < 6)
+                {
+                    var allValueTbs = cardTbs.Where(t => !IsLabelOrHeader(t.Text) && t.Text != null && t.Text.Length <= 24).ToList();
+                    if (allValueTbs.Count == 6)
+                    {
+                        for (int i = 0; i < 6; i++) allValueTbs[i].Text = rowValues[i];
+                    }
+                }
+            }
+            catch { }
+        }
+
+        private static UIElement BuildAtakCard(Window win)
+        {
+            var m = Current;
+            var card = new Border { Background = BrushCardBg, BorderBrush = BrushCardBorder, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(8), Padding = new Thickness(14), Margin = new Thickness(0, 0, 0, 14), Tag = "INJECTED_ATAK" };
+            var lStack = new StackPanel();
+            lStack.Children.Add(new TextBlock { Text = "Konfiguracja ATAK-CIV (PLI, siec oraz waznosc paczki/QR)", Foreground = Brushes.White, FontWeight = FontWeights.Bold, FontSize = 14, Margin = new Thickness(0, 0, 0, 4) });
+            lStack.Children.Add(new TextBlock { Text = "Czysty profil ATAK bez wymuszania wtyczek. Wpisanie 0 w polach waznosci oznacza waznosc bezterminowa.", Foreground = BrushMutedText, FontSize = 11, Margin = new Thickness(0, 0, 0, 10) });
+
+            var gAtak = new UniformGrid { Columns = 3, Margin = new Thickness(0, 0, 0, 8) };
+            gAtak.Children.Add(FieldBox("Strategia PLI", ComboCtrl(new[] { "Constant", "Dynamic" }, m.LocationReportingStrategy, win, v => { m.LocationReportingStrategy = v; })));
+            gAtak.Children.Add(FieldBox("Const Rel/LTE (s)", IntCtrl(m.ConstantReportingRateReliable, v => { m.ConstantReportingRateReliable = v; })));
+            gAtak.Children.Add(FieldBox("Const Unrel/Mesh (s)", IntCtrl(m.ConstantReportingRateUnreliable, v => { m.ConstantReportingRateUnreliable = v; })));
+            gAtak.Children.Add(FieldBox("Dynamic Max (s)", IntCtrl(m.DynamicReportingRateMaxReliable, v => { m.DynamicReportingRateMaxReliable = v; })));
+            gAtak.Children.Add(FieldBox("Dynamic Min (s)", IntCtrl(m.DynamicReportingRateMinReliable, v => { m.DynamicReportingRateMinReliable = v; })));
+            gAtak.Children.Add(FieldBox("Postoj Rel (s)", IntCtrl(m.DynamicReportingRateStationaryReliable, v => { m.DynamicReportingRateStationaryReliable = v; })));
+            gAtak.Children.Add(FieldBox("Postoj Mesh (s)", IntCtrl(m.DynamicReportingRateStationaryUnreliable, v => { m.DynamicReportingRateStationaryUnreliable = v; })));
+            gAtak.Children.Add(FieldBox("TCP/UDP Timeout (s)", IntCtrl(m.TcpConnectTimeout, v => { m.TcpConnectTimeout = v; })));
+            lStack.Children.Add(gAtak);
+
+            var gValidity = new UniformGrid { Columns = 2, Margin = new Thickness(0, 2, 0, 4) };
+            _injectedPkgValidityBox = ValidityTextCtrl(m.PackageValidityHours, v => { m.PackageValidityHours = v; SyncValidityToNativeControls(win); });
+            _injectedQrValidityBox = ValidityTextCtrl(m.QrValidityHours, v => { m.QrValidityHours = v; SyncValidityToNativeControls(win); });
+
+            gValidity.Children.Add(FieldBox("Ważność paczki .ftak (godz., 0 = bezterminowo)", _injectedPkgValidityBox));
+            gValidity.Children.Add(FieldBox("Ważność kodu QR (godz., 0 = bezterminowo)", _injectedQrValidityBox));
+            lStack.Children.Add(gValidity);
+
+            _indefiniteStatusBadge = new TextBlock { FontSize = 11, FontWeight = FontWeights.SemiBold, Margin = new Thickness(0, 0, 0, 8) };
+            UpdateIndefiniteBadge();
+            lStack.Children.Add(_indefiniteStatusBadge);
+
+            var gSw = new UniformGrid { Columns = 2 };
+            gSw.Children.Add(TileSwitch("Wysylaj pozycje na zewnatrz", m.DispatchLocationCotExternal, v => { m.DispatchLocationCotExternal = v; }));
+            gSw.Children.Add(TileSwitch("Polaczenia bezstrumieniowe Mesh", m.EnableNonStreamingConnections, v => { m.EnableNonStreamingConnections = v; }));
+            lStack.Children.Add(gSw);
+
+            card.Child = lStack;
+            return card;
+        }
+
+        private static TextBox ValidityTextCtrl(int init, Action<int> onChg)
+        {
+            var tb = new TextBox
+            {
+                Text = init.ToString(),
+                Height = 28,
+                VerticalContentAlignment = VerticalAlignment.Center,
+                Padding = new Thickness(6, 0, 6, 0),
+                FontSize = 11,
+                Background = BrushInputBg,
+                Foreground = Brushes.White,
+                BorderBrush = (init == 0) ? BrushAccent : BrushInputBorder,
+                BorderThickness = new Thickness(1),
+                Tag = "INJECTED_VALIDITY"
+            };
+            tb.TextChanged += (_, __) =>
+            {
+                if (int.TryParse(tb.Text.Trim(), out int v) && v >= 0)
+                {
+                    tb.BorderBrush = (v == 0) ? BrushAccent : BrushInputBorder;
+                    onChg(v);
+                }
+            };
+            return tb;
+        }
+
+        private static void InjectMeshtasticFields(Panel parentPanel, Window win)
+        {
+            var loraGrid = new UniformGrid { Columns = 2, Margin = new Thickness(0, 8, 0, 0), Tag = "INJECTED_FW" };
+            loraGrid.Children.Add(FieldBox("LoRa Region", ComboCtrl(new[] { "EU_868", "US_915", "EU_433", "ANZ_915", "RU_864", "KR_920" }, Current.LoraRegion, win, v => { Current.LoraRegion = v; })));
+            loraGrid.Children.Add(FieldBox("LoRa Modem Preset", ComboCtrl(new[] { "SHORT_FAST", "LONG_FAST", "LONG_SLOW", "MEDIUM_SLOW", "MEDIUM_FAST" }, Current.LoraModemPreset, win, v => { Current.LoraModemPreset = v; })));
+            parentPanel.Children.Add(loraGrid);
+
+            var fwContainer = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 8, 0, 0) };
+            var labelMin = new TextBlock { Text = "Firmware MIN:", Foreground = BrushMutedText, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 8, 0) };
+            var txtMin = new TextBox { Text = Current.FirmwareMin, Width = 70, Height = 24, Background = BrushInputBg, Foreground = Brushes.White, BorderBrush = BrushInputBorder, BorderThickness = new Thickness(1), VerticalContentAlignment = VerticalAlignment.Center, Padding = new Thickness(4, 0, 4, 0) };
+            txtMin.TextChanged += (_, __) => { Current.FirmwareMin = txtMin.Text; };
+
+            var labelMax = new TextBlock { Text = "Firmware MAX:", Foreground = BrushMutedText, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(16, 0, 8, 0) };
+            var txtMax = new TextBox { Text = Current.FirmwareMax, Width = 70, Height = 24, Background = BrushInputBg, Foreground = Brushes.White, BorderBrush = BrushInputBorder, BorderThickness = new Thickness(1), VerticalContentAlignment = VerticalAlignment.Center, Padding = new Thickness(4, 0, 4, 0) };
+            txtMax.TextChanged += (_, __) => { Current.FirmwareMax = txtMax.Text; };
+
+            fwContainer.Children.Add(labelMin);
+            fwContainer.Children.Add(txtMin);
+            fwContainer.Children.Add(labelMax);
+            fwContainer.Children.Add(txtMax);
+            parentPanel.Children.Add(fwContainer);
         }
 
         internal static UIElement FieldBox(string label, UIElement ctrl)
@@ -2079,9 +2143,9 @@ namespace FieldTakHub.Builder.Services
             return cb;
         }
 
-        private static UIElement TileSwitch(string title, bool init, Action<bool> onChg)
+        private static FrameworkElement TileSwitch(string title, bool init, Action<bool> onChg)
         {
-            var b = new Border { Background = BrushItemBg, BorderBrush = BrushTileBorder, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(6), Padding = new Thickness(10, 6, 10, 6), Margin = new Thickness(0, 0, 8, 6) };
+            var b = new Border { Background = BrushInputBg, BorderBrush = BrushTileBorder, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(6), Padding = new Thickness(10, 6, 10, 6), Margin = new Thickness(0, 0, 8, 6) };
             var g = new Grid(); g.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) }); g.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
             var tb = new TextBlock { Text = title, Foreground = Brushes.White, FontWeight = FontWeights.SemiBold, FontSize = 11, VerticalAlignment = VerticalAlignment.Center };
             var tr = new Border { Width = 36, Height = 20, CornerRadius = new CornerRadius(10), Cursor = Cursors.Hand, VerticalAlignment = VerticalAlignment.Center };
@@ -2108,14 +2172,18 @@ namespace FieldTakHub.Builder.Services
             LastKnownSourceDir = tgt;
             if (Application.Current == null) return;
             EnsureDefaultFactions();
-            WriteConfigsToDirectory(tgt, _factions[Math.Clamp(_selectedFactionIndex, 0, _factions.Count - 1)]);
+            var activeFac = _factions[Math.Clamp(_selectedFactionIndex, 0, _factions.Count - 1)];
+            WriteConfigsToDirectory(tgt, activeFac);
         }
 
-        private static void WriteConfigsToDirectory(string tgt, FactionConfigProfile fac)
+        private static void WriteConfigsToDirectory(string tgt, FactionProfileModel fac = null)
         {
-            if (string.IsNullOrWhiteSpace(tgt) || fac == null) return;
+            if (string.IsNullOrWhiteSpace(tgt)) return;
             try
             {
+                EnsureDefaultFactions();
+                fac ??= _factions[Math.Clamp(_selectedFactionIndex, 0, _factions.Count - 1)];
+
                 if (!Directory.Exists(tgt)) Directory.CreateDirectory(tgt);
                 string jsonPath = Path.Combine(tgt, "tactical_config.json");
 
@@ -2136,10 +2204,81 @@ namespace FieldTakHub.Builder.Services
                     ? DateTimeOffset.UtcNow.AddYears(100).ToString("o")
                     : DateTimeOffset.UtcNow.AddHours(Current.PackageValidityHours).ToString("o");
 
-                // Sekcja ATAK
+                // 1. Sekcja ATAK
                 JsonObject atak;
                 if (root.TryGetPropertyValue("atak", out var atakNode) && atakNode is JsonObject existingAtak) atak = existingAtak;
                 else { atak = new JsonObject(); root["atak"] = atak; }
 
                 atak["locationReportingStrategy"] = Current.LocationReportingStrategy;
-                atak["constantReportingRateReliable"] = Current.ConstantReportingRate
+                atak["constantReportingRateReliable"] = Current.ConstantReportingRateReliable;
+                atak["constantReportingRateUnreliable"] = Current.ConstantReportingRateUnreliable;
+                atak["dynamicReportingRateMinReliable"] = Current.DynamicReportingRateMinReliable;
+                atak["dynamicReportingRateMaxReliable"] = Current.DynamicReportingRateMaxReliable;
+                atak["dynamicReportingRateStationaryReliable"] = Current.DynamicReportingRateStationaryReliable;
+                atak["dynamicReportingRateStationaryUnreliable"] = Current.DynamicReportingRateStationaryUnreliable;
+                atak["tcpConnectTimeout"] = Current.TcpConnectTimeout;
+                atak["udpNoDataTimeout"] = Current.UdpNoDataTimeout;
+                atak["dispatchLocationCotExternal"] = Current.DispatchLocationCotExternal;
+                atak["dispatchLocationCotExternalAtStart"] = Current.DispatchLocationCotExternalAtStart;
+                atak["enableNonStreamingConnections"] = Current.EnableNonStreamingConnections;
+                atak["autoDisableMeshSAWhenStreaming"] = Current.AutoDisableMeshSAWhenStreaming;
+
+                // 2. Sekcja OpenTAKServer (OTS) + Enrollment
+                JsonObject ots;
+                if (root.TryGetPropertyValue("openTakServer", out var otsNode) && otsNode is JsonObject existingOts) ots = existingOts;
+                else { ots = new JsonObject(); root["openTakServer"] = ots; }
+
+                ots["host"] = fac.OtsHost;
+                ots["sslPort"] = fac.OtsSslPort;
+                ots["enrollmentPort"] = fac.OtsEnrollmentPort;
+                ots["enableAutoEnrollment"] = fac.EnableAutoEnrollment;
+                ots["enrollmentUsername"] = fac.EnrollmentUsername;
+                ots["enrollmentPassword"] = fac.EnrollmentPassword;
+
+                // 3. Sekcja MESHTASTIC + LORA
+                JsonObject mesh;
+                if (root.TryGetPropertyValue("meshtastic", out var meshNode) && meshNode is JsonObject existingMesh) mesh = existingMesh;
+                else { mesh = new JsonObject(); root["meshtastic"] = mesh; }
+
+                mesh["firmwareMin"] = Current.FirmwareMin;
+                mesh["firmwareMax"] = Current.FirmwareMax;
+                mesh["role"] = fac.DeviceRole;
+                mesh["deviceRole"] = fac.DeviceRole;
+                mesh["model"] = Current.HardwareModel;
+                mesh["hardwareModel"] = Current.HardwareModel;
+                mesh["region"] = fac.LoraRegion;
+                mesh["loraRegion"] = fac.LoraRegion;
+                mesh["modemPreset"] = fac.LoraModemPreset;
+                mesh["loraModemPreset"] = fac.LoraModemPreset;
+                mesh["channelName"] = fac.ChannelName;
+                mesh["psk"] = fac.Psk;
+                mesh["usePreset"] = true;
+
+                JsonObject lora;
+                if (mesh.TryGetPropertyValue("lora", out var loraNode) && loraNode is JsonObject existingLora) lora = existingLora;
+                else { lora = new JsonObject(); mesh["lora"] = lora; }
+
+                lora["region"] = fac.LoraRegion;
+                lora["modemPreset"] = fac.LoraModemPreset;
+                lora["channelName"] = fac.ChannelName;
+                lora["psk"] = fac.Psk;
+                lora["usePreset"] = true;
+                lora["hopLimit"] = 3;
+                lora["txEnabled"] = true;
+
+                JsonObject rootLora;
+                if (root.TryGetPropertyValue("lora", out var rLoraNode) && rLoraNode is JsonObject existingRLora) rootLora = existingRLora;
+                else { rootLora = new JsonObject(); root["lora"] = rootLora; }
+
+                rootLora["region"] = fac.LoraRegion;
+                rootLora["modemPreset"] = fac.LoraModemPreset;
+                rootLora["channelName"] = fac.ChannelName;
+                rootLora["psk"] = fac.Psk;
+                rootLora["usePreset"] = true;
+
+                File.WriteAllText(jsonPath, root.ToJsonString(new JsonSerializerOptions { WriteIndented = true }), Encoding.UTF8);
+            }
+            catch { }
+        }
+    }
+}
