@@ -56,7 +56,7 @@ namespace FieldTakHub.Builder.Services
         private static UIElement _originalWindowContent;
         private static Border _fullScreenOverlay;
         private static Button _tabBuilderBtn, _tabMapBtn, _btnToolPan, _btnToolMarker, _btnToolDot, _btnToolAo, _btnToolRoute;
-        private static final List<Button> _scalePresetButtons = new List<Button>();
+        private static readonly List<Button> _scalePresetButtons = new List<Button>();
         private static Canvas _mapCanvas;
         private static TextBlock _statusText, _coordsBadge, _gridThicknessValueLabel;
         private static StackPanel _objectsListStack;
@@ -114,13 +114,11 @@ namespace FieldTakHub.Builder.Services
             return c;
         }
 
-        // Dokładna rozdzielczość terenowa (m/px) wynikająca bezpośrednio z wybranej skali 1:X (przy 96 DPI: 1 px = 0.26458333 mm)
         private static double GetExactMetersPerPixel()
         {
             return Math.Max(0.05, _targetScaleDenominator * 0.000264583333);
         }
 
-        // Rozmiar pojedynczego kafelka 256x256 po przeskalowaniu do dokładnej skali 1:X
         private static double GetScaledTileSizePx()
         {
             double nativeTileMetersPerPx = (156543.03392 * Math.Cos(_centerLat * Math.PI / 180.0)) / Math.Pow(2.0, _zoom);
@@ -234,7 +232,6 @@ namespace FieldTakHub.Builder.Services
             var leftScroll = new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Background = TacticalConfigPanel.BrushCardBg, Padding = new Thickness(10) };
             var leftStack = new StackPanel { Margin = new Thickness(6) };
 
-            // SEKCJA 1: ARKUSZ, SKALA MAPY 1:X, PODKŁAD & LiDAR ISOK (W spójnej kolorystyce Field TAK Hub)
             var sec1 = CreateSectionCard("1. ARKUSZ, DOKŁADNA SKALA MAPY (1:X), PODKŁAD & LiDAR ISOK");
             var searchRow = new Grid { Margin = new Thickness(0, 0, 0, 6) };
             searchRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
@@ -293,7 +290,6 @@ namespace FieldTakHub.Builder.Services
             sec1.Children.Add(lidarBox);
             leftStack.Children.Add(WrapCard(sec1));
 
-            // SEKCJA 2: SYSTEM WSPÓŁRZĘDNYCH I SIATKA (Z wyraźnym podziałem Keypad 1-9 i Ćwiartkami A,B,C,D)
             var sec2 = CreateSectionCard("2. SYSTEM WSPÓŁRZĘDNYCH I SIATKA (MGRS / KEYPAD 1-9)");
             sec2.Children.Add(TacticalConfigPanel.FieldBox("System współrzędnych i typ siatki na mapie:", TacticalConfigPanel.ComboCtrl(new[] { "MGRS / UTM (Siatka wojskowa w metrach)", "Siatka Sektorowa (A1, B2, C3...)", "WGS84 (Stopnie geograficzne Lat/Lon)", "Brak siatki" }, _coordSystem, win, v => { _coordSystem = v; _ = RenderMapTilesAsync(); })));
 
@@ -319,7 +315,6 @@ namespace FieldTakHub.Builder.Services
             sec2.Children.Add(colAndHaloRow);
             leftStack.Children.Add(WrapCard(sec2));
 
-            // SEKCJA 3: ZNACZNIKI WEKTOROWE NATO APP-6, KROPKI KOLOROWE I TEREN GRY
             var sec3 = CreateSectionCard("3. ZNACZNIKI WEKTOROWE NATO (APP-6), KOLOR RGB & TEREN GRY");
             void UpdateToolButtonsVisual()
             {
@@ -403,7 +398,6 @@ namespace FieldTakHub.Builder.Services
             RefreshObjectsListUI();
             leftStack.Children.Add(WrapCard(sec3));
 
-            // SEKCJA 4: ELEMENTY MAPY (PÓŁNOC / PODZIAŁKA / LEGENDA) & EKSPORT (W spójnym motywie Field TAK Hub)
             var sec4 = CreateSectionCard("4. ELEMENTY MAPY (PÓŁNOC / PODZIAŁKA / LEGENDA) & EKSPORT");
             string[] corners = { "Lewy górny róg", "Prawy górny róg", "Lewy dolny róg", "Prawy dolny róg", "Ukryj" };
             var posGrid = new UniformGrid { Columns = 2, Margin = new Thickness(0, 0, 0, 8) };
@@ -734,9 +728,6 @@ namespace FieldTakHub.Builder.Services
             var b = new SolidColorBrush(c); b.Freeze(); return b;
         }
 
-        // =========================================================================
-        // SIATKA WOJSKOWA MGRS / UTM + WZMOCNIONE MAŁE KRATKI KEYPAD 1-9 (CO 33m) I ĆWIARTKI A,B,C,D (CO 50m)
-        // =========================================================================
         private static void DrawMilitaryMgrsAndSubGridOverlay(double w, double h)
         {
             if (_coordSystem == "Brak siatki") return;
@@ -765,7 +756,6 @@ namespace FieldTakHub.Builder.Services
             double subThick = Math.Max(0.7, 0.95 * _gridThicknessMultiplier);
             double startX = (w / 2.0) % stepPx, startY = (h / 2.0) % stepPx;
 
-            // 1. Podział wewnętrzny 100 m: Co 33 m (Keypad 1-9) lub Co 50 m (Ćwiartki A,B,C,D)
             if (_coordSystem.StartsWith("MGRS") && (_subGridDivision.Contains("50 m") || _subGridDivision.Contains("33 m")))
             {
                 bool isQuarters = _subGridDivision.Contains("50 m");
@@ -794,7 +784,6 @@ namespace FieldTakHub.Builder.Services
                     }
                 }
 
-                // Wyraźne oznaczenia małych kratek (Keypad 1..9 lub Ćwiartki A,B,C,D)
                 if (_gridLabelsMode.Contains("Ćwiartki/Keypad") && stepPx >= 68)
                 {
                     string[,] keypad3x3 = { { "7", "8", "9" }, { "4", "5", "6" }, { "1", "2", "3" } };
@@ -819,7 +808,6 @@ namespace FieldTakHub.Builder.Services
                 }
             }
 
-            // 2. Główne linie siatki MGRS 100m (rysowane na wierzchu podziału wewnętrznego)
             for (double x = startX; x < w; x += stepPx)
             {
                 if (useHalo) _mapCanvas.Children.Add(new Line { X1 = x, Y1 = 0, X2 = x, Y2 = h, Stroke = haloBrush, StrokeThickness = mainThick + 2.0 });
