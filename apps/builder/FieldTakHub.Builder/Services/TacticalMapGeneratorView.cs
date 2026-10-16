@@ -32,10 +32,18 @@ namespace FieldTakHub.Builder.Services
         public override string ToString() => Name;
     }
 
+    public class NatoSymbolOption
+    {
+        public string Code { get; set; }
+        public string Label { get; set; }
+        public override string ToString() => Label;
+    }
+
     public class TacticalMapObjectItem
     {
-        public string Kind { get; set; } = "Marker";
-        public string Name { get; set; } = "Punkt";
+        public string Kind { get; set; } = "Marker"; // "Marker", "Dot", "AO", "Route"
+        public string SymbolCode { get; set; } = "NATO_HQ";
+        public string Name { get; set; } = "HQ";
         public string ColorHex { get; set; } = "#2684FF";
         public List<(double Lat, double Lon)> Points { get; set; } = new List<(double Lat, double Lon)>();
     }
@@ -57,7 +65,7 @@ namespace FieldTakHub.Builder.Services
         private static string _sheetFormat = "A4 (297 × 210 mm)", _sheetOrientation = "Poziomo";
         private static bool _showLidarSingleWms, _isDragging;
         private static string _coordSystem = "MGRS / UTM (Siatka wojskowa w metrach)", _subGridDivision = "Co 50 m (Ćwiartki A,B,C,D)", _gridLabelsMode = "MGRS + Ćwiartki/Keypad", _gridColorName = "Żółty", _gridHaloMode = "Pełny czarny obrys";
-        private static string _activeTool = "PAN", _selectedObjectColorHex = "#2684FF";
+        private static string _activeTool = "PAN", _selectedObjectColorHex = "#2684FF", _selectedNatoSymbolCode = "NATO_HQ";
         private static string _northArrowPos = "Lewy górny róg", _scaleBarPos = "Lewy dolny róg", _legendPos = "Prawy górny róg", _kmzGrgMode = "Przezroczysta siatka";
 
         private static Point _dragStartPoint;
@@ -66,6 +74,22 @@ namespace FieldTakHub.Builder.Services
         private static TacticalMapObjectItem _activeDraftPoly;
         private static TacticalMapLayerDef _activeLayer;
         private static TextBox _objectNameInputBox, _scaleInputBox, _searchPlaceBox;
+
+        public static readonly List<NatoSymbolOption> NatoSymbols = new List<NatoSymbolOption>
+        {
+            new NatoSymbolOption { Code = "NATO_HQ",     Label = "🚩 NATO HQ — Sztab / Dowództwo" },
+            new NatoSymbolOption { Code = "NATO_INF",    Label = "⚔️ NATO Piechota / Drużyna [X]" },
+            new NatoSymbolOption { Code = "NATO_RECON",  Label = "🔭 NATO Zwiad / Recon [/]" },
+            new NatoSymbolOption { Code = "NATO_MED",    Label = "➕ NATO Punkt Medyczny / MEDEVAC [+]" },
+            new NatoSymbolOption { Code = "NATO_COMMS",  Label = "📡 NATO Węzeł Łączności / Przekaźnik" },
+            new NatoSymbolOption { Code = "NATO_SUPPLY", Label = "📦 NATO Punkt Amunicyjny / Logistyka" },
+            new NatoSymbolOption { Code = "NATO_OP",     Label = "👁️ NATO Punkt Obserwacyjny [△]" },
+            new NatoSymbolOption { Code = "NATO_SNIPER", Label = "🎯 NATO Snajper / Strzelec [⊕]" },
+            new NatoSymbolOption { Code = "NATO_CP",     Label = "🛡️ NATO Punkt Kontrolny / Respawn" },
+            new NatoSymbolOption { Code = "NATO_LZ",     Label = "🚁 NATO Strefa Lądowania / Zrzutu (LZ)" },
+            new NatoSymbolOption { Code = "NATO_OBJ",    Label = "💠 NATO Cel Operacji (Objective)" },
+            new NatoSymbolOption { Code = "NATO_HAZARD", Label = "⚠️ NATO Zagrożenie / Strefa No-Go [!]" }
+        };
 
         public static readonly List<TacticalMapLayerDef> Layers = new List<TacticalMapLayerDef>
         {
@@ -106,7 +130,7 @@ namespace FieldTakHub.Builder.Services
 
                     var navBorder = new Border { Background = TacticalConfigPanel.BrushInputBg, BorderBrush = TacticalConfigPanel.BrushCardBorder, BorderThickness = new Thickness(0, 0, 0, 1), Padding = new Thickness(16, 0, 16, 0) };
                     var navDock = new DockPanel();
-                    var rightInfo = new TextBlock { Text = "Field TAK Hub 2.4  •  Google / Geoportal Hi-Res / LiDAR ISOK / Topo / ESRI / OSM", Foreground = TacticalConfigPanel.BrushMutedText, FontSize = 11, VerticalAlignment = VerticalAlignment.Center };
+                    var rightInfo = new TextBlock { Text = "Field TAK Hub 2.4  •  Symbole Wektorowe NATO APP-6  •  Geoportal Hi-Res / LiDAR ISOK / Topo", Foreground = TacticalConfigPanel.BrushMutedText, FontSize = 11, VerticalAlignment = VerticalAlignment.Center };
                     DockPanel.SetDock(rightInfo, Dock.Right);
                     navDock.Children.Add(rightInfo);
 
@@ -182,7 +206,7 @@ namespace FieldTakHub.Builder.Services
             mainGrid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(32) });
 
             var bodyGrid = new Grid();
-            bodyGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(415) });
+            bodyGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(420) });
             bodyGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
 
             var leftScroll = new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Background = TacticalConfigPanel.BrushCardBg, Padding = new Thickness(10) };
@@ -268,7 +292,8 @@ namespace FieldTakHub.Builder.Services
             sec2.Children.Add(colAndHaloRow);
             leftStack.Children.Add(WrapCard(sec2));
 
-            var sec3 = CreateSectionCard("3. ZNACZNIKI, KROPKI KOLOROWE I TEREN GRY", GoldBrush);
+            // SEKCJA 3: ZNACZNIKI WEKTOROWE NATO APP-6 + PALETA RGB + KROPKI I TEREN GRY
+            var sec3 = CreateSectionCard("3. ZNACZNIKI WEKTOROWE NATO (APP-6), KOLOR RGB & TEREN GRY", GoldBrush);
             void UpdateToolButtonsVisual()
             {
                 void StyleTool(Button b, bool active)
@@ -287,8 +312,8 @@ namespace FieldTakHub.Builder.Services
             sec3.Children.Add(_btnToolPan);
 
             var toolsGrid = new UniformGrid { Columns = 2, Margin = new Thickness(0, 0, 0, 6) };
-            _btnToolMarker = new Button { Content = "📍 Znacznik Taktyczny", Height = 30, Margin = new Thickness(0, 0, 3, 4), FontWeight = FontWeights.Bold, FontSize = 10.5, Cursor = Cursors.Hand };
-            _btnToolDot = new Button { Content = "⚫ Kropka (Kolor)", Height = 30, Margin = new Thickness(3, 0, 0, 4), FontWeight = FontWeights.Bold, FontSize = 10.5, Cursor = Cursors.Hand };
+            _btnToolMarker = new Button { Content = "🚩 Symbol NATO (Wektor)", Height = 30, Margin = new Thickness(0, 0, 3, 4), FontWeight = FontWeights.Bold, FontSize = 10.5, Cursor = Cursors.Hand };
+            _btnToolDot = new Button { Content = "⚫ Kropka (Kolor RGB)", Height = 30, Margin = new Thickness(3, 0, 0, 4), FontWeight = FontWeights.Bold, FontSize = 10.5, Cursor = Cursors.Hand };
             _btnToolAo = new Button { Content = "⬠ Rysuj Obszar (AO)", Height = 30, Margin = new Thickness(0, 0, 3, 0), FontWeight = FontWeights.Bold, FontSize = 10.5, Cursor = Cursors.Hand };
             _btnToolRoute = new Button { Content = "〰 Rysuj Trasę/Linię", Height = 30, Margin = new Thickness(3, 0, 0, 0), FontWeight = FontWeights.Bold, FontSize = 10.5, Cursor = Cursors.Hand };
 
@@ -302,14 +327,47 @@ namespace FieldTakHub.Builder.Services
             sec3.Children.Add(toolsGrid);
             UpdateToolButtonsVisual();
 
+            // Wybór ikony wektorowej NATO APP-6
+            var natoCombo = new ComboBox { ItemsSource = NatoSymbols, SelectedIndex = 0, Height = 28, FontSize = 10.5, Margin = new Thickness(0, 0, 0, 4), Tag = "INJECTED" };
+            TacticalConfigPanel.ApplyUnifiedComboBoxTheme(natoCombo, win);
+            natoCombo.SelectionChanged += (_, __) =>
+            {
+                if (natoCombo.SelectedItem is NatoSymbolOption opt)
+                {
+                    _selectedNatoSymbolCode = opt.Code;
+                    if (_objectNameInputBox != null)
+                        _objectNameInputBox.Text = opt.Code.Replace("NATO_", "");
+                }
+            };
+            sec3.Children.Add(TacticalConfigPanel.FieldBox("Kształt wektorowego znacznika taktycznego (Standard NATO APP-6):", natoCombo));
+
+            // Nazwa obiektu + przycisk otwierający pełną Paletę RGB
             var objCfgRow = new Grid { Margin = new Thickness(0, 0, 0, 6) };
             objCfgRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-            objCfgRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(110) });
-            _objectNameInputBox = (TextBox)TacticalConfigPanel.TextCtrl("HQ / Respawn", _ => { });
-            var colPickCombo = (ComboBox)TacticalConfigPanel.ComboCtrl(new[] { "#2684FF", "#EB4034", "#F5B82E", "#2ECC71", "#9B59B6", "#FFFFFF" }, _selectedObjectColorHex, win, v => _selectedObjectColorHex = v);
-            Grid.SetColumn(_objectNameInputBox, 0); Grid.SetColumn(colPickCombo, 1);
-            objCfgRow.Children.Add(TacticalConfigPanel.FieldBox("Nazwa obiektu:", _objectNameInputBox));
-            objCfgRow.Children.Add(TacticalConfigPanel.FieldBox("Kolor obiektu:", colPickCombo));
+            objCfgRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(155) });
+            _objectNameInputBox = (TextBox)TacticalConfigPanel.TextCtrl("HQ", _ => { });
+
+            var mapColorSwatch = new Border { Width = 14, Height = 14, CornerRadius = new CornerRadius(3), Background = TacticalConfigPanel.BrushFromHex(_selectedObjectColorHex, Color.FromRgb(38, 132, 255)), BorderBrush = Brushes.White, BorderThickness = new Thickness(1), Margin = new Thickness(0, 0, 6, 0), VerticalAlignment = VerticalAlignment.Center };
+            var mapColorText = new TextBlock { Text = $"Paleta RGB ({_selectedObjectColorHex})", Foreground = Brushes.White, FontSize = 10, FontWeight = FontWeights.Bold, VerticalAlignment = VerticalAlignment.Center };
+            var mapColorStack = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Center };
+            mapColorStack.Children.Add(mapColorSwatch); mapColorStack.Children.Add(mapColorText);
+
+            var btnPickMapRgb = new Button { Content = mapColorStack, Height = 26, Background = TacticalConfigPanel.BrushInputBg, BorderBrush = TacticalConfigPanel.BrushAccent, BorderThickness = new Thickness(1), Cursor = Cursors.Hand, ToolTip = "Wybierz dowolny kolor znacznika z pełnej palety RGB" };
+            btnPickMapRgb.Click += (_, __) =>
+            {
+                string picked = TacticalConfigPanel.ShowRgbColorPickerDialog(win, "Kolor znacznika taktycznego NATO", _selectedObjectColorHex);
+                if (!string.IsNullOrEmpty(picked))
+                {
+                    _selectedObjectColorHex = picked;
+                    mapColorSwatch.Background = TacticalConfigPanel.BrushFromHex(picked, Color.FromRgb(38, 132, 255));
+                    mapColorText.Text = $"Paleta RGB ({picked.ToUpperInvariant()})";
+                }
+            };
+
+            var fNameBox = TacticalConfigPanel.FieldBox("Etykieta na mapie (np. HQ-1):", _objectNameInputBox);
+            var fRgbBtn = TacticalConfigPanel.FieldBox("Kolor znacznika (RGB):", btnPickMapRgb);
+            Grid.SetColumn(fNameBox, 0); Grid.SetColumn(fRgbBtn, 1);
+            objCfgRow.Children.Add(fNameBox); objCfgRow.Children.Add(fRgbBtn);
             sec3.Children.Add(objCfgRow);
 
             sec3.Children.Add(new TextBlock { Text = "Naniesione obiekty (kliknij ✖ aby usunąć):", Foreground = TacticalConfigPanel.BrushMutedText, FontSize = 10.5, Margin = new Thickness(0, 0, 0, 4) });
@@ -412,7 +470,7 @@ namespace FieldTakHub.Builder.Services
             Grid.SetRow(bodyGrid, 0); mainGrid.Children.Add(bodyGrid);
 
             var bottomBar = new Border { Background = TacticalConfigPanel.BrushInputBg, BorderBrush = TacticalConfigPanel.BrushCardBorder, BorderThickness = new Thickness(0, 1, 0, 0), Padding = new Thickness(16, 0, 16, 0) };
-            _statusText = new TextBlock { Text = "Gotowy. Układ 1:1 z generatorem HTML: Skala 1:X, LiDAR ISOK (1 zapytanie WMS), Siatka MGRS co 50 m (Ćwiartki A,B,C,D), Halo, GRG .KMZ i Druk PDF.", Foreground = TacticalConfigPanel.BrushAccent, FontSize = 11, VerticalAlignment = VerticalAlignment.Center };
+            _statusText = new TextBlock { Text = "Gotowy. Wektorowe znaki taktyczne NATO APP-6 (HQ, Piechota, Zwiad, MEDEVAC, Snajper, OP, LZ, Obj) z wyborem koloru z Palety RGB.", Foreground = TacticalConfigPanel.BrushAccent, FontSize = 11, VerticalAlignment = VerticalAlignment.Center };
             bottomBar.Child = _statusText; Grid.SetRow(bottomBar, 1); mainGrid.Children.Add(bottomBar);
 
             rootBorder.Child = mainGrid;
@@ -422,23 +480,27 @@ namespace FieldTakHub.Builder.Services
         private static void HandleMapClickToolAction(Point clickPt)
         {
             var (clickLat, clickLon) = ScreenToLatLon(clickPt.X, clickPt.Y, _mapCanvas.ActualWidth, _mapCanvas.ActualHeight);
-            string objName = string.IsNullOrWhiteSpace(_objectNameInputBox?.Text) ? $"Obiekt-{_mapObjects.Count + 1}" : _objectNameInputBox.Text.Trim();
+            string objName = string.IsNullOrWhiteSpace(_objectNameInputBox?.Text) ? $"Punkt-{_mapObjects.Count + 1}" : _objectNameInputBox.Text.Trim();
 
             if (_activeTool == "MARKER" || _activeTool == "DOT")
             {
-                var item = new TacticalMapObjectItem { Kind = _activeTool == "MARKER" ? "Marker" : "Dot", Name = objName, ColorHex = _selectedObjectColorHex };
+                var item = new TacticalMapObjectItem
+                {
+                    Kind = _activeTool == "MARKER" ? "Marker" : "Dot",
+                    SymbolCode = _activeTool == "MARKER" ? _selectedNatoSymbolCode : "DOT",
+                    Name = objName,
+                    ColorHex = _selectedObjectColorHex
+                };
                 item.Points.Add((clickLat, clickLon));
                 _mapObjects.Add(item);
-                _objectNameInputBox.Text = $"Punkt-{_mapObjects.Count + 1}";
             }
             else if (_activeTool == "AO" || _activeTool == "ROUTE")
             {
                 string kind = _activeTool == "AO" ? "AO" : "Route";
                 if (_activeDraftPoly == null || _activeDraftPoly.Kind != kind)
                 {
-                    _activeDraftPoly = new TacticalMapObjectItem { Kind = kind, Name = objName, ColorHex = _selectedObjectColorHex };
+                    _activeDraftPoly = new TacticalMapObjectItem { Kind = kind, SymbolCode = kind, Name = objName, ColorHex = _selectedObjectColorHex };
                     _mapObjects.Add(_activeDraftPoly);
-                    _objectNameInputBox.Text = $"{kind}-{_mapObjects.Count + 1}";
                 }
                 _activeDraftPoly.Points.Add((clickLat, clickLon));
             }
@@ -462,7 +524,10 @@ namespace FieldTakHub.Builder.Services
                 var captured = obj;
                 btnDel.Click += (_, __) => { _mapObjects.Remove(captured); if (_activeDraftPoly == captured) _activeDraftPoly = null; RefreshObjectsListUI(); _ = RenderMapTilesAsync(); };
                 row.Children.Add(btnDel);
-                row.Children.Add(new TextBlock { Text = $"[{obj.Kind}] {obj.Name} ({obj.Points.Count} pkt)", Foreground = Brushes.White, FontSize = 10.5, VerticalAlignment = VerticalAlignment.Center });
+
+                var sw = new Border { Width = 10, Height = 10, CornerRadius = new CornerRadius(2), Background = TacticalConfigPanel.BrushFromHex(obj.ColorHex, Color.FromRgb(38, 132, 255)), Margin = new Thickness(0, 0, 6, 0), VerticalAlignment = VerticalAlignment.Center };
+                row.Children.Add(sw);
+                row.Children.Add(new TextBlock { Text = $"[{obj.SymbolCode.Replace("NATO_", "")}] {obj.Name} ({obj.ColorHex})", Foreground = Brushes.White, FontSize = 10, VerticalAlignment = VerticalAlignment.Center });
                 _objectsListStack.Children.Add(row);
             }
         }
@@ -682,8 +747,146 @@ namespace FieldTakHub.Builder.Services
 
         private static void AddHaloLabel(string text, double x, double y, Brush fg, double fontSize)
         {
-            var b = new Border { Background = new SolidColorBrush(Color.FromArgb(160, 0, 0, 0)), CornerRadius = new CornerRadius(2), Padding = new Thickness(2, 0, 2, 0), IsHitTestVisible = false, Child = new TextBlock { Text = text, Foreground = fg, FontSize = fontSize, FontWeight = FontWeights.Bold } };
+            var b = new Border { Background = new SolidColorBrush(Color.FromArgb(175, 5, 12, 15)), BorderBrush = fg, BorderThickness = new Thickness(0.8), CornerRadius = new CornerRadius(3), Padding = new Thickness(4, 1, 4, 1), IsHitTestVisible = false, Child = new TextBlock { Text = text, Foreground = fg, FontSize = fontSize, FontWeight = FontWeights.Bold } };
             Canvas.SetLeft(b, x); Canvas.SetTop(b, y); _mapCanvas.Children.Add(b);
+        }
+
+        // =========================================================================
+        // RENDERER WEKTOROWYCH SYMBOLI TAKTYCZNYCH NATO APP-6 (Z DOWOLNYM KOLOREM RGB)
+        // =========================================================================
+        private static void DrawNatoVectorSymbolOnCanvas(Point pt, string symbolCode, string name, string colorHex)
+        {
+            Color c = Color.FromRgb(38, 132, 255);
+            try { c = (Color)ColorConverter.ConvertFromString(colorHex); } catch { }
+
+            var strokeBrush = TacticalConfigPanel.CreateFrozenBrush(c.R, c.G, c.B);
+            var fillBrush = new SolidColorBrush(Color.FromArgb(175, c.R, c.G, c.B)); fillBrush.Freeze();
+            var darkBgBrush = new SolidColorBrush(Color.FromArgb(220, 8, 16, 20)); darkBgBrush.Freeze();
+
+            const double fw = 30.0, fh = 20.0;
+            double left = pt.X - fw / 2.0, top = pt.Y - fh / 2.0;
+
+            switch (symbolCode)
+            {
+                case "NATO_HQ":
+                    // Sztab / Dowództwo NATO: Prostokąt taktyczny + maszt flagowy po lewej stronie sięgający punktu (pt.X, pt.Y)
+                    double hqLeft = pt.X, hqTop = pt.Y - fh - 12;
+                    _mapCanvas.Children.Add(new Line { X1 = hqLeft, Y1 = hqTop, X2 = hqLeft, Y2 = pt.Y, Stroke = Brushes.Black, StrokeThickness = 4.2 });
+                    _mapCanvas.Children.Add(new Line { X1 = hqLeft, Y1 = hqTop, X2 = hqLeft, Y2 = pt.Y, Stroke = strokeBrush, StrokeThickness = 2.4 });
+                    var hqRectHalo = new Rectangle { Width = fw + 2, Height = fh + 2, Stroke = Brushes.Black, StrokeThickness = 3.2, Fill = darkBgBrush };
+                    Canvas.SetLeft(hqRectHalo, hqLeft - 1); Canvas.SetTop(hqRectHalo, hqTop - 1); _mapCanvas.Children.Add(hqRectHalo);
+                    var hqRect = new Rectangle { Width = fw, Height = fh, Stroke = strokeBrush, StrokeThickness = 2.0, Fill = fillBrush };
+                    Canvas.SetLeft(hqRect, hqLeft); Canvas.SetTop(hqRect, hqTop); _mapCanvas.Children.Add(hqRect);
+                    var hqTxt = new TextBlock { Text = "HQ", Foreground = Brushes.White, FontSize = 9.5, FontWeight = FontWeights.Bold };
+                    Canvas.SetLeft(hqTxt, hqLeft + 6); Canvas.SetTop(hqTxt, hqTop + 3); _mapCanvas.Children.Add(hqTxt);
+                    AddHaloLabel(name, hqLeft + fw + 5, hqTop + 1, Brushes.White, 10);
+                    return;
+
+                case "NATO_INF":
+                    // Piechota NATO APP-6: Prostokąt ze skrzyżowanymi przekątnymi (X)
+                    DrawStandardNatoBox(left, top, fw, fh, strokeBrush, fillBrush, darkBgBrush);
+                    _mapCanvas.Children.Add(new Line { X1 = left, Y1 = top, X2 = left + fw, Y2 = top + fh, Stroke = Brushes.White, StrokeThickness = 1.8 });
+                    _mapCanvas.Children.Add(new Line { X1 = left, Y1 = top + fh, X2 = left + fw, Y2 = top, Stroke = Brushes.White, StrokeThickness = 1.8 });
+                    break;
+
+                case "NATO_RECON":
+                    // Zwiad / Kawaleria NATO APP-6: Prostokąt z pojedynczą przekątną (/)
+                    DrawStandardNatoBox(left, top, fw, fh, strokeBrush, fillBrush, darkBgBrush);
+                    _mapCanvas.Children.Add(new Line { X1 = left, Y1 = top + fh, X2 = left + fw, Y2 = top, Stroke = Brushes.White, StrokeThickness = 2.0 });
+                    break;
+
+                case "NATO_MED":
+                    // Punkt Medyczny / MEDEVAC NATO APP-6: Prostokąt z krzyżem (+)
+                    DrawStandardNatoBox(left, top, fw, fh, strokeBrush, fillBrush, darkBgBrush);
+                    _mapCanvas.Children.Add(new Line { X1 = pt.X, Y1 = top, X2 = pt.X, Y2 = top + fh, Stroke = Brushes.White, StrokeThickness = 2.2 });
+                    _mapCanvas.Children.Add(new Line { X1 = left, Y1 = pt.Y, X2 = left + fw, Y2 = pt.Y, Stroke = Brushes.White, StrokeThickness = 2.2 });
+                    break;
+
+                case "NATO_COMMS":
+                    // Węzeł łączności / Przekaźnik LoRa: Prostokąt z symbolem błyskawicy radiowej
+                    DrawStandardNatoBox(left, top, fw, fh, strokeBrush, fillBrush, darkBgBrush);
+                    var bolt = new Polyline { Stroke = Brushes.White, StrokeThickness = 2.0, Points = new PointCollection { new Point(left + 6, top + fh - 3), new Point(pt.X - 1, top + 4), new Point(pt.X + 2, top + fh - 5), new Point(left + fw - 6, top + 3) } };
+                    _mapCanvas.Children.Add(bolt);
+                    break;
+
+                case "NATO_SUPPLY":
+                    // Punkt Amunicyjny / Zaopatrzenie NATO APP-6: Prostokąt z dolną linią poziomą
+                    DrawStandardNatoBox(left, top, fw, fh, strokeBrush, fillBrush, darkBgBrush);
+                    _mapCanvas.Children.Add(new Line { X1 = left, Y1 = top + fh - 5, X2 = left + fw, Y2 = top + fh - 5, Stroke = Brushes.White, StrokeThickness = 2.0 });
+                    break;
+
+                case "NATO_OP":
+                    // Punkt Obserwacyjny (OP): Trójkąt taktyczny z punktem w środku
+                    var triHalo = new Polygon { Stroke = Brushes.Black, StrokeThickness = 3.4, Fill = darkBgBrush, Points = new PointCollection { new Point(pt.X, pt.Y - 13), new Point(pt.X - 13, pt.Y + 11), new Point(pt.X + 13, pt.Y + 11) } };
+                    _mapCanvas.Children.Add(triHalo);
+                    var tri = new Polygon { Stroke = strokeBrush, StrokeThickness = 2.0, Fill = fillBrush, Points = triHalo.Points };
+                    _mapCanvas.Children.Add(tri);
+                    var opDot = new Ellipse { Width = 5, Height = 5, Fill = Brushes.White };
+                    Canvas.SetLeft(opDot, pt.X - 2.5); Canvas.SetTop(opDot, pt.Y); _mapCanvas.Children.Add(opDot);
+                    break;
+
+                case "NATO_SNIPER":
+                    // Snajper: Siatka celownicza (okrąg + krzyż nitkowy)
+                    var snHalo = new Ellipse { Width = 24, Height = 24, Stroke = Brushes.Black, StrokeThickness = 3.2, Fill = darkBgBrush };
+                    Canvas.SetLeft(snHalo, pt.X - 12); Canvas.SetTop(snHalo, pt.Y - 12); _mapCanvas.Children.Add(snHalo);
+                    var snCirc = new Ellipse { Width = 22, Height = 22, Stroke = strokeBrush, StrokeThickness = 2.0, Fill = fillBrush };
+                    Canvas.SetLeft(snCirc, pt.X - 11); Canvas.SetTop(snCirc, pt.Y - 11); _mapCanvas.Children.Add(snCirc);
+                    _mapCanvas.Children.Add(new Line { X1 = pt.X - 14, Y1 = pt.Y, X2 = pt.X + 14, Y2 = pt.Y, Stroke = Brushes.White, StrokeThickness = 1.5 });
+                    _mapCanvas.Children.Add(new Line { X1 = pt.X, Y1 = pt.Y - 14, X2 = pt.X, Y2 = pt.Y + 14, Stroke = Brushes.White, StrokeThickness = 1.5 });
+                    break;
+
+                case "NATO_CP":
+                    // Punkt Kontrolny / Respawn: Tarcza taktyczna
+                    var shPts = new PointCollection { new Point(pt.X - 12, pt.Y - 11), new Point(pt.X + 12, pt.Y - 11), new Point(pt.X + 12, pt.Y + 2), new Point(pt.X, pt.Y + 13), new Point(pt.X - 12, pt.Y + 2) };
+                    _mapCanvas.Children.Add(new Polygon { Stroke = Brushes.Black, StrokeThickness = 3.2, Fill = darkBgBrush, Points = shPts });
+                    _mapCanvas.Children.Add(new Polygon { Stroke = strokeBrush, StrokeThickness = 2.0, Fill = fillBrush, Points = shPts });
+                    var cpTxt = new TextBlock { Text = "CP", Foreground = Brushes.White, FontSize = 8.5, FontWeight = FontWeights.Bold };
+                    Canvas.SetLeft(cpTxt, pt.X - 6); Canvas.SetTop(cpTxt, pt.Y - 7); _mapCanvas.Children.Add(cpTxt);
+                    break;
+
+                case "NATO_LZ":
+                    // Strefa Lądowania / Zrzutu (LZ): Okrąg z oznaczeniem LZ
+                    var lzHalo = new Ellipse { Width = 26, Height = 26, Stroke = Brushes.Black, StrokeThickness = 3.2, Fill = darkBgBrush };
+                    Canvas.SetLeft(lzHalo, pt.X - 13); Canvas.SetTop(lzHalo, pt.Y - 13); _mapCanvas.Children.Add(lzHalo);
+                    var lzCirc = new Ellipse { Width = 24, Height = 24, Stroke = strokeBrush, StrokeThickness = 2.0, Fill = fillBrush };
+                    Canvas.SetLeft(lzCirc, pt.X - 12); Canvas.SetTop(lzCirc, pt.Y - 12); _mapCanvas.Children.Add(lzCirc);
+                    var lzTxt = new TextBlock { Text = "LZ", Foreground = Brushes.White, FontSize = 9, FontWeight = FontWeights.Bold };
+                    Canvas.SetLeft(lzTxt, pt.X - 6); Canvas.SetTop(lzTxt, pt.Y - 6); _mapCanvas.Children.Add(lzTxt);
+                    break;
+
+                case "NATO_OBJ":
+                    // Cel Operacji (Objective): Romb szturmowy z krzyżem
+                    var dmPts = new PointCollection { new Point(pt.X, pt.Y - 14), new Point(pt.X + 14, pt.Y), new Point(pt.X, pt.Y + 14), new Point(pt.X - 14, pt.Y) };
+                    _mapCanvas.Children.Add(new Polygon { Stroke = Brushes.Black, StrokeThickness = 3.2, Fill = darkBgBrush, Points = dmPts });
+                    _mapCanvas.Children.Add(new Polygon { Stroke = strokeBrush, StrokeThickness = 2.0, Fill = fillBrush, Points = dmPts });
+                    _mapCanvas.Children.Add(new Line { X1 = pt.X - 7, Y1 = pt.Y, X2 = pt.X + 7, Y2 = pt.Y, Stroke = Brushes.White, StrokeThickness = 1.6 });
+                    _mapCanvas.Children.Add(new Line { X1 = pt.X, Y1 = pt.Y - 7, X2 = pt.X, Y2 = pt.Y + 7, Stroke = Brushes.White, StrokeThickness = 1.6 });
+                    break;
+
+                case "NATO_HAZARD":
+                    // Zagrożenie / No-Go: Trójkąt ostrzegawczy z wykrzyknikiem (!)
+                    var hzPts = new PointCollection { new Point(pt.X, pt.Y - 13), new Point(pt.X - 13, pt.Y + 11), new Point(pt.X + 13, pt.Y + 11) };
+                    _mapCanvas.Children.Add(new Polygon { Stroke = Brushes.Black, StrokeThickness = 3.4, Fill = darkBgBrush, Points = hzPts });
+                    _mapCanvas.Children.Add(new Polygon { Stroke = strokeBrush, StrokeThickness = 2.0, Fill = fillBrush, Points = hzPts });
+                    var hzTxt = new TextBlock { Text = "!", Foreground = Brushes.White, FontSize = 11, FontWeight = FontWeights.Bold };
+                    Canvas.SetLeft(hzTxt, pt.X - 2.5); Canvas.SetTop(hzTxt, pt.Y - 5); _mapCanvas.Children.Add(hzTxt);
+                    break;
+
+                default:
+                    var dot = new Ellipse { Width = 12, Height = 12, Fill = strokeBrush, Stroke = Brushes.White, StrokeThickness = 2 };
+                    Canvas.SetLeft(dot, pt.X - 6); Canvas.SetTop(pt.Y - 6, dot); _mapCanvas.Children.Add(dot);
+                    break;
+            }
+
+            AddHaloLabel(name, pt.X + 17, pt.Y - 9, strokeBrush, 10);
+        }
+
+        private static void DrawStandardNatoBox(double left, double top, double w, double h, Brush strokeBrush, Brush fillBrush, Brush darkBgBrush)
+        {
+            var halo = new Rectangle { Width = w + 2, Height = h + 2, Stroke = Brushes.Black, StrokeThickness = 3.2, Fill = darkBgBrush };
+            Canvas.SetLeft(halo, left - 1); Canvas.SetTop(halo, top - 1); _mapCanvas.Children.Add(halo);
+            var rect = new Rectangle { Width = w, Height = h, Stroke = strokeBrush, StrokeThickness = 2.0, Fill = fillBrush };
+            Canvas.SetLeft(rect, left); Canvas.SetTop(rect, top); _mapCanvas.Children.Add(rect);
         }
 
         private static void DrawTacticalObjectsOverlay(double w, double h)
@@ -699,7 +902,7 @@ namespace FieldTakHub.Builder.Services
                     var poly = new Polygon { Stroke = strokeBrush, Fill = fillBrush, StrokeThickness = 2.5 };
                     foreach (var pt in obj.Points) poly.Points.Add(LatLonToScreen(pt.Lat, pt.Lon, w, h));
                     _mapCanvas.Children.Add(poly);
-                    AddHaloLabel(obj.Name, poly.Points[0].X + 6, poly.Points[0].Y - 10, Brushes.White, 10);
+                    AddHaloLabel(obj.Name, poly.Points[0].X + 6, poly.Points[0].Y - 10, strokeBrush, 10);
                 }
                 else if (obj.Kind == "Route" && obj.Points.Count >= 2)
                 {
@@ -707,13 +910,17 @@ namespace FieldTakHub.Builder.Services
                     foreach (var pt in obj.Points) pl.Points.Add(LatLonToScreen(pt.Lat, pt.Lon, w, h));
                     _mapCanvas.Children.Add(pl);
                 }
+                else if (obj.Kind == "Dot")
+                {
+                    Point pt = LatLonToScreen(obj.Points[0].Lat, obj.Points[0].Lon, w, h);
+                    var dot = new Ellipse { Width = 12, Height = 12, Fill = strokeBrush, Stroke = Brushes.White, StrokeThickness = 2 };
+                    Canvas.SetLeft(dot, pt.X - 6); Canvas.SetTop(dot, pt.Y - 6); _mapCanvas.Children.Add(dot);
+                    AddHaloLabel(obj.Name, pt.X + 9, pt.Y - 8, strokeBrush, 9.5);
+                }
                 else
                 {
                     Point pt = LatLonToScreen(obj.Points[0].Lat, obj.Points[0].Lon, w, h);
-                    double sz = obj.Kind == "Dot" ? 10 : 14;
-                    var dot = new Ellipse { Width = sz, Height = sz, Fill = strokeBrush, Stroke = Brushes.White, StrokeThickness = 2 };
-                    Canvas.SetLeft(dot, pt.X - sz / 2); Canvas.SetTop(dot, pt.Y - sz / 2); _mapCanvas.Children.Add(dot);
-                    if (obj.Kind == "Marker") AddHaloLabel($"📍 {obj.Name}", pt.X + 10, pt.Y - 10, Brushes.White, 10.5);
+                    DrawNatoVectorSymbolOnCanvas(pt, obj.SymbolCode ?? "NATO_HQ", obj.Name, obj.ColorHex);
                 }
             }
         }
@@ -813,7 +1020,7 @@ namespace FieldTakHub.Builder.Services
                 {
                     var pts = new JsonArray();
                     foreach (var p in o.Points) pts.Add(new JsonObject { ["lat"] = p.Lat, ["lon"] = p.Lon });
-                    arr.Add(new JsonObject { ["kind"] = o.Kind, ["name"] = o.Name, ["color"] = o.ColorHex, ["points"] = pts });
+                    arr.Add(new JsonObject { ["kind"] = o.Kind, ["symbol"] = o.SymbolCode, ["name"] = o.Name, ["color"] = o.ColorHex, ["points"] = pts });
                 }
                 root["objects"] = arr;
                 File.WriteAllText(dlg.FileName, root.ToJsonString(new JsonSerializerOptions { WriteIndented = true }), Encoding.UTF8);
@@ -837,7 +1044,7 @@ namespace FieldTakHub.Builder.Services
                     if (root["objects"] is JsonArray arr)
                         foreach (var node in arr.OfType<JsonObject>())
                         {
-                            var item = new TacticalMapObjectItem { Kind = node["kind"]?.ToString() ?? "Marker", Name = node["name"]?.ToString() ?? "Punkt", ColorHex = node["color"]?.ToString() ?? "#2684FF" };
+                            var item = new TacticalMapObjectItem { Kind = node["kind"]?.ToString() ?? "Marker", SymbolCode = node["symbol"]?.ToString() ?? "NATO_HQ", Name = node["name"]?.ToString() ?? "Punkt", ColorHex = node["color"]?.ToString() ?? "#2684FF" };
                             if (node["points"] is JsonArray pts)
                                 foreach (var p in pts.OfType<JsonObject>())
                                     if (double.TryParse(p["lat"]?.ToString(), NumberStyles.Any, CultureInfo.InvariantCulture, out double pla) && double.TryParse(p["lon"]?.ToString(), NumberStyles.Any, CultureInfo.InvariantCulture, out double plo))
@@ -849,7 +1056,7 @@ namespace FieldTakHub.Builder.Services
                 {
                     foreach (Match m in Regex.Matches(txt, @"<wpt[^>]*lat=""([0-9\.\-]+)""[^>]*lon=""([0-9\.\-]+)""", RegexOptions.IgnoreCase))
                         if (double.TryParse(m.Groups[1].Value, NumberStyles.Any, CultureInfo.InvariantCulture, out double la) && double.TryParse(m.Groups[2].Value, NumberStyles.Any, CultureInfo.InvariantCulture, out double lo))
-                        { var it = new TacticalMapObjectItem { Kind = "Marker", Name = $"GPX-{_mapObjects.Count + 1}", ColorHex = _selectedObjectColorHex }; it.Points.Add((la, lo)); _mapObjects.Add(it); }
+                        { var it = new TacticalMapObjectItem { Kind = "Marker", SymbolCode = _selectedNatoSymbolCode, Name = $"GPX-{_mapObjects.Count + 1}", ColorHex = _selectedObjectColorHex }; it.Points.Add((la, lo)); _mapObjects.Add(it); }
                 }
                 RefreshObjectsListUI(); _ = RenderMapTilesAsync();
             }
@@ -922,7 +1129,7 @@ namespace FieldTakHub.Builder.Services
             sb.AppendLine($"  <name>{title}</name><GroundOverlay><name>{title}</name><Icon><href>files/grg_overlay.png</href></Icon>");
             sb.AppendLine(string.Create(CultureInfo.InvariantCulture, $"    <LatLonBox><north>{north:0.000000}</north><south>{south:0.000000}</south><east>{east:0.000000}</east><west>{west:0.000000}</west></LatLonBox></GroundOverlay>"));
             foreach (var o in _mapObjects.Where(x => x.Points.Count > 0))
-                sb.AppendLine(string.Create(CultureInfo.InvariantCulture, $"  <Placemark><name>{o.Name}</name><Point><coordinates>{o.Points[0].Lon:0.000000},{o.Points[0].Lat:0.000000},0</coordinates></Point></Placemark>"));
+                sb.AppendLine(string.Create(CultureInfo.InvariantCulture, $"  <Placemark><name>[{o.SymbolCode.Replace("NATO_", "")}] {o.Name}</name><Point><coordinates>{o.Points[0].Lon:0.000000},{o.Points[0].Lat:0.000000},0</coordinates></Point></Placemark>"));
             sb.AppendLine("</Document></kml>");
             var kmlEntry = zip.CreateEntry("doc.kml", CompressionLevel.Optimal);
             using var sw = new StreamWriter(kmlEntry.Open(), Encoding.UTF8); sw.Write(sb.ToString());
@@ -935,7 +1142,7 @@ namespace FieldTakHub.Builder.Services
             foreach (var o in _mapObjects.Where(x => x.Points.Count > 0))
             {
                 if (o.Points.Count == 1)
-                    sb.AppendLine(string.Create(CultureInfo.InvariantCulture, $"  <wpt lat=\"{o.Points[0].Lat:0.000000}\" lon=\"{o.Points[0].Lon:0.000000}\"><name>{o.Name}</name></wpt>"));
+                    sb.AppendLine(string.Create(CultureInfo.InvariantCulture, $"  <wpt lat=\"{o.Points[0].Lat:0.000000}\" lon=\"{o.Points[0].Lon:0.000000}\"><name>[{o.SymbolCode.Replace("NATO_", "")}] {o.Name}</name></wpt>"));
                 else
                 {
                     sb.AppendLine($"  <rte><name>{o.Name}</name>");

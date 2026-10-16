@@ -27,8 +27,6 @@ namespace FieldTakHub.Builder.Services
     {
         public string Name { get; set; } = "BLUFOR";
         public string ColorHex { get; set; } = "#2684FF";
-
-        // Ustawienia raportowania ATAK-CIV (PLI i sieć) dla strony
         public string PliStrategy { get; set; } = "Constant";
         public int ConstRateReliable { get; set; } = 0;
         public int ConstRateUnreliable { get; set; } = 1;
@@ -41,7 +39,6 @@ namespace FieldTakHub.Builder.Services
         public bool EnableMeshNonStreaming { get; set; } = true;
         public int ValidityHours { get; set; } = 0;
 
-        // Konfiguracja Meshtastic
         public string MeshMode { get; set; } = "HYBRID";
         public string DeviceRole { get; set; } = "Auto";
         public string HardwareModel { get; set; } = "generic_meshtastic";
@@ -56,7 +53,6 @@ namespace FieldTakHub.Builder.Services
         public string ChannelUrl { get; set; } = "";
         public string Psk { get; set; } = TacticalConfigModel.GenerateRandomBase64Psk();
 
-        // Gateway & Enrollment OTS
         public bool GatewayEnabled { get; set; } = false;
         public string GatewayProfile { get; set; } = "generic_meshtastic";
         public string GatewayMode { get; set; } = "ots_mqtt";
@@ -276,7 +272,6 @@ namespace FieldTakHub.Builder.Services
 
                     RemoveStandaloneLegacyCardsAndInsertFactions(win);
 
-                    // Podpięcie głównych przycisków Buildera ("Wygeneruj paczkę .ftak" / "Build") pod generowanie osobnych paczek i QR dla wszystkich Stron
                     var allBtns = new List<Button>();
                     FindVisualChildren(win, allBtns);
                     foreach (var btn in allBtns)
@@ -540,7 +535,6 @@ namespace FieldTakHub.Builder.Services
 
             var mainStack = new StackPanel();
 
-            // PASEK NAROŻNY: Zielony "+" (lewy górny róg) | Tytuł strony | Czerwony "−" (prawy górny róg)
             var topCornerBar = new Grid { Margin = new Thickness(0, 0, 0, 8) };
             topCornerBar.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
             topCornerBar.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
@@ -588,7 +582,6 @@ namespace FieldTakHub.Builder.Services
             topCornerBar.Children.Add(btnMinus);
             mainStack.Children.Add(topCornerBar);
 
-            // 1. IDENTYFIKACJA STRONY (Nazwa + Kolor RGB + Folder KML)
             var idCard = new Border { Background = BrushItemBg, BorderBrush = BrushTileBorder, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(8), Padding = new Thickness(8), Margin = new Thickness(0, 0, 0, 8) };
             var idGrid = new UniformGrid { Columns = 3 };
 
@@ -632,7 +625,6 @@ namespace FieldTakHub.Builder.Services
             idCard.Child = idGrid;
             mainStack.Children.Add(idCard);
 
-            // 2. PRZYWRÓCONA SEKCJA: KONFIGURACJA RAPORTOWANIA ATAK-CIV (PLI, SIEĆ I WAŻNOŚĆ 0=BEZTERM.)
             var atakCard = new Border { Background = BrushItemBg, BorderBrush = BrushTileBorder, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(8), Padding = new Thickness(9), Margin = new Thickness(0, 0, 0, 8) };
             var atakStack = new StackPanel();
             atakStack.Children.Add(new TextBlock { Text = "Konfiguracja raportowania ATAK-CIV (PLI, sieć i ważność)", Foreground = BrushAccent, FontWeight = FontWeights.Bold, FontSize = 11.5 });
@@ -663,7 +655,6 @@ namespace FieldTakHub.Builder.Services
             atakCard.Child = atakStack;
             mainStack.Children.Add(atakCard);
 
-            // 3. KONFIGURACJA MESHTASTIC (Kanał szyfrowany i radio LoRa)
             var meshCard = new Border { Background = BrushItemBg, BorderBrush = BrushTileBorder, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(8), Padding = new Thickness(9), Margin = new Thickness(0, 0, 0, 8) };
             var meshStack = new StackPanel();
             meshStack.Children.Add(new TextBlock { Text = "Konfiguracja Meshtastic", Foreground = Brushes.White, FontWeight = FontWeights.Bold, FontSize = 11.5 });
@@ -725,7 +716,6 @@ namespace FieldTakHub.Builder.Services
             meshCard.Child = meshStack;
             mainStack.Children.Add(meshCard);
 
-            // 4. GATEWAY MESHTASTIC <-> OTS ORAZ ENROLLMENT OPENTAK
             var bottomSplitGrid = new UniformGrid { Columns = 2, Margin = new Thickness(0, 0, 0, 8) };
 
             var gwCard = new Border { Background = BrushItemBg, BorderBrush = BrushTileBorder, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(8), Padding = new Thickness(8), Margin = new Thickness(0, 0, 4, 0) };
@@ -769,11 +759,10 @@ namespace FieldTakHub.Builder.Services
             bottomSplitGrid.Children.Add(enrCard);
             mainStack.Children.Add(bottomSplitGrid);
 
-            // DOLNY PASEK AKCJI KARTY: Foldery KML | Plakat A4 + QR | Buduj wszystkie strony (.ftak + QR)
             var bottomBtnsGrid = new UniformGrid { Columns = 3 };
-            var btnFolders = new Button { Content = "📁 Pliki stron", Height = 28, Margin = new Thickness(0, 0, 3, 0), Background = BrushItemBg, Foreground = Brushes.White, BorderBrush = BrushTileBorder, BorderThickness = new Thickness(1), FontSize = 10, FontWeight = FontWeights.SemiBold, Cursor = Cursors.Hand, ToolTip = "Przygotuj pliki konfiguracyjne i podfoldery KML stron w katalogu source" };
-            var btnPoster = new Button { Content = "🖨️ Plakat + QR", Height = 28, Margin = new Thickness(2, 0, 2, 0), Background = BrushItemBg, Foreground = Brushes.White, BorderBrush = BrushAccent, BorderThickness = new Thickness(1), FontSize = 10, FontWeight = FontWeights.Bold, Cursor = Cursors.Hand, ToolTip = "Wygeneruj paczkę .ftak, kod QR oraz plakat A4 dla tej strony" };
-            var btnBuildAll = new Button { Content = "⚡ Buduj strony (.ftak)", Height = 28, Margin = new Thickness(3, 0, 0, 0), Background = BrushButtonAccent, Foreground = BrushDarkFg, BorderThickness = new Thickness(0), FontSize = 10, FontWeight = FontWeights.Bold, Cursor = Cursors.Hand, ToolTip = "Zbuduj osobne paczki .ftak oraz osobne kody QR dla wszystkich skonfigurowanych stron" };
+            var btnFolders = new Button { Content = "📁 Pliki stron", Height = 28, Margin = new Thickness(0, 0, 3, 0), Background = BrushItemBg, Foreground = Brushes.White, BorderBrush = BrushTileBorder, BorderThickness = new Thickness(1), FontSize = 10, FontWeight = FontWeights.SemiBold, Cursor = Cursors.Hand };
+            var btnPoster = new Button { Content = "🖨️ Plakat + QR", Height = 28, Margin = new Thickness(2, 0, 2, 0), Background = BrushItemBg, Foreground = Brushes.White, BorderBrush = BrushAccent, BorderThickness = new Thickness(1), FontSize = 10, FontWeight = FontWeights.Bold, Cursor = Cursors.Hand };
+            var btnBuildAll = new Button { Content = "⚡ Buduj strony (.ftak)", Height = 28, Margin = new Thickness(3, 0, 0, 0), Background = BrushButtonAccent, Foreground = BrushDarkFg, BorderThickness = new Thickness(0), FontSize = 10, FontWeight = FontWeights.Bold, Cursor = Cursors.Hand };
 
             btnFolders.Click += async (_, __) =>
             {
@@ -794,22 +783,22 @@ namespace FieldTakHub.Builder.Services
             return outerCard;
         }
 
-        private static string ShowRgbColorPickerDialog(Window owner, string factionName, string initialHex)
+        internal static string ShowRgbColorPickerDialog(Window owner, string factionName, string initialHex)
         {
             Color initColor = Color.FromRgb(38, 132, 255);
             try { initColor = (Color)ColorConverter.ConvertFromString(initialHex); } catch { }
             byte r = initColor.R, g = initColor.G, b = initColor.B;
             string selectedHex = $"#{r:X2}{g:X2}{b:X2}"; bool confirmed = false;
 
-            var dlg = new Window { Title = $"Paleta RGB — {factionName}", Width = 400, Height = 340, WindowStartupLocation = WindowStartupLocation.CenterOwner, Owner = owner, Background = BrushCardBg, Foreground = Brushes.White, ResizeMode = ResizeMode.NoResize, WindowStyle = WindowStyle.ToolWindow };
+            var dlg = new Window { Title = $"Paleta RGB — {factionName}", Width = 410, Height = 360, WindowStartupLocation = WindowStartupLocation.CenterOwner, Owner = owner, Background = BrushCardBg, Foreground = Brushes.White, ResizeMode = ResizeMode.NoResize, WindowStyle = WindowStyle.ToolWindow };
             var root = new StackPanel { Margin = new Thickness(16) };
             var previewBorder = new Border { Height = 38, CornerRadius = new CornerRadius(6), Background = CreateFrozenBrush(r, g, b), BorderBrush = BrushAccent, BorderThickness = new Thickness(1), Margin = new Thickness(0, 0, 0, 10) };
             var previewText = new TextBlock { Text = $"{factionName} ({selectedHex})", Foreground = Brushes.White, FontWeight = FontWeights.Bold, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
             previewBorder.Child = previewText; root.Children.Add(previewBorder);
 
             var swatchesWrap = new WrapPanel { Margin = new Thickness(0, 0, 0, 10) };
-            string[] presets = { "#2684FF", "#EB4034", "#F5B82E", "#2ECC71", "#9B59B6", "#1FE0C5", "#E67E22", "#E84393", "#00CEC9", "#95A5A6" };
-            Slider sR = null, sG = null, sB = null; bool updating = false;
+            string[] presets = { "#2684FF", "#EB4034", "#F5B82E", "#2ECC71", "#9B59B6", "#1FE0C5", "#E67E22", "#E84393", "#00CEC9", "#FFFFFF" };
+            Slider sR = null, sG = null, sB = null; TextBox hexBox = null; bool updating = false;
 
             void UpdateFromRgb()
             {
@@ -817,6 +806,7 @@ namespace FieldTakHub.Builder.Services
                 selectedHex = $"#{r:X2}{g:X2}{b:X2}";
                 previewBorder.Background = CreateFrozenBrush(r, g, b); previewText.Text = $"{factionName} ({selectedHex})";
                 if (sR != null) sR.Value = r; if (sG != null) sG.Value = g; if (sB != null) sB.Value = b;
+                if (hexBox != null) hexBox.Text = selectedHex;
                 updating = false;
             }
 
@@ -847,7 +837,14 @@ namespace FieldTakHub.Builder.Services
             root.Children.Add(MakeSlider("Green (G):", g, out sG, v => g = v));
             root.Children.Add(MakeSlider("Blue (B):", b, out sB, v => b = v));
 
-            var btnBar = new UniformGrid { Columns = 2, Margin = new Thickness(0, 10, 0, 0) };
+            hexBox = (TextBox)TextCtrl(selectedHex, txt =>
+            {
+                if (updating) return;
+                try { var c = (Color)ColorConverter.ConvertFromString(txt.Trim()); r = c.R; g = c.G; b = c.B; UpdateFromRgb(); } catch { }
+            });
+            root.Children.Add(FieldBox("Kod koloru #HEX:", hexBox));
+
+            var btnBar = new UniformGrid { Columns = 2, Margin = new Thickness(0, 6, 0, 0) };
             var btnCancel = new Button { Content = "Anuluj", Height = 28, Margin = new Thickness(0, 0, 6, 0), Background = BrushItemBg, Foreground = Brushes.White, BorderBrush = BrushTileBorder, BorderThickness = new Thickness(1) };
             var btnOk = new Button { Content = "✓ Zastosuj RGB", Height = 28, Margin = new Thickness(6, 0, 0, 0), Background = BrushButtonAccent, Foreground = BrushDarkFg, FontWeight = FontWeights.Bold, BorderThickness = new Thickness(0) };
             btnCancel.Click += (_, __) => dlg.Close(); btnOk.Click += (_, __) => { confirmed = true; dlg.Close(); };
