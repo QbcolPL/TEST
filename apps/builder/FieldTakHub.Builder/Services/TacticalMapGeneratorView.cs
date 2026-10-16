@@ -6,11 +6,13 @@ using System.Globalization;
 using System.IO;
 using System.IO.Compression;
 using System.Linq;
+using System.Net;
 using System.Net.Http;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
@@ -29,6 +31,7 @@ namespace FieldTakHub.Builder.Services
         public string Name { get; set; }
         public bool IsWmsEpsg3857 { get; set; }
         public string UrlTemplate { get; set; }
+        public string FallbackUrlTemplate { get; set; }
         public override string ToString() => Name;
     }
 
@@ -51,6 +54,7 @@ namespace FieldTakHub.Builder.Services
     public static class TacticalMapGeneratorView
     {
         private static readonly HttpClient Http = CreateHttpClient();
+        private static readonly SemaphoreSlim TileThrottle = new SemaphoreSlim(6, 6);
         private static readonly ConcurrentDictionary<string, byte[]> TileCache = new ConcurrentDictionary<string, byte[]>();
 
         private static UIElement _originalWindowContent;
@@ -58,10 +62,12 @@ namespace FieldTakHub.Builder.Services
         private static Button _tabBuilderBtn, _tabMapBtn, _btnToolPan, _btnToolMarker, _btnToolDot, _btnToolAo, _btnToolRoute;
         private static readonly List<Button> _scalePresetButtons = new List<Button>();
         private static Canvas _mapCanvas;
-        private static TextBlock _statusText, _coordsBadge, _gridThicknessValueLabel;
+        private static TextBlock _statusText, _coordsBadge, _gridThicknessValueLabel, _mainGridOpacityValueLabel, _subGridOpacityValueLabel;
         private static StackPanel _objectsListStack;
 
         private static double _centerLat = 49.9135, _centerLon = 19.0238, _gridThicknessMultiplier = 1.0, _dragStartLat, _dragStartLon;
+        private static double _mainGridOpacity = 0.85;
+        private static double _subGridOpacity = 0.75;
         private static int _zoom = 16, _targetScaleDenominator = 5000;
         private static string _sheetFormat = "A4 (297 × 210 mm)", _sheetOrientation = "Poziomo";
         private static bool _showLidarSingleWms, _isDragging;
@@ -97,10 +103,36 @@ namespace FieldTakHub.Builder.Services
             new TacticalMapLayerDef { Id = "google_hyb", Name = "Google Satelita + Opisy", IsWmsEpsg3857 = false, UrlTemplate = "https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}" },
             new TacticalMapLayerDef { Id = "google_sat", Name = "Google Satelita (Czysta Ortofotomapa)", IsWmsEpsg3857 = false, UrlTemplate = "https://mt1.google.com/vt/lyrs=s&x={x}&y={y}&z={z}" },
             new TacticalMapLayerDef { Id = "google_ter", Name = "Google Teren (Warstwice)", IsWmsEpsg3857 = false, UrlTemplate = "https://mt1.google.com/vt/lyrs=p&x={x}&y={y}&z={z}" },
-            new TacticalMapLayerDef { Id = "geoportal_hires", Name = "Geoportal Ortofotomapa HIGH-RES", IsWmsEpsg3857 = true, UrlTemplate = "https://mapy.geoportal.gov.pl/wss/service/PZGIK/ORTO/WMS/HighResolution?SERVICE=WMS&VERSION=1.1.1&REQUEST=GetMap&LAYERS=Raster&STYLES=&SRS=EPSG:3857&BBOX={bbox}&WIDTH=256&HEIGHT=256&FORMAT=image/jpeg" },
-            new TacticalMapLayerDef { Id = "geoportal_std", Name = "Geoportal Ortofotomapa Standard", IsWmsEpsg3857 = true, UrlTemplate = "https://mapy.geoportal.gov.pl/wss/service/PZGIK/ORTO/WMS/StandardResolution?SERVICE=WMS&VERSION=1.1.1&REQUEST=GetMap&LAYERS=Raster&STYLES=&SRS=EPSG:3857&BBOX={bbox}&WIDTH=256&HEIGHT=256&FORMAT=image/jpeg" },
-            new TacticalMapLayerDef { Id = "geoportal_lidar", Name = "Geoportal LiDAR ISOK (Cieniowanie NMT)", IsWmsEpsg3857 = true, UrlTemplate = "https://mapy.geoportal.gov.pl/wss/service/PZGIK/NMT/GRID1/WMS/ShadedRelief?SERVICE=WMS&VERSION=1.1.1&REQUEST=GetMap&LAYERS=Raster&STYLES=&SRS=EPSG:3857&BBOX={bbox}&WIDTH=256&HEIGHT=256&FORMAT=image/jpeg" },
-            new TacticalMapLayerDef { Id = "geoportal_topo", Name = "Geoportal Mapa Topograficzna (BDOT10k / Topo)", IsWmsEpsg3857 = true, UrlTemplate = "https://mapy.geoportal.gov.pl/wss/ext/KrajowaIntegracjaMapTopograficznych?SERVICE=WMS&VERSION=1.1.1&REQUEST=GetMap&LAYERS=raster&STYLES=&SRS=EPSG:3857&BBOX={bbox}&WIDTH=256&HEIGHT=256&FORMAT=image/png" },
+            new TacticalMapLayerDef
+            {
+                Id = "geoportal_hires",
+                Name = "Geoportal Ortofotomapa HIGH-RES (PZGIK)",
+                IsWmsEpsg3857 = true,
+                UrlTemplate = "https://mapy.geoportal.gov.pl/wss/service/PZGIK/ORTO/WMS/HighResolution?SERVICE=WMS&VERSION=1.1.1&REQUEST=GetMap&LAYERS=Raster&STYLES=&SRS=EPSG:3857&BBOX={bbox}&WIDTH={w}&HEIGHT={h}&FORMAT=image/jpeg",
+                FallbackUrlTemplate = "https://mapy.geoportal.gov.pl/wss/service/PZGIK/ORTO/WMS/StandardResolution?SERVICE=WMS&VERSION=1.1.1&REQUEST=GetMap&LAYERS=Raster&STYLES=&SRS=EPSG:3857&BBOX={bbox}&WIDTH={w}&HEIGHT={h}&FORMAT=image/jpeg"
+            },
+            new TacticalMapLayerDef
+            {
+                Id = "geoportal_std",
+                Name = "Geoportal Ortofotomapa Standard (PZGIK)",
+                IsWmsEpsg3857 = true,
+                UrlTemplate = "https://mapy.geoportal.gov.pl/wss/service/PZGIK/ORTO/WMS/StandardResolution?SERVICE=WMS&VERSION=1.1.1&REQUEST=GetMap&LAYERS=Raster&STYLES=&SRS=EPSG:3857&BBOX={bbox}&WIDTH={w}&HEIGHT={h}&FORMAT=image/jpeg"
+            },
+            new TacticalMapLayerDef
+            {
+                Id = "geoportal_lidar",
+                Name = "Geoportal LiDAR ISOK (Cieniowanie NMT)",
+                IsWmsEpsg3857 = true,
+                UrlTemplate = "https://mapy.geoportal.gov.pl/wss/service/PZGIK/NMT/GRID1/WMS/ShadedRelief?SERVICE=WMS&VERSION=1.1.1&REQUEST=GetMap&LAYERS=Raster&STYLES=&SRS=EPSG:3857&BBOX={bbox}&WIDTH={w}&HEIGHT={h}&FORMAT=image/jpeg"
+            },
+            new TacticalMapLayerDef
+            {
+                Id = "geoportal_topo",
+                Name = "Geoportal Mapa Topograficzna (TOPO / BDOT10k)",
+                IsWmsEpsg3857 = true,
+                UrlTemplate = "https://mapy.geoportal.gov.pl/wss/service/img/guest/TOPO/MapServer/WMSServer?SERVICE=WMS&VERSION=1.1.1&REQUEST=GetMap&LAYERS=Raster&STYLES=&SRS=EPSG:3857&BBOX={bbox}&WIDTH={w}&HEIGHT={h}&FORMAT=image/jpeg",
+                FallbackUrlTemplate = "https://mapy.geoportal.gov.pl/wss/ext/KrajowaIntegracjaMapTopograficznych?SERVICE=WMS&VERSION=1.1.1&REQUEST=GetMap&LAYERS=raster&STYLES=&SRS=EPSG:3857&BBOX={bbox}&WIDTH={w}&HEIGHT={h}&FORMAT=image/png"
+            },
             new TacticalMapLayerDef { Id = "esri_sat", Name = "ESRI World Imagery (Ortofotomapa)", IsWmsEpsg3857 = false, UrlTemplate = "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}" },
             new TacticalMapLayerDef { Id = "osm_std", Name = "OpenStreetMap Standard", IsWmsEpsg3857 = false, UrlTemplate = "https://tile.openstreetmap.org/{z}/{x}/{y}.png" },
             new TacticalMapLayerDef { Id = "open_topomap", Name = "OpenTopoMap (Mapa Topograficzna)", IsWmsEpsg3857 = false, UrlTemplate = "https://a.tile.opentopomap.org/{z}/{x}/{y}.png" },
@@ -109,9 +141,31 @@ namespace FieldTakHub.Builder.Services
 
         private static HttpClient CreateHttpClient()
         {
-            var c = new HttpClient { Timeout = TimeSpan.FromSeconds(14) };
-            c.DefaultRequestHeaders.UserAgent.ParseAdd("FieldTakHubBuilder/2.4 (Windows NT 10.0; Win64; x64)");
+            var handler = new HttpClientHandler
+            {
+                AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate,
+                ServerCertificateCustomValidationCallback = (_, __, ___, ____) => true,
+                MaxConnectionsPerServer = 12
+            };
+            var c = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(18) };
+            c.DefaultRequestHeaders.UserAgent.ParseAdd("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36");
+            c.DefaultRequestHeaders.Referrer = new Uri("https://mapy.geoportal.gov.pl/");
+            c.DefaultRequestHeaders.Accept.ParseAdd("image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8");
             return c;
+        }
+
+        // Weryfikuje nagłówki binarne obrazu (odrzuca komunikaty błędów XML ServiceException zwracane przez Geoportal)
+        private static bool IsValidImagePayload(byte[] data)
+        {
+            if (data == null || data.Length < 128) return false;
+            // JPEG: FF D8 FF
+            if (data[0] == 0xFF && data[1] == 0xD8 && data[2] == 0xFF) return true;
+            // PNG: 89 50 4E 47
+            if (data[0] == 0x89 && data[1] == 0x50 && data[2] == 0x4E && data[3] == 0x47) return true;
+            // GIF / WebP / BMP
+            if (data[0] == 0x47 && data[1] == 0x49 && data[2] == 0x46) return true;
+            if (data[0] == 0x52 && data[1] == 0x49 && data[2] == 0x46 && data[3] == 0x46) return true;
+            return false;
         }
 
         private static double GetExactMetersPerPixel()
@@ -143,7 +197,7 @@ namespace FieldTakHub.Builder.Services
 
                     var navBorder = new Border { Background = TacticalConfigPanel.BrushInputBg, BorderBrush = TacticalConfigPanel.BrushCardBorder, BorderThickness = new Thickness(0, 0, 0, 1), Padding = new Thickness(16, 0, 16, 0) };
                     var navDock = new DockPanel();
-                    var rightInfo = new TextBlock { Text = "Field TAK Hub 2.4  •  Symbole Wektorowe NATO APP-6  •  Dokładna Skala 1:X  •  MGRS Keypad", Foreground = TacticalConfigPanel.BrushMutedText, FontSize = 11, VerticalAlignment = VerticalAlignment.Center };
+                    var rightInfo = new TextBlock { Text = "Field TAK Hub 2.4  •  Geoportal WMS Engine  •  Symbole NATO APP-6  •  Przezroczystość MGRS/Keypad", Foreground = TacticalConfigPanel.BrushMutedText, FontSize = 11, VerticalAlignment = VerticalAlignment.Center };
                     DockPanel.SetDock(rightInfo, Dock.Right);
                     navDock.Children.Add(rightInfo);
 
@@ -226,12 +280,13 @@ namespace FieldTakHub.Builder.Services
             mainGrid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(32) });
 
             var bodyGrid = new Grid();
-            bodyGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(420) });
+            bodyGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(425) });
             bodyGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
 
             var leftScroll = new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Background = TacticalConfigPanel.BrushCardBg, Padding = new Thickness(10) };
             var leftStack = new StackPanel { Margin = new Thickness(6) };
 
+            // SEKCJA 1: ARKUSZ, DOKŁADNA SKALA MAPY 1:X, PODKŁAD & LiDAR ISOK
             var sec1 = CreateSectionCard("1. ARKUSZ, DOKŁADNA SKALA MAPY (1:X), PODKŁAD & LiDAR ISOK");
             var searchRow = new Grid { Margin = new Thickness(0, 0, 0, 6) };
             searchRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
@@ -280,7 +335,7 @@ namespace FieldTakHub.Builder.Services
             var layerCombo = new ComboBox { ItemsSource = Layers, SelectedIndex = 0, Height = 26, FontSize = 10.5, Margin = new Thickness(0, 0, 0, 8), Tag = "INJECTED" };
             TacticalConfigPanel.ApplyUnifiedComboBoxTheme(layerCombo, win);
             layerCombo.SelectionChanged += (_, __) => { if (layerCombo.SelectedItem is TacticalMapLayerDef def) { _activeLayer = def; _ = RenderMapTilesAsync(); } };
-            sec1.Children.Add(TacticalConfigPanel.FieldBox("Podkład bazowy:", layerCombo));
+            sec1.Children.Add(TacticalConfigPanel.FieldBox("Podkład bazowy (Geoportal WMS Single-Request / Google / ESRI / OSM):", layerCombo));
 
             var lidarBox = new Border { Background = TacticalConfigPanel.BrushInputBg, BorderBrush = TacticalConfigPanel.BrushAccent, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(6), Padding = new Thickness(10, 7, 10, 7) };
             var chkLidar = new CheckBox { Content = "Nałóż rzeźbę LiDAR ISOK (1 zapytanie WMS - bez dziur)", IsChecked = false, Foreground = TacticalConfigPanel.BrushAccent, FontWeight = FontWeights.SemiBold, FontSize = 10.5 };
@@ -290,7 +345,8 @@ namespace FieldTakHub.Builder.Services
             sec1.Children.Add(lidarBox);
             leftStack.Children.Add(WrapCard(sec1));
 
-            var sec2 = CreateSectionCard("2. SYSTEM WSPÓŁRZĘDNYCH I SIATKA (MGRS / KEYPAD 1-9)");
+            // SEKCJA 2: SYSTEM WSPÓŁRZĘDNYCH I SIATKA + SUWAKI GRUBOŚCI I PRZEZROCZYSTOŚCI (GŁÓWNEJ ORAZ POMOCNICZEJ KEYPAD/ĆWIARTKI)
+            var sec2 = CreateSectionCard("2. SYSTEM WSPÓŁRZĘDNYCH, GRUBOŚĆ & PRZEZROCZYSTOŚĆ SIATEK");
             sec2.Children.Add(TacticalConfigPanel.FieldBox("System współrzędnych i typ siatki na mapie:", TacticalConfigPanel.ComboCtrl(new[] { "MGRS / UTM (Siatka wojskowa w metrach)", "Siatka Sektorowa (A1, B2, C3...)", "WGS84 (Stopnie geograficzne Lat/Lon)", "Brak siatki" }, _coordSystem, win, v => { _coordSystem = v; _ = RenderMapTilesAsync(); })));
 
             var subGridRow = new UniformGrid { Columns = 2 };
@@ -298,16 +354,51 @@ namespace FieldTakHub.Builder.Services
             subGridRow.Children.Add(TacticalConfigPanel.FieldBox("Opisy kratek 100 m:", TacticalConfigPanel.ComboCtrl(new[] { "MGRS + Ćwiartki/Keypad", "Tylko główne linie MGRS", "Brak opisów wewnątrz" }, _gridLabelsMode, win, v => { _gridLabelsMode = v; _ = RenderMapTilesAsync(); })));
             sec2.Children.Add(subGridRow);
 
-            var thickHeaderDock = new DockPanel { Margin = new Thickness(0, 2, 0, 2) };
-            _gridThicknessValueLabel = new TextBlock { Text = "1.0x", Foreground = TacticalConfigPanel.BrushAccent, FontWeight = FontWeights.Bold, FontSize = 10.5 };
+            // Suwak 1: Grubość linii siatki
+            var thickHeaderDock = new DockPanel { Margin = new Thickness(0, 2, 0, 1) };
+            _gridThicknessValueLabel = new TextBlock { Text = "1.0x", Foreground = TacticalConfigPanel.BrushAccent, FontWeight = FontWeights.Bold, FontSize = 10 };
             DockPanel.SetDock(_gridThicknessValueLabel, Dock.Right);
             thickHeaderDock.Children.Add(_gridThicknessValueLabel);
-            thickHeaderDock.Children.Add(new TextBlock { Text = "Grubość linii siatki (głównej i Keypad):", Foreground = TacticalConfigPanel.BrushMutedText, FontSize = 10 });
+            thickHeaderDock.Children.Add(new TextBlock { Text = "Grubość linii siatki (głównej i pomocniczej):", Foreground = TacticalConfigPanel.BrushMutedText, FontSize = 9.5 });
             sec2.Children.Add(thickHeaderDock);
 
-            var thickSlider = new Slider { Minimum = 0.5, Maximum = 3.0, Value = 1.0, Margin = new Thickness(0, 0, 0, 6) };
+            var thickSlider = new Slider { Minimum = 0.5, Maximum = 3.0, Value = 1.0, Margin = new Thickness(0, 0, 0, 4) };
             thickSlider.ValueChanged += (_, e) => { _gridThicknessMultiplier = Math.Round(e.NewValue, 1); if (_gridThicknessValueLabel != null) _gridThicknessValueLabel.Text = $"{_gridThicknessMultiplier:0.0}x"; _ = RenderMapTilesAsync(); };
             sec2.Children.Add(thickSlider);
+
+            // Suwak 2: Przezroczystość głównych linii geograficznych (MGRS / WGS84 / Sektorowa)
+            var mainOpDock = new DockPanel { Margin = new Thickness(0, 2, 0, 1) };
+            _mainGridOpacityValueLabel = new TextBlock { Text = "85%", Foreground = TacticalConfigPanel.BrushAccent, FontWeight = FontWeights.Bold, FontSize = 10 };
+            DockPanel.SetDock(_mainGridOpacityValueLabel, Dock.Right);
+            mainOpDock.Children.Add(_mainGridOpacityValueLabel);
+            mainOpDock.Children.Add(new TextBlock { Text = "Widoczność (alfa) głównych linii i opisów (MGRS / WGS84):", Foreground = TacticalConfigPanel.BrushMutedText, FontSize = 9.5 });
+            sec2.Children.Add(mainOpDock);
+
+            var mainOpSlider = new Slider { Minimum = 0.05, Maximum = 1.0, Value = 0.85, Margin = new Thickness(0, 0, 0, 4) };
+            mainOpSlider.ValueChanged += (_, e) =>
+            {
+                _mainGridOpacity = Math.Round(e.NewValue, 2);
+                if (_mainGridOpacityValueLabel != null) _mainGridOpacityValueLabel.Text = $"{(int)Math.Round(_mainGridOpacity * 100)}%";
+                _ = RenderMapTilesAsync();
+            };
+            sec2.Children.Add(mainOpSlider);
+
+            // Suwak 3: Przezroczystość podziałek pomocniczych (Ćwiartki A-D / Keypad 1-9 — zarówno linie jak i cyfry/litery)
+            var subOpDock = new DockPanel { Margin = new Thickness(0, 2, 0, 1) };
+            _subGridOpacityValueLabel = new TextBlock { Text = "75%", Foreground = TacticalConfigPanel.BrushAccent, FontWeight = FontWeights.Bold, FontSize = 10 };
+            DockPanel.SetDock(_subGridOpacityValueLabel, Dock.Right);
+            subOpDock.Children.Add(_subGridOpacityValueLabel);
+            subOpDock.Children.Add(new TextBlock { Text = "Widoczność (alfa) podziałek Ćwiartek i Keypad (linie + cyfry):", Foreground = TacticalConfigPanel.BrushMutedText, FontSize = 9.5 });
+            sec2.Children.Add(subOpDock);
+
+            var subOpSlider = new Slider { Minimum = 0.0, Maximum = 1.0, Value = 0.75, Margin = new Thickness(0, 0, 0, 6) };
+            subOpSlider.ValueChanged += (_, e) =>
+            {
+                _subGridOpacity = Math.Round(e.NewValue, 2);
+                if (_subGridOpacityValueLabel != null) _subGridOpacityValueLabel.Text = $"{(int)Math.Round(_subGridOpacity * 100)}%";
+                _ = RenderMapTilesAsync();
+            };
+            sec2.Children.Add(subOpSlider);
 
             var colAndHaloRow = new UniformGrid { Columns = 2 };
             colAndHaloRow.Children.Add(TacticalConfigPanel.FieldBox("Kolor siatki:", TacticalConfigPanel.ComboCtrl(new[] { "Żółty", "Turkusowy", "Biały", "Czerwony", "Czarny" }, _gridColorName, win, v => { _gridColorName = v; _ = RenderMapTilesAsync(); })));
@@ -315,6 +406,7 @@ namespace FieldTakHub.Builder.Services
             sec2.Children.Add(colAndHaloRow);
             leftStack.Children.Add(WrapCard(sec2));
 
+            // SEKCJA 3: ZNACZNIKI WEKTOROWE NATO APP-6, KROPKI KOLOROWE I TEREN GRY
             var sec3 = CreateSectionCard("3. ZNACZNIKI WEKTOROWE NATO (APP-6), KOLOR RGB & TEREN GRY");
             void UpdateToolButtonsVisual()
             {
@@ -398,6 +490,7 @@ namespace FieldTakHub.Builder.Services
             RefreshObjectsListUI();
             leftStack.Children.Add(WrapCard(sec3));
 
+            // SEKCJA 4: ELEMENTY MAPY (PÓŁNOC / PODZIAŁKA / LEGENDA) & EKSPORT
             var sec4 = CreateSectionCard("4. ELEMENTY MAPY (PÓŁNOC / PODZIAŁKA / LEGENDA) & EKSPORT");
             string[] corners = { "Lewy górny róg", "Prawy górny róg", "Lewy dolny róg", "Prawy dolny róg", "Ukryj" };
             var posGrid = new UniformGrid { Columns = 2, Margin = new Thickness(0, 0, 0, 8) };
@@ -489,7 +582,7 @@ namespace FieldTakHub.Builder.Services
             Grid.SetRow(bodyGrid, 0); mainGrid.Children.Add(bodyGrid);
 
             var bottomBar = new Border { Background = TacticalConfigPanel.BrushInputBg, BorderBrush = TacticalConfigPanel.BrushCardBorder, BorderThickness = new Thickness(0, 1, 0, 0), Padding = new Thickness(16, 0, 16, 0) };
-            _statusText = new TextBlock { Text = "Gotowy. Spójny motyw Field TAK Hub, płynna skala matematyczna 1:X, wzmocniona siatka MGRS Keypad 1-9 / Ćwiartki A-D oraz wektorowe znaki NATO APP-6.", Foreground = TacticalConfigPanel.BrushAccent, FontSize = 11, VerticalAlignment = VerticalAlignment.Center };
+            _statusText = new TextBlock { Text = "Gotowy. Pobieranie WMS z Geoportalu (1 zapytanie + automatyczny fallback) oraz niezależna regulacja przezroczystości siatki głównej i pomocniczej.", Foreground = TacticalConfigPanel.BrushAccent, FontSize = 11, VerticalAlignment = VerticalAlignment.Center };
             bottomBar.Child = _statusText; Grid.SetRow(bottomBar, 1); mainGrid.Children.Add(bottomBar);
 
             rootBorder.Child = mainGrid;
@@ -638,14 +731,65 @@ namespace FieldTakHub.Builder.Services
 
         private static string BuildTileUrl(TacticalMapLayerDef layer, int tx, int ty, int zoom)
         {
-            if (layer.IsWmsEpsg3857) return layer.UrlTemplate.Replace("{bbox}", GetEpsg3857BBox(tx, ty, zoom));
+            if (layer.IsWmsEpsg3857)
+                return layer.UrlTemplate.Replace("{bbox}", GetEpsg3857BBox(tx, ty, zoom)).Replace("{w}", "256").Replace("{h}", "256");
             return layer.UrlTemplate.Replace("{z}", zoom.ToString()).Replace("{x}", tx.ToString()).Replace("{y}", ty.ToString());
         }
 
-        private static async Task<byte[]> FetchTileBytesAsync(string url)
+        private static string BuildFullViewportWmsUrl(string template, double w, double h)
         {
-            if (TileCache.TryGetValue(url, out var cached)) return cached;
-            try { byte[] data = await Http.GetByteArrayAsync(url); if (data != null && data.Length > 100) { TileCache[url] = data; return data; } } catch { }
+            var (nwLat, nwLon) = ScreenToLatLon(0, 0, w, h);
+            var (seLat, seLon) = ScreenToLatLon(w, h, w, h);
+            var (minX, minY) = LatLonToEpsg3857(seLat, nwLon);
+            var (maxX, maxY) = LatLonToEpsg3857(nwLat, seLon);
+            int reqW = Math.Clamp((int)Math.Round(w), 256, 1650);
+            int reqH = Math.Clamp((int)Math.Round(h), 256, 1650);
+            string bbox = string.Create(CultureInfo.InvariantCulture, $"{minX:0.00},{minY:0.00},{maxX:0.00},{maxY:0.00}");
+            return template.Replace("{bbox}", bbox).Replace("{w}", reqW.ToString()).Replace("{h}", reqH.ToString());
+        }
+
+        // Niezawodne pobieranie obrazu z kontrolą sygnatury binarnej JPEG/PNG, limitem połączeń i automatycznym ponawianiem
+        private static async Task<byte[]> FetchTileBytesAsync(string url, string fallbackUrl = null)
+        {
+            if (string.IsNullOrEmpty(url)) return null;
+            if (TileCache.TryGetValue(url, out var cached) && IsValidImagePayload(cached)) return cached;
+
+            await TileThrottle.WaitAsync();
+            try
+            {
+                for (int attempt = 0; attempt < 2; attempt++)
+                {
+                    try
+                    {
+                        byte[] data = await Http.GetByteArrayAsync(url);
+                        if (IsValidImagePayload(data))
+                        {
+                            TileCache[url] = data;
+                            return data;
+                        }
+                    }
+                    catch { }
+                    if (attempt == 0) await Task.Delay(120);
+                }
+
+                if (!string.IsNullOrEmpty(fallbackUrl))
+                {
+                    try
+                    {
+                        byte[] fbData = await Http.GetByteArrayAsync(fallbackUrl);
+                        if (IsValidImagePayload(fbData))
+                        {
+                            TileCache[url] = fbData;
+                            return fbData;
+                        }
+                    }
+                    catch { }
+                }
+            }
+            finally
+            {
+                TileThrottle.Release();
+            }
             return null;
         }
 
@@ -656,49 +800,67 @@ namespace FieldTakHub.Builder.Services
             double h = _mapCanvas.ActualHeight > 100 ? _mapCanvas.ActualHeight : 650;
             double tilePx = GetScaledTileSizePx();
 
-            var (centerTileX, centerTileY) = LatLonToTileXY(_centerLat, _centerLon, _zoom);
-            int minTx = (int)Math.Floor(centerTileX - (w / 2.0) / tilePx) - 1, maxTx = (int)Math.Floor(centerTileX + (w / 2.0) / tilePx) + 1;
-            int minTy = (int)Math.Floor(centerTileY - (h / 2.0) / tilePx) - 1, maxTy = (int)Math.Floor(centerTileY + (h / 2.0) / tilePx) + 1;
-            int maxIndex = (1 << _zoom) - 1;
-
+            byte[] singleBaseWmsBytes = null;
             byte[] singleLidarBytes = null;
             List<(double ScreenX, double ScreenY, byte[] Bytes)> fetchedTiles = null;
 
             if (!transparentGrgOnly)
             {
-                var tileJobs = new List<(int Tx, int Ty, double ScreenX, double ScreenY, string Url)>();
-                for (int tx = minTx; tx <= maxTx; tx++)
-                    for (int ty = minTy; ty <= maxTy; ty++)
-                    {
-                        if (ty < 0 || ty > maxIndex) continue;
-                        int wrappedTx = ((tx % (maxIndex + 1)) + (maxIndex + 1)) % (maxIndex + 1);
-                        tileJobs.Add((wrappedTx, ty, (w / 2.0) + (tx - centerTileX) * tilePx, (h / 2.0) + (ty - centerTileY) * tilePx, BuildTileUrl(_activeLayer, wrappedTx, ty, _zoom)));
-                    }
-
-                var tilesTask = Task.WhenAll(tileJobs.Select(async job => (job.ScreenX, job.ScreenY, await FetchTileBytesAsync(job.Url))));
                 Task<byte[]> lidarTask = Task.FromResult<byte[]>(null);
-                if (_showLidarSingleWms)
+                if (_showLidarSingleWms && _activeLayer.Id != "geoportal_lidar")
                 {
-                    var (nwLat, nwLon) = ScreenToLatLon(0, 0, w, h);
-                    var (seLat, seLon) = ScreenToLatLon(w, h, w, h);
-                    var (minX, minY) = LatLonToEpsg3857(seLat, nwLon);
-                    var (maxX, maxY) = LatLonToEpsg3857(nwLat, seLon);
-                    int reqW = Math.Clamp((int)w, 256, 1600), reqH = Math.Clamp((int)h, 256, 1600);
-                    string singleWmsUrl = string.Create(CultureInfo.InvariantCulture, $"https://mapy.geoportal.gov.pl/wss/service/PZGIK/NMT/GRID1/WMS/ShadedRelief?SERVICE=WMS&VERSION=1.1.1&REQUEST=GetMap&LAYERS=Raster&STYLES=&SRS=EPSG:3857&BBOX={minX:0.00},{minY:0.00},{maxX:0.00},{maxY:0.00}&WIDTH={reqW}&HEIGHT={reqH}&FORMAT=image/jpeg");
-                    lidarTask = FetchTileBytesAsync(singleWmsUrl);
+                    string lidarTemplate = Layers.First(l => l.Id == "geoportal_lidar").UrlTemplate;
+                    lidarTask = FetchTileBytesAsync(BuildFullViewportWmsUrl(lidarTemplate, w, h));
                 }
-                await Task.WhenAll(tilesTask, lidarTask);
-                fetchedTiles = tilesTask.Result.ToList();
-                singleLidarBytes = lidarTask.Result;
+
+                // Dla podkładów Geoportal WMS: pobieramy 1 pełny arkusz WMS na cały ekran (brak odrzuconych kafelków i dziur!)
+                if (_activeLayer.IsWmsEpsg3857)
+                {
+                    string primaryWmsUrl = BuildFullViewportWmsUrl(_activeLayer.UrlTemplate, w, h);
+                    string fallbackWmsUrl = !string.IsNullOrEmpty(_activeLayer.FallbackUrlTemplate)
+                        ? BuildFullViewportWmsUrl(_activeLayer.FallbackUrlTemplate, w, h)
+                        : null;
+                    var baseWmsTask = FetchTileBytesAsync(primaryWmsUrl, fallbackWmsUrl);
+                    await Task.WhenAll(baseWmsTask, lidarTask);
+                    singleBaseWmsBytes = baseWmsTask.Result;
+                    singleLidarBytes = lidarTask.Result;
+                }
+                else
+                {
+                    var (centerTileX, centerTileY) = LatLonToTileXY(_centerLat, _centerLon, _zoom);
+                    int minTx = (int)Math.Floor(centerTileX - (w / 2.0) / tilePx) - 1, maxTx = (int)Math.Floor(centerTileX + (w / 2.0) / tilePx) + 1;
+                    int minTy = (int)Math.Floor(centerTileY - (h / 2.0) / tilePx) - 1, maxTy = (int)Math.Floor(centerTileY + (h / 2.0) / tilePx) + 1;
+                    int maxIndex = (1 << _zoom) - 1;
+
+                    var tileJobs = new List<(int Tx, int Ty, double ScreenX, double ScreenY, string Url)>();
+                    for (int tx = minTx; tx <= maxTx; tx++)
+                        for (int ty = minTy; ty <= maxTy; ty++)
+                        {
+                            if (ty < 0 || ty > maxIndex) continue;
+                            int wrappedTx = ((tx % (maxIndex + 1)) + (maxIndex + 1)) % (maxIndex + 1);
+                            tileJobs.Add((wrappedTx, ty, (w / 2.0) + (tx - centerTileX) * tilePx, (h / 2.0) + (ty - centerTileY) * tilePx, BuildTileUrl(_activeLayer, wrappedTx, ty, _zoom)));
+                        }
+
+                    var tilesTask = Task.WhenAll(tileJobs.Select(async job => (job.ScreenX, job.ScreenY, await FetchTileBytesAsync(job.Url))));
+                    await Task.WhenAll(tilesTask, lidarTask);
+                    fetchedTiles = tilesTask.Result.ToList();
+                    singleLidarBytes = lidarTask.Result;
+                }
             }
 
             _mapCanvas.Children.Clear();
             _mapCanvas.Background = transparentGrgOnly ? Brushes.Transparent : new SolidColorBrush(Color.FromRgb(6, 15, 18));
 
-            if (!transparentGrgOnly && fetchedTiles != null)
+            if (!transparentGrgOnly)
             {
-                foreach (var t in fetchedTiles) if (t.Item3 != null) AddCanvasImage(t.Item3, t.ScreenX, t.ScreenY, tilePx + 0.6, tilePx + 0.6, 1.0);
-                if (singleLidarBytes != null) AddCanvasImage(singleLidarBytes, 0, 0, w, h, 0.45);
+                if (singleBaseWmsBytes != null)
+                    AddCanvasImage(singleBaseWmsBytes, 0, 0, w, h, 1.0);
+                else if (fetchedTiles != null)
+                    foreach (var t in fetchedTiles)
+                        if (t.Item3 != null) AddCanvasImage(t.Item3, t.ScreenX, t.ScreenY, tilePx + 0.6, tilePx + 0.6, 1.0);
+
+                if (singleLidarBytes != null)
+                    AddCanvasImage(singleLidarBytes, 0, 0, w, h, 0.45);
             }
 
             if (_kmzGrgMode != "Tylko podkład" || !transparentGrgOnly)
@@ -728,25 +890,36 @@ namespace FieldTakHub.Builder.Services
             var b = new SolidColorBrush(c); b.Freeze(); return b;
         }
 
+        // =========================================================================
+        // SIATKA WOJSKOWA MGRS / WGS84 Z NIEZALEŻNĄ PRZEZROCZYSTOŚCIĄ LINII GŁÓWNYCH ORAZ POMOCNICZYCH (KEYPAD 1-9 / ĆWIARTKI A-D)
+        // =========================================================================
         private static void DrawMilitaryMgrsAndSubGridOverlay(double w, double h)
         {
             if (_coordSystem == "Brak siatki") return;
-            var mainBrush = GetGridColorBrush(240);
-            var subBrush = GetGridColorBrush(200);
-            var haloBrush = new SolidColorBrush(Color.FromArgb(_gridHaloMode.StartsWith("Pełny") ? (byte)220 : (byte)130, 0, 0, 0)); haloBrush.Freeze();
-            var subHaloBrush = new SolidColorBrush(Color.FromArgb(165, 0, 0, 0)); subHaloBrush.Freeze();
+
+            byte mainAlpha = (byte)Math.Clamp((int)Math.Round(_mainGridOpacity * 255), 0, 255);
+            byte subAlpha = (byte)Math.Clamp((int)Math.Round(_subGridOpacity * 255), 0, 255);
+
+            var mainBrush = GetGridColorBrush(mainAlpha);
+            var subBrush = GetGridColorBrush(subAlpha);
+
+            byte mainHaloAlpha = (byte)Math.Clamp((int)Math.Round((_gridHaloMode.StartsWith("Pełny") ? 220 : 130) * _mainGridOpacity), 0, 255);
+            byte subHaloAlpha = (byte)Math.Clamp((int)Math.Round((_gridHaloMode.StartsWith("Pełny") ? 185 : 105) * _subGridOpacity), 0, 255);
+
+            var haloBrush = new SolidColorBrush(Color.FromArgb(mainHaloAlpha, 0, 0, 0)); haloBrush.Freeze();
+            var subHaloBrush = new SolidColorBrush(Color.FromArgb(subHaloAlpha, 0, 0, 0)); subHaloBrush.Freeze();
             bool useHalo = !_gridHaloMode.StartsWith("Brak");
 
             double metersPerPixel = GetExactMetersPerPixel();
 
-            if (_coordSystem.StartsWith("Sektorowa"))
+            if (_coordSystem.StartsWith("Sektorowa") && mainAlpha > 5)
             {
                 int cols = 8, rows = 8; double cw = w / cols, ch = h / rows;
                 for (int c = 1; c < cols; c++) _mapCanvas.Children.Add(new Line { X1 = c * cw, Y1 = 0, X2 = c * cw, Y2 = h, Stroke = mainBrush, StrokeThickness = 1.4 * _gridThicknessMultiplier });
                 for (int r = 1; r < rows; r++) _mapCanvas.Children.Add(new Line { X1 = 0, Y1 = r * ch, X2 = w, Y2 = r * ch, Stroke = mainBrush, StrokeThickness = 1.4 * _gridThicknessMultiplier });
                 for (int r = 0; r < rows; r++)
                     for (int c = 0; c < cols; c++)
-                        AddHaloLabel($"{(char)('A' + r)}{c + 1}", c * cw + 6, r * ch + 4, mainBrush, 10.5);
+                        AddHaloLabel($"{(char)('A' + r)}{c + 1}", c * cw + 6, r * ch + 4, mainBrush, 10.5, _mainGridOpacity);
                 return;
             }
 
@@ -756,7 +929,8 @@ namespace FieldTakHub.Builder.Services
             double subThick = Math.Max(0.7, 0.95 * _gridThicknessMultiplier);
             double startX = (w / 2.0) % stepPx, startY = (h / 2.0) % stepPx;
 
-            if (_coordSystem.StartsWith("MGRS") && (_subGridDivision.Contains("50 m") || _subGridDivision.Contains("33 m")))
+            // 1. Podziałka pomocnicza wewnątrz kratki 100 m: Co 33 m (Keypad 1-9) lub Co 50 m (Ćwiartki A,B,C,D)
+            if (_coordSystem.StartsWith("MGRS") && (_subGridDivision.Contains("50 m") || _subGridDivision.Contains("33 m")) && subAlpha > 4)
             {
                 bool isQuarters = _subGridDivision.Contains("50 m");
                 int div = isQuarters ? 2 : 3;
@@ -800,7 +974,7 @@ namespace FieldTakHub.Builder.Services
                                     string subTxt = isQuarters ? quarters2x2[r, c] : keypad3x3[r, c];
                                     double cx = x + (c + 0.5) * subStep - 6;
                                     double cy = y + (r + 0.5) * subStep - 7;
-                                    AddSubCellBadge(subTxt, cx, cy, subBrush);
+                                    AddSubCellBadge(subTxt, cx, cy, subBrush, _subGridOpacity);
                                 }
                             }
                         }
@@ -808,29 +982,39 @@ namespace FieldTakHub.Builder.Services
                 }
             }
 
-            for (double x = startX; x < w; x += stepPx)
+            // 2. Główne linie geograficzne (MGRS / WGS84) oraz opisy główne
+            if (mainAlpha > 4)
             {
-                if (useHalo) _mapCanvas.Children.Add(new Line { X1 = x, Y1 = 0, X2 = x, Y2 = h, Stroke = haloBrush, StrokeThickness = mainThick + 2.0 });
-                _mapCanvas.Children.Add(new Line { X1 = x, Y1 = 0, X2 = x, Y2 = h, Stroke = mainBrush, StrokeThickness = mainThick });
-                var (_, lon) = ScreenToLatLon(x, 20, w, h);
-                int utmEast = (int)Math.Round(((lon + 180.0) % 6.0) * 111320.0 * Math.Cos(_centerLat * Math.PI / 180.0));
-                AddHaloLabel($"{(utmEast / 100) % 1000:D3}", x + 3, 44, mainBrush, 9.5);
-            }
-            for (double y = startY; y < h; y += stepPx)
-            {
-                if (useHalo) _mapCanvas.Children.Add(new Line { X1 = 0, Y1 = y, X2 = w, Y2 = y, Stroke = haloBrush, StrokeThickness = mainThick + 2.0 });
-                _mapCanvas.Children.Add(new Line { X1 = 0, Y1 = y, X2 = w, Y2 = y, Stroke = mainBrush, StrokeThickness = mainThick });
-                var (lat, _) = ScreenToLatLon(20, y, w, h);
-                int utmNorth = (int)Math.Round(lat * 110574.0);
-                AddHaloLabel($"{(utmNorth / 100) % 1000:D3}", 8, y + 2, mainBrush, 9.5);
+                bool isWgs84 = _coordSystem.StartsWith("WGS84");
+                for (double x = startX; x < w; x += stepPx)
+                {
+                    if (useHalo) _mapCanvas.Children.Add(new Line { X1 = x, Y1 = 0, X2 = x, Y2 = h, Stroke = haloBrush, StrokeThickness = mainThick + 2.0 });
+                    _mapCanvas.Children.Add(new Line { X1 = x, Y1 = 0, X2 = x, Y2 = h, Stroke = mainBrush, StrokeThickness = mainThick });
+                    var (_, lon) = ScreenToLatLon(x, 20, w, h);
+                    string lblTxt = isWgs84
+                        ? $"{lon:0.0000}°E"
+                        : $"{(((int)Math.Round(((lon + 180.0) % 6.0) * 111320.0 * Math.Cos(_centerLat * Math.PI / 180.0)) / 100) % 1000):D3}";
+                    AddHaloLabel(lblTxt, x + 3, 44, mainBrush, 9.5, _mainGridOpacity);
+                }
+                for (double y = startY; y < h; y += stepPx)
+                {
+                    if (useHalo) _mapCanvas.Children.Add(new Line { X1 = 0, Y1 = y, X2 = w, Y2 = y, Stroke = haloBrush, StrokeThickness = mainThick + 2.0 });
+                    _mapCanvas.Children.Add(new Line { X1 = 0, Y1 = y, X2 = w, Y2 = y, Stroke = mainBrush, StrokeThickness = mainThick });
+                    var (lat, _) = ScreenToLatLon(20, y, w, h);
+                    string lblTxt = isWgs84
+                        ? $"{lat:0.0000}°N"
+                        : $"{(((int)Math.Round(lat * 110574.0) / 100) % 1000):D3}";
+                    AddHaloLabel(lblTxt, 8, y + 2, mainBrush, 9.5, _mainGridOpacity);
+                }
             }
         }
 
-        private static void AddSubCellBadge(string text, double x, double y, Brush fg)
+        private static void AddSubCellBadge(string text, double x, double y, Brush fg, double opacity)
         {
+            byte bgAlpha = (byte)Math.Clamp((int)Math.Round(155 * opacity), 0, 220);
             var b = new Border
             {
-                Background = new SolidColorBrush(Color.FromArgb(150, 0, 0, 0)),
+                Background = new SolidColorBrush(Color.FromArgb(bgAlpha, 0, 0, 0)),
                 CornerRadius = new CornerRadius(2),
                 Padding = new Thickness(2.5, 0, 2.5, 0),
                 IsHitTestVisible = false,
@@ -839,9 +1023,10 @@ namespace FieldTakHub.Builder.Services
             Canvas.SetLeft(b, x); Canvas.SetTop(b, y); _mapCanvas.Children.Add(b);
         }
 
-        private static void AddHaloLabel(string text, double x, double y, Brush fg, double fontSize)
+        private static void AddHaloLabel(string text, double x, double y, Brush fg, double fontSize, double opacity = 1.0)
         {
-            var b = new Border { Background = new SolidColorBrush(Color.FromArgb(185, 5, 12, 15)), BorderBrush = fg, BorderThickness = new Thickness(0.8), CornerRadius = new CornerRadius(3), Padding = new Thickness(4, 1, 4, 1), IsHitTestVisible = false, Child = new TextBlock { Text = text, Foreground = fg, FontSize = fontSize, FontWeight = FontWeights.Bold } };
+            byte bgAlpha = (byte)Math.Clamp((int)Math.Round(185 * opacity), 0, 230);
+            var b = new Border { Background = new SolidColorBrush(Color.FromArgb(bgAlpha, 5, 12, 15)), BorderBrush = fg, BorderThickness = new Thickness(0.8), CornerRadius = new CornerRadius(3), Padding = new Thickness(4, 1, 4, 1), IsHitTestVisible = false, Child = new TextBlock { Text = text, Foreground = fg, FontSize = fontSize, FontWeight = FontWeights.Bold } };
             Canvas.SetLeft(b, x); Canvas.SetTop(b, y); _mapCanvas.Children.Add(b);
         }
 
@@ -1092,7 +1277,15 @@ namespace FieldTakHub.Builder.Services
             {
                 var dlg = new SaveFileDialog { Title = "Zapisz projekt mapy (.json)", Filter = "Projekt mapy JSON (*.json)|*.json", FileName = "mapa_taktyczna.json" };
                 if (dlg.ShowDialog() != true) return;
-                var root = new JsonObject { ["centerLat"] = _centerLat, ["centerLon"] = _centerLon, ["zoom"] = _zoom, ["scale"] = _targetScaleDenominator };
+                var root = new JsonObject
+                {
+                    ["centerLat"] = _centerLat,
+                    ["centerLon"] = _centerLon,
+                    ["zoom"] = _zoom,
+                    ["scale"] = _targetScaleDenominator,
+                    ["mainGridOpacity"] = _mainGridOpacity,
+                    ["subGridOpacity"] = _subGridOpacity
+                };
                 var arr = new JsonArray();
                 foreach (var o in _mapObjects)
                 {
