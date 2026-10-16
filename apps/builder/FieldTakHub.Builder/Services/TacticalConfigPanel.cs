@@ -32,6 +32,7 @@ namespace FieldTakHub.Builder.Services
         public string LoraRegion { get; set; } = "EU_868";
         public string LoraModemPreset { get; set; } = "SHORT_FAST";
         public string DeviceRole { get; set; } = "Auto";
+        public string HardwareModel { get; set; } = "generic_meshtastic";
         public string OtsHost { get; set; } = "ggzstak.duckdns.org";
         public int OtsSslPort { get; set; } = 8089;
         public int OtsEnrollmentPort { get; set; } = 8446;
@@ -124,6 +125,7 @@ namespace FieldTakHub.Builder.Services
         private static TextBox _injectedQrValidityBox;
         private static TextBlock _indefiniteStatusBadge;
         private static TextBlock _factionStatusLabel;
+        private static FrameworkElement _factionsCardElement;
         private static bool _syncingValidity;
         private static FileSystemWatcher _sourceWatcher;
         private static string _watchedDir = "";
@@ -218,9 +220,8 @@ namespace FieldTakHub.Builder.Services
                 cb.ItemContainerStyle = _darkComboBoxItemStyle;
 
                 foreach (var item in cb.Items)
-                {
                     if (item is ComboBoxItem cbi) { cbi.Foreground = Brushes.White; cbi.Background = BrushItemBg; }
-                }
+
                 if (cb.SelectedItem == null && !string.IsNullOrWhiteSpace(preserved))
                 {
                     foreach (var item in cb.Items)
@@ -252,22 +253,22 @@ namespace FieldTakHub.Builder.Services
             }
         }
 
-        private static Border GetOuterCardBorder(DependencyObject startElement, int minTextBlocks = 4)
+        // Niezawodne wyszukiwanie bezpośredniego Bordera karty wewnątrz StackPanela (bez błędnego pomijania małych kart!)
+        private static (Panel ParentPanel, Border CardBorder) FindImmediateCardInPanel(DependencyObject startElement)
         {
-            Border best = null;
             DependencyObject cur = startElement;
             while (cur != null)
             {
-                if (cur is Border b)
+                DependencyObject parent = VisualTreeHelper.GetParent(cur) ?? LogicalTreeHelper.GetParent(cur);
+                if (cur is Border b && parent is Panel p && p.Children.Contains(b))
                 {
-                    var tbs = new List<TextBlock>();
-                    FindVisualChildren(b, tbs);
-                    if (tbs.Count >= minTextBlocks) return b;
-                    if (best == null && b.Background != null) best = b;
+                    // Upewniamy się, że nie jest to główny Border całego okna (czyli rodzeństwem są inne karty)
+                    if (p is StackPanel || p.Children.Count >= 2)
+                        return (p, b);
                 }
-                cur = VisualTreeHelper.GetParent(cur) ?? LogicalTreeHelper.GetParent(cur);
+                cur = parent;
             }
-            return best;
+            return (null, null);
         }
 
         private static Border GetPreviewCardBorder(Window win)
@@ -281,7 +282,7 @@ namespace FieldTakHub.Builder.Services
             {
                 var tbs = new List<TextBlock>();
                 FindVisualChildren(b, tbs);
-                if (tbs.Count < 12) continue;
+                if (tbs.Count < 10) continue;
 
                 bool hasTotal = tbs.Any(t => t.Text != null && t.Text.Trim().StartsWith("Pliki paczki", StringComparison.OrdinalIgnoreCase));
                 bool hasMaps = tbs.Any(t => t.Text != null && t.Text.Trim().StartsWith("Mapy", StringComparison.OrdinalIgnoreCase));
@@ -303,6 +304,29 @@ namespace FieldTakHub.Builder.Services
             return false;
         }
 
+        public static void ScrollToFactionsCard(Window win)
+        {
+            try
+            {
+                TacticalMapGeneratorView.HideFullScreenMapTab();
+                if (_factionsCardElement == null) AttachToMainWindow(win);
+                if (_factionsCardElement != null)
+                {
+                    _factionsCardElement.Visibility = Visibility.Visible;
+                    // Upewnij się że żaden nadrzędny kontener (np. Tryb Zaawansowany) nie jest ukryty
+                    DependencyObject cur = _factionsCardElement;
+                    while (cur != null && cur != win)
+                    {
+                        if (cur is UIElement uie && uie.Visibility != Visibility.Visible)
+                            uie.Visibility = Visibility.Visible;
+                        cur = VisualTreeHelper.GetParent(cur) ?? LogicalTreeHelper.GetParent(cur);
+                    }
+                    _factionsCardElement.BringIntoView();
+                }
+            }
+            catch { }
+        }
+
         public static void AttachToMainWindow(Window win)
         {
             if (Application.Current == null || win == null) return;
@@ -321,22 +345,48 @@ namespace FieldTakHub.Builder.Services
                     var tbs = new List<TextBlock>();
                     FindVisualChildren(win, tbs);
 
+                    bool factionsInserted = (_factionsCardElement != null && VisualTreeHelper.GetParent(_factionsCardElement) != null);
+
                     foreach (var tb in tbs)
                     {
-                        if (tb.Text != null && tb.Text.Contains("Konfiguracja Meshtastic"))
+                        if (tb.Text != null && (tb.Text.Contains("Konfiguracja Meshtastic", StringComparison.OrdinalIgnoreCase) || tb.Text.Contains("Profil Meshtastic", StringComparison.OrdinalIgnoreCase)))
                         {
-                            Border cardBorder = GetOuterCardBorder(tb, 4);
-                            if (cardBorder != null)
+                            var (parentPanel, cardBorder) = FindImmediateCardInPanel(tb);
+                            if (parentPanel != null && cardBorder != null)
                             {
                                 if (cardBorder.Child is Panel innerPanel && !HasInjectedTag(innerPanel, "INJECTED_FW"))
                                     InjectMeshtasticFields(innerPanel, win);
 
-                                if (VisualTreeHelper.GetParent(cardBorder) is Panel parentPanel && !HasInjectedTag(parentPanel, "INJECTED_ATAK"))
+                                if (!HasInjectedTag(parentPanel, "INJECTED_FACTIONS"))
                                 {
                                     int idx = parentPanel.Children.IndexOf(cardBorder);
-                                    parentPanel.Children.Insert(idx, BuildAtakCard(win));
-                                    parentPanel.Children.Insert(idx + 1, BuildTabbedFactionsCard(win));
+                                    var atakCard = BuildAtakCard(win);
+                                    _factionsCardElement = (FrameworkElement)BuildTabbedFactionsCard(win);
+                                    parentPanel.Children.Insert(idx, atakCard);
+                                    parentPanel.Children.Insert(idx + 1, _factionsCardElement);
+                                    factionsInserted = true;
                                 }
+                            }
+                            break;
+                        }
+                    }
+
+                    // Fallback: jeśli tekst "Konfiguracja Meshtastic" nie został znaleziony (np. inny język/układ), wstrzyknij do głównego StackPanela w ScrollViewerze
+                    if (!factionsInserted)
+                    {
+                        var scrollViewers = new List<ScrollViewer>();
+                        FindVisualChildren(win, scrollViewers);
+                        foreach (var sv in scrollViewers)
+                        {
+                            var spList = new List<StackPanel>();
+                            FindVisualChildren(sv, spList);
+                            var mainSp = spList.FirstOrDefault(sp => sp.Children.Count >= 2 && !HasInjectedTag(sp, "INJECTED_FACTIONS"));
+                            if (mainSp != null)
+                            {
+                                _factionsCardElement = (FrameworkElement)BuildTabbedFactionsCard(win);
+                                mainSp.Children.Insert(Math.Min(1, mainSp.Children.Count), BuildAtakCard(win));
+                                mainSp.Children.Insert(Math.Min(2, mainSp.Children.Count), _factionsCardElement);
+                                break;
                             }
                         }
                     }
@@ -427,6 +477,9 @@ namespace FieldTakHub.Builder.Services
             }
         }
 
+        // =========================================================================
+        // ZAKŁADKOWY GENERATOR STRON KONFLIKTU (KARTA DLA KAŻDEJ STRONY: RGB + MESHTASTIC + OTS ENROLLMENT)
+        // =========================================================================
         private static UIElement BuildTabbedFactionsCard(Window win)
         {
             EnsureDefaultFactions();
@@ -434,7 +487,7 @@ namespace FieldTakHub.Builder.Services
             {
                 Background = BrushCardBg,
                 BorderBrush = BrushAccent,
-                BorderThickness = new Thickness(1),
+                BorderThickness = new Thickness(1.5),
                 CornerRadius = new CornerRadius(8),
                 Padding = new Thickness(16),
                 Margin = new Thickness(0, 0, 0, 14),
@@ -461,7 +514,7 @@ namespace FieldTakHub.Builder.Services
             titleDock.Children.Add(btnJumpMap);
             titleDock.Children.Add(new TextBlock
             {
-                Text = "Generator Stron Konfliktu (Karty Stron: Meshtastic + OpenTAKServer Enrollment)",
+                Text = "🚩 Generator Stron Konfliktu (Zakładki Stron: Kolor RGB • Kanał Szyfrowany Meshtastic • OTS Enrollment)",
                 Foreground = Brushes.White,
                 FontWeight = FontWeights.Bold,
                 FontSize = 14,
@@ -471,7 +524,7 @@ namespace FieldTakHub.Builder.Services
 
             stack.Children.Add(new TextBlock
             {
-                Text = "Wybierz zakładkę strony konfliktu, aby skonfigurować jej kolor RGB, szyfrowany kanał Meshtastic (PSK) oraz parametry OpenTAKServer Enrollment.",
+                Text = "Każda strona konfliktu posiada odrębną zakładkę. Możesz dowolnie dodawać (+) i usuwać (−) strony (wymagana min. 1 strona). Dla każdej strony skonfigurujesz własny kolor RGB, szyfrowany kanał Meshtastic (PSK) oraz dane logowania Enrollment do OpenTAKServer.",
                 Foreground = BrushMutedText,
                 FontSize = 11,
                 TextWrapping = TextWrapping.Wrap,
@@ -496,15 +549,15 @@ namespace FieldTakHub.Builder.Services
 
             var actionButtonsGrid = new UniformGrid { Columns = 3, Margin = new Thickness(0, 2, 0, 6) };
             var btnInitFolders = new Button { Content = "📁 Przygotuj podfoldery KML stron", Height = 32, Margin = new Thickness(0, 0, 5, 0), Background = BrushItemBg, Foreground = Brushes.White, BorderBrush = BrushTileBorder, BorderThickness = new Thickness(1), FontWeight = FontWeights.SemiBold, Cursor = Cursors.Hand };
-            var btnExportPoster = new Button { Content = "🖨️ Eksportuj plakat A4 strony (PNG)", Height = 32, Margin = new Thickness(3, 0, 3, 0), Background = BrushItemBg, Foreground = Brushes.White, BorderBrush = BrushAccent, BorderThickness = new Thickness(1), FontWeight = FontWeights.Bold, Cursor = Cursors.Hand };
-            var btnBuildAllFactions = new Button { Content = "⚡ Buduj wszystkie strony (.ftak + QR)", Height = 32, Margin = new Thickness(5, 0, 0, 0), Background = BrushButtonAccent, Foreground = BrushDarkFg, BorderThickness = new Thickness(0), FontWeight = FontWeights.Bold, Cursor = Cursors.Hand };
+            var btnExportPoster = new Button { Content = "🖨️ Eksportuj plakat A4 aktywnej strony (PNG)", Height = 32, Margin = new Thickness(3, 0, 3, 0), Background = BrushItemBg, Foreground = Brushes.White, BorderBrush = BrushAccent, BorderThickness = new Thickness(1), FontWeight = FontWeights.Bold, Cursor = Cursors.Hand };
+            var btnBuildAllFactions = new Button { Content = "⚡ Buduj wszystkie strony (.ftak + Plakaty QR)", Height = 32, Margin = new Thickness(5, 0, 0, 0), Background = BrushButtonAccent, Foreground = BrushDarkFg, BorderThickness = new Thickness(0), FontWeight = FontWeights.Bold, Cursor = Cursors.Hand };
 
             actionButtonsGrid.Children.Add(btnInitFolders);
             actionButtonsGrid.Children.Add(btnExportPoster);
             actionButtonsGrid.Children.Add(btnBuildAllFactions);
             stack.Children.Add(actionButtonsGrid);
 
-            _factionStatusLabel = new TextBlock { Text = "Gotowy.", Foreground = BrushMutedText, FontSize = 11, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 4, 0, 0) };
+            _factionStatusLabel = new TextBlock { Text = "✓ Aktywny moduł stron konfliktu (minimum 1 strona wymagana).", Foreground = BrushAccent, FontSize = 11, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 4, 0, 0) };
             stack.Children.Add(_factionStatusLabel);
 
             btnInitFolders.Click += async (_, __) =>
@@ -514,7 +567,6 @@ namespace FieldTakHub.Builder.Services
                 await Task.Run(() => EnsureFactionFoldersInitialized(srcDir, sides));
                 await ForceSizeUpdateAsync(win);
                 _factionStatusLabel.Text = $"✓ Utworzono podfoldery KML dla {_factions.Count} stron w: {Path.Combine(srcDir, "factions")}";
-                _factionStatusLabel.Foreground = BrushAccent;
                 TryOpenFolderInExplorer(Path.Combine(srcDir, "factions"));
             };
 
@@ -578,10 +630,29 @@ namespace FieldTakHub.Builder.Services
             };
             _factionTabHeadersPanel.Children.Add(btnAdd);
 
-            var btnRem = new Button { Content = "− Usuń stronę", Height = 32, Padding = new Thickness(12, 0, 12, 0), Margin = new Thickness(0, 0, 0, 4), Background = BrushInputBg, Foreground = Brushes.White, BorderBrush = BrushTileBorder, BorderThickness = new Thickness(1), FontSize = 11.5, FontWeight = FontWeights.Bold, Cursor = Cursors.Hand };
+            bool canRemove = _factions.Count > 1;
+            var btnRem = new Button
+            {
+                Content = "− Usuń aktywną stronę",
+                Height = 32,
+                Padding = new Thickness(12, 0, 12, 0),
+                Margin = new Thickness(0, 0, 0, 4),
+                Background = BrushInputBg,
+                Foreground = canRemove ? Brushes.White : BrushMutedText,
+                BorderBrush = BrushTileBorder,
+                BorderThickness = new Thickness(1),
+                FontSize = 11.5,
+                FontWeight = FontWeights.Bold,
+                Cursor = canRemove ? Cursors.Hand : Cursors.No,
+                ToolTip = canRemove ? "Usuń bieżącą zakładkę strony" : "Wymagana jest minimum 1 strona konfliktu"
+            };
             btnRem.Click += (_, __) =>
             {
-                if (_factions.Count <= 1) return;
+                if (_factions.Count <= 1)
+                {
+                    if (_factionStatusLabel != null) _factionStatusLabel.Text = "⚠ Zablokowano usunięcie: w projekcie musi pozostać minimum 1 strona konfliktu!";
+                    return;
+                }
                 _factions.RemoveAt(_selectedFactionIndex);
                 _selectedFactionIndex = Math.Clamp(_selectedFactionIndex, 0, _factions.Count - 1);
                 SyncActiveFactionToDefaultModel();
@@ -600,27 +671,27 @@ namespace FieldTakHub.Builder.Services
 
             var topRow = new Grid { Margin = new Thickness(0, 0, 0, 10) };
             topRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-            topRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(185) });
-            topRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(210) });
+            topRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(195) });
+            topRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(215) });
 
-            var nameBox = (TextBox)TextCtrl(fac.Name, val => { fac.Name = val.Trim(); SyncActiveFactionToDefaultModel(); });
+            var nameBox = (TextBox)TextCtrl(fac.Name, val => { fac.Name = string.IsNullOrWhiteSpace(val) ? "STRONA" : val.Trim(); SyncActiveFactionToDefaultModel(); });
             nameBox.FontWeight = FontWeights.Bold;
             nameBox.LostFocus += (_, __) => RebuildFactionTabsUI(win);
-            var fName = FieldBox("Nazwa strony / frakcji:", nameBox);
+            var fName = FieldBox("Nazwa strony / frakcji (np. BLUFOR, OPFOR, ORGA):", nameBox);
             Grid.SetColumn(fName, 0); topRow.Children.Add(fName);
 
             var swatch = new Border { Width = 16, Height = 16, CornerRadius = new CornerRadius(4), Background = BrushFromHex(fac.ColorHex, Color.FromRgb(38, 132, 255)), BorderBrush = Brushes.White, BorderThickness = new Thickness(1), Margin = new Thickness(0, 0, 8, 0), VerticalAlignment = VerticalAlignment.Center };
-            var cLbl = new TextBlock { Text = $"Paleta RGB ({fac.ColorHex.ToUpperInvariant()})", Foreground = Brushes.White, FontSize = 11, FontWeight = FontWeights.SemiBold, VerticalAlignment = VerticalAlignment.Center };
+            var cLbl = new TextBlock { Text = $"Wybierz RGB ({fac.ColorHex.ToUpperInvariant()})", Foreground = Brushes.White, FontSize = 11, FontWeight = FontWeights.SemiBold, VerticalAlignment = VerticalAlignment.Center };
             var cStack = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Center };
             cStack.Children.Add(swatch); cStack.Children.Add(cLbl);
 
-            var colorBtn = new Button { Content = cStack, Height = 28, Background = BrushInputBg, BorderBrush = BrushInputBorder, BorderThickness = new Thickness(1), Cursor = Cursors.Hand };
+            var colorBtn = new Button { Content = cStack, Height = 28, Background = BrushInputBg, BorderBrush = BrushAccent, BorderThickness = new Thickness(1), Cursor = Cursors.Hand };
             colorBtn.Click += (_, __) =>
             {
                 string picked = ShowRgbColorPickerDialog(win, fac.Name, fac.ColorHex);
                 if (!string.IsNullOrEmpty(picked)) { fac.ColorHex = picked; SyncActiveFactionToDefaultModel(); RebuildFactionTabsUI(win); }
             };
-            var fCol = FieldBox("Kolor taktyczny strony (RGB):", colorBtn);
+            var fCol = FieldBox("Kolor taktyczny strony (Paleta RGB):", colorBtn);
             Grid.SetColumn(fCol, 1); topRow.Children.Add(fCol);
 
             var btnKml = new Button { Content = $"📁 source/factions/{SanitizeFileName(fac.Name).ToLowerInvariant()}", Height = 28, Background = BrushInputBg, Foreground = Brushes.White, BorderBrush = BrushInputBorder, BorderThickness = new Thickness(1), FontSize = 10.5, Cursor = Cursors.Hand };
@@ -631,24 +702,25 @@ namespace FieldTakHub.Builder.Services
                 await Task.Run(() => EnsureFactionFoldersInitialized(srcDir, new List<(string, string)> { (sl, fac.ColorHex) }));
                 TryOpenFolderInExplorer(Path.Combine(srcDir, "factions", sl));
             };
-            var fKml = FieldBox("Dedykowane nakładki KML:", btnKml);
+            var fKml = FieldBox("Dedykowane nakładki KML strony:", btnKml);
             Grid.SetColumn(fKml, 2); topRow.Children.Add(fKml);
             root.Children.Add(topRow);
 
-            root.Children.Add(new TextBlock { Text = $"2. Meshtastic — Kanał Szyfrowany LoRa ({fac.Name})", Foreground = BrushAccent, FontWeight = FontWeights.Bold, FontSize = 12, Margin = new Thickness(0, 4, 0, 8) });
+            // Sekcja 2: Meshtastic Kanał Szyfrowany
+            root.Children.Add(new TextBlock { Text = $"2. Meshtastic — Kanał Szyfrowany i Konfiguracja Radia LoRa ({fac.Name})", Foreground = BrushAccent, FontWeight = FontWeights.Bold, FontSize = 12, Margin = new Thickness(0, 4, 0, 8) });
             var meshRow1 = new UniformGrid { Columns = 4, Margin = new Thickness(0, 0, 0, 4) };
             meshRow1.Children.Add(FieldBox("Nazwa kanału LoRa:", TextCtrl(fac.ChannelName, v => { fac.ChannelName = v.Trim(); SyncActiveFactionToDefaultModel(); })));
             meshRow1.Children.Add(FieldBox("Region LoRa:", ComboCtrl(new[] { "EU_868", "US_915", "EU_433", "ANZ_915", "RU_864", "KR_920" }, fac.LoraRegion, win, v => { fac.LoraRegion = v; Current.LoraRegion = v; })));
             meshRow1.Children.Add(FieldBox("Modem Preset:", ComboCtrl(new[] { "SHORT_FAST", "LONG_FAST", "MEDIUM_FAST", "MEDIUM_SLOW", "LONG_SLOW" }, fac.LoraModemPreset, win, v => { fac.LoraModemPreset = v; Current.LoraModemPreset = v; })));
-            meshRow1.Children.Add(FieldBox("Rola urządzenia:", ComboCtrl(new[] { "Auto", "TAK", "TAK_Tracker", "Client", "Router" }, fac.DeviceRole, win, v => { fac.DeviceRole = v; Current.DeviceRole = v; })));
+            meshRow1.Children.Add(FieldBox("Rola urządzenia Meshtastic:", ComboCtrl(new[] { "Auto", "TAK", "TAK_Tracker", "Client", "Router" }, fac.DeviceRole, win, v => { fac.DeviceRole = v; Current.DeviceRole = v; })));
             root.Children.Add(meshRow1);
 
             var pskGrid = new Grid { Margin = new Thickness(0, 0, 0, 10) };
             pskGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-            pskGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(170) });
+            pskGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(175) });
             var pskBox = (TextBox)TextCtrl(fac.Psk, v => { fac.Psk = v.Trim(); SyncActiveFactionToDefaultModel(); });
             pskBox.FontFamily = new FontFamily("Consolas");
-            var fPsk = FieldBox("Klucz szyfrujący PSK kanału Meshtastic (AES-256 Base64):", pskBox);
+            var fPsk = FieldBox("Klucz szyfrujący PSK kanału Meshtastic (AES-256 Base64 — pełna szerokość):", pskBox);
             Grid.SetColumn(fPsk, 0); pskGrid.Children.Add(fPsk);
 
             var btnRoll = new Button { Content = "🎲 Losuj nowy klucz PSK", Height = 28, Margin = new Thickness(0, 14, 0, 6), Background = BrushInputBg, Foreground = BrushAccent, BorderBrush = BrushAccent, BorderThickness = new Thickness(1), FontSize = 11, FontWeight = FontWeights.Bold, Cursor = Cursors.Hand };
@@ -656,15 +728,16 @@ namespace FieldTakHub.Builder.Services
             Grid.SetColumn(btnRoll, 1); pskGrid.Children.Add(btnRoll);
             root.Children.Add(pskGrid);
 
-            root.Children.Add(new TextBlock { Text = $"3. OpenTAKServer (OTS) & Certyfikaty Enrollment ({fac.Name})", Foreground = BrushAccent, FontWeight = FontWeights.Bold, FontSize = 12, Margin = new Thickness(0, 4, 0, 8) });
+            // Sekcja 3: OpenTAKServer z Enrollmentem
+            root.Children.Add(new TextBlock { Text = $"3. OpenTAKServer (OTS) — Połączenie SSL i Ustawienia Enrollmentu ({fac.Name})", Foreground = BrushAccent, FontWeight = FontWeights.Bold, FontSize = 12, Margin = new Thickness(0, 4, 0, 8) });
             var otsRow1 = new Grid { Margin = new Thickness(0, 0, 0, 4) };
             otsRow1.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-            otsRow1.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(130) });
-            otsRow1.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(150) });
+            otsRow1.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(135) });
+            otsRow1.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(155) });
 
-            var fHost = FieldBox("Adres serwera OpenTAKServer (Host / IP):", TextCtrl(fac.OtsHost, v => fac.OtsHost = v.Trim()));
-            var fSsl = FieldBox("Port SSL CoT:", IntCtrl(fac.OtsSslPort, v => fac.OtsSslPort = v));
-            var fEnr = FieldBox("Port Enrollment:", IntCtrl(fac.OtsEnrollmentPort, v => fac.OtsEnrollmentPort = v));
+            var fHost = FieldBox("Adres serwera OpenTAKServer (Host / IP / Domena):", TextCtrl(fac.OtsHost, v => fac.OtsHost = v.Trim()));
+            var fSsl = FieldBox("Port SSL CoT (8089):", IntCtrl(fac.OtsSslPort, v => fac.OtsSslPort = v));
+            var fEnr = FieldBox("Port Enrollment (8446):", IntCtrl(fac.OtsEnrollmentPort, v => fac.OtsEnrollmentPort = v));
             Grid.SetColumn(fHost, 0); Grid.SetColumn(fSsl, 1); Grid.SetColumn(fEnr, 2);
             otsRow1.Children.Add(fHost); otsRow1.Children.Add(fSsl); otsRow1.Children.Add(fEnr);
             root.Children.Add(otsRow1);
@@ -676,8 +749,8 @@ namespace FieldTakHub.Builder.Services
 
             var swEnr = TileSwitch("Włącz Auto-Enrollment OTS", fac.EnableAutoEnrollment, v => fac.EnableAutoEnrollment = v);
             swEnr.Margin = new Thickness(0, 10, 8, 6);
-            var fUsr = FieldBox("Użytkownik / Grupa Enrollment:", TextCtrl(fac.EnrollmentUsername, v => fac.EnrollmentUsername = v.Trim()));
-            var fPwd = FieldBox("Hasło Enrollment / Certyfikatu:", TextCtrl(fac.EnrollmentPassword, v => fac.EnrollmentPassword = v));
+            var fUsr = FieldBox("Login / Użytkownik Enrollment dla strony:", TextCtrl(fac.EnrollmentUsername, v => fac.EnrollmentUsername = v.Trim()));
+            var fPwd = FieldBox("Hasło Enrollment / Hasło certyfikatu:", TextCtrl(fac.EnrollmentPassword, v => fac.EnrollmentPassword = v));
             Grid.SetColumn(swEnr, 0); Grid.SetColumn(fUsr, 1); Grid.SetColumn(fPwd, 2);
             otsRow2.Children.Add(swEnr); otsRow2.Children.Add(fUsr); otsRow2.Children.Add(fPwd);
             root.Children.Add(otsRow2);
@@ -1295,7 +1368,7 @@ namespace FieldTakHub.Builder.Services
                         stats.PluginsBytes += len;
                     else if (rel.StartsWith("maps/") || rel.StartsWith("mapy/") || rel.StartsWith("imagery/") || rel.StartsWith("tiles/") ||
                              ext == ".mbtiles" || ext == ".sqlite" || ext == ".sqlitedb" || ext == ".tif" || ext == ".tiff" || ext == ".geotiff" ||
-                             ((ext == ".kmz" || ext == ".xml" || ext == ".pdf") && (nameLower.Contains("map") || nameLower.Contains("orto") || nameLower.Contains("lidar") || nameLower.Contains("topo"))))
+                             ((ext == ".kmz" || ext == ".xml" || ext == ".pdf" || ext == ".png" || ext == ".jpg") && (nameLower.Contains("map") || nameLower.Contains("orto") || nameLower.Contains("lidar") || nameLower.Contains("topo"))))
                         stats.MapsBytes += len;
                     else if (rel.StartsWith("config/") || rel.StartsWith("certs/") || rel.StartsWith("cert/") ||
                              ext == ".json" || ext == ".pref" || ext == ".cfg" || ext == ".conf" || ext == ".ini" ||
