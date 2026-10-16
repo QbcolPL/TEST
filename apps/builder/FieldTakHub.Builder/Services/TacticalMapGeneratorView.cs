@@ -41,7 +41,7 @@ namespace FieldTakHub.Builder.Services
 
     public class TacticalMapObjectItem
     {
-        public string Kind { get; set; } = "Marker"; // "Marker", "Dot", "AO", "Route"
+        public string Kind { get; set; } = "Marker";
         public string SymbolCode { get; set; } = "NATO_HQ";
         public string Name { get; set; } = "HQ";
         public string ColorHex { get; set; } = "#2684FF";
@@ -56,15 +56,16 @@ namespace FieldTakHub.Builder.Services
         private static UIElement _originalWindowContent;
         private static Border _fullScreenOverlay;
         private static Button _tabBuilderBtn, _tabMapBtn, _btnToolPan, _btnToolMarker, _btnToolDot, _btnToolAo, _btnToolRoute;
+        private static final List<Button> _scalePresetButtons = new List<Button>();
         private static Canvas _mapCanvas;
         private static TextBlock _statusText, _coordsBadge, _gridThicknessValueLabel;
         private static StackPanel _objectsListStack;
 
         private static double _centerLat = 49.9135, _centerLon = 19.0238, _gridThicknessMultiplier = 1.0, _dragStartLat, _dragStartLon;
-        private static int _zoom = 15, _targetScaleDenominator = 5000;
+        private static int _zoom = 16, _targetScaleDenominator = 5000;
         private static string _sheetFormat = "A4 (297 × 210 mm)", _sheetOrientation = "Poziomo";
         private static bool _showLidarSingleWms, _isDragging;
-        private static string _coordSystem = "MGRS / UTM (Siatka wojskowa w metrach)", _subGridDivision = "Co 50 m (Ćwiartki A,B,C,D)", _gridLabelsMode = "MGRS + Ćwiartki/Keypad", _gridColorName = "Żółty", _gridHaloMode = "Pełny czarny obrys";
+        private static string _coordSystem = "MGRS / UTM (Siatka wojskowa w metrach)", _subGridDivision = "Co 33 m (Keypad 1-9)", _gridLabelsMode = "MGRS + Ćwiartki/Keypad", _gridColorName = "Żółty", _gridHaloMode = "Pełny czarny obrys";
         private static string _activeTool = "PAN", _selectedObjectColorHex = "#2684FF", _selectedNatoSymbolCode = "NATO_HQ";
         private static string _northArrowPos = "Lewy górny róg", _scaleBarPos = "Lewy dolny róg", _legendPos = "Prawy górny róg", _kmzGrgMode = "Przezroczysta siatka";
 
@@ -113,6 +114,20 @@ namespace FieldTakHub.Builder.Services
             return c;
         }
 
+        // Dokładna rozdzielczość terenowa (m/px) wynikająca bezpośrednio z wybranej skali 1:X (przy 96 DPI: 1 px = 0.26458333 mm)
+        private static double GetExactMetersPerPixel()
+        {
+            return Math.Max(0.05, _targetScaleDenominator * 0.000264583333);
+        }
+
+        // Rozmiar pojedynczego kafelka 256x256 po przeskalowaniu do dokładnej skali 1:X
+        private static double GetScaledTileSizePx()
+        {
+            double nativeTileMetersPerPx = (156543.03392 * Math.Cos(_centerLat * Math.PI / 180.0)) / Math.Pow(2.0, _zoom);
+            double exactMetersPerPx = GetExactMetersPerPixel();
+            return Math.Clamp(256.0 * (nativeTileMetersPerPx / exactMetersPerPx), 110.0, 620.0);
+        }
+
         public static void AttachFullScreenTab(Window win)
         {
             if (Application.Current == null || win == null) return;
@@ -130,7 +145,7 @@ namespace FieldTakHub.Builder.Services
 
                     var navBorder = new Border { Background = TacticalConfigPanel.BrushInputBg, BorderBrush = TacticalConfigPanel.BrushCardBorder, BorderThickness = new Thickness(0, 0, 0, 1), Padding = new Thickness(16, 0, 16, 0) };
                     var navDock = new DockPanel();
-                    var rightInfo = new TextBlock { Text = "Field TAK Hub 2.4  •  Symbole Wektorowe NATO APP-6  •  Geoportal Hi-Res / LiDAR ISOK / Topo", Foreground = TacticalConfigPanel.BrushMutedText, FontSize = 11, VerticalAlignment = VerticalAlignment.Center };
+                    var rightInfo = new TextBlock { Text = "Field TAK Hub 2.4  •  Symbole Wektorowe NATO APP-6  •  Dokładna Skala 1:X  •  MGRS Keypad", Foreground = TacticalConfigPanel.BrushMutedText, FontSize = 11, VerticalAlignment = VerticalAlignment.Center };
                     DockPanel.SetDock(rightInfo, Dock.Right);
                     navDock.Children.Add(rightInfo);
 
@@ -167,7 +182,7 @@ namespace FieldTakHub.Builder.Services
                 _fullScreenOverlay.Visibility = Visibility.Visible;
                 if (_tabMapBtn != null) { _tabMapBtn.Background = TacticalConfigPanel.BrushButtonAccent; _tabMapBtn.Foreground = TacticalConfigPanel.BrushDarkFg; }
                 if (_tabBuilderBtn != null) { _tabBuilderBtn.Background = TacticalConfigPanel.BrushItemBg; _tabBuilderBtn.Foreground = Brushes.White; }
-                _ = RenderMapTilesAsync();
+                ApplyScaleDenominator(_targetScaleDenominator);
             }
         }
 
@@ -185,20 +200,27 @@ namespace FieldTakHub.Builder.Services
         private static void ApplyScaleDenominator(int scaleDenom)
         {
             _targetScaleDenominator = Math.Clamp(scaleDenom, 500, 250000);
-            if (_scaleInputBox != null) _scaleInputBox.Text = _targetScaleDenominator.ToString();
-            double targetMetersPerPx = _targetScaleDenominator * 0.0002645833;
+            if (_scaleInputBox != null && _scaleInputBox.Text != _targetScaleDenominator.ToString())
+                _scaleInputBox.Text = _targetScaleDenominator.ToString();
+
+            double targetMetersPerPx = GetExactMetersPerPixel();
             double equatorMetersPerPx = 156543.03392 * Math.Cos(_centerLat * Math.PI / 180.0);
             _zoom = Math.Clamp((int)Math.Round(Math.Log(equatorMetersPerPx / targetMetersPerPx, 2.0)), 5, 19);
+
+            foreach (var b in _scalePresetButtons)
+            {
+                bool isCurrent = b.Content?.ToString() == $"1:{_targetScaleDenominator}";
+                b.Background = isCurrent ? TacticalConfigPanel.BrushButtonAccent : TacticalConfigPanel.BrushInputBg;
+                b.Foreground = isCurrent ? TacticalConfigPanel.BrushDarkFg : Brushes.White;
+                b.BorderBrush = isCurrent ? TacticalConfigPanel.BrushAccent : TacticalConfigPanel.BrushInputBorder;
+            }
+
             _ = RenderMapTilesAsync();
         }
 
         private static Border BuildFullScreenMapGeneratorUI(Window win)
         {
             _activeLayer = Layers[0];
-            var GoldBrush = TacticalConfigPanel.CreateFrozenBrush(242, 182, 45);
-            var BlueBtnBrush = TacticalConfigPanel.CreateFrozenBrush(24, 119, 209);
-            var PurpleBtnBrush = TacticalConfigPanel.CreateFrozenBrush(118, 43, 196);
-            var OrangeBtnBrush = TacticalConfigPanel.CreateFrozenBrush(230, 96, 12);
 
             var rootBorder = new Border { Background = TacticalConfigPanel.BrushCardBg, Tag = "INJECTED_MAP_OVERLAY" };
             var mainGrid = new Grid();
@@ -212,13 +234,14 @@ namespace FieldTakHub.Builder.Services
             var leftScroll = new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Background = TacticalConfigPanel.BrushCardBg, Padding = new Thickness(10) };
             var leftStack = new StackPanel { Margin = new Thickness(6) };
 
-            var sec1 = CreateSectionCard("1. ARKUSZ, SKALA MAPY (1:X), PODKŁAD & LiDAR ISOK", GoldBrush);
+            // SEKCJA 1: ARKUSZ, SKALA MAPY 1:X, PODKŁAD & LiDAR ISOK (W spójnej kolorystyce Field TAK Hub)
+            var sec1 = CreateSectionCard("1. ARKUSZ, DOKŁADNA SKALA MAPY (1:X), PODKŁAD & LiDAR ISOK");
             var searchRow = new Grid { Margin = new Thickness(0, 0, 0, 6) };
             searchRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-            searchRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(80) });
+            searchRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(86) });
             _searchPlaceBox = (TextBox)TacticalConfigPanel.TextCtrl("Czechowice-Dziedzice", _ => { });
-            var btnFind = new Button { Content = "🔍 Szukaj", Height = 26, Margin = new Thickness(6, 0, 0, 0), Background = BlueBtnBrush, Foreground = Brushes.White, BorderThickness = new Thickness(0), FontWeight = FontWeights.Bold, Cursor = Cursors.Hand };
-            btnFind.Click += async (_, __) => await SearchLocationNominatimAsync();
+            var btnFind = MakeActionButton("🔍 Szukaj", true, async () => await SearchLocationNominatimAsync());
+            btnFind.Height = 25; btnFind.Margin = new Thickness(6, 0, 0, 0);
             Grid.SetColumn(_searchPlaceBox, 0); Grid.SetColumn(btnFind, 1);
             searchRow.Children.Add(_searchPlaceBox); searchRow.Children.Add(btnFind);
             sec1.Children.Add(TacticalConfigPanel.FieldBox("Wyszukaj miejscowość / teren gry:", searchRow));
@@ -228,58 +251,62 @@ namespace FieldTakHub.Builder.Services
             fmtGrid.Children.Add(TacticalConfigPanel.FieldBox("Orientacja:", TacticalConfigPanel.ComboCtrl(new[] { "Poziomo", "Pionowo" }, _sheetOrientation, win, v => _sheetOrientation = v)));
             sec1.Children.Add(fmtGrid);
 
-            sec1.Children.Add(new TextBlock { Text = "Skala mapy (wpisz dowolną 1:X lub wybierz poniżej):", Foreground = TacticalConfigPanel.BrushMutedText, FontSize = 10.5, Margin = new Thickness(0, 4, 0, 4) });
+            sec1.Children.Add(new TextBlock { Text = "Skala mapy (wpisz dowolną 1:X lub wybierz poniżej):", Foreground = TacticalConfigPanel.BrushMutedText, FontSize = 10, Margin = new Thickness(0, 4, 0, 3) });
             var scaleCustomGrid = new Grid { Margin = new Thickness(0, 0, 0, 6) };
             scaleCustomGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(28) });
             scaleCustomGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
             scaleCustomGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(95) });
-            scaleCustomGrid.Children.Add(new TextBlock { Text = "1 :", Foreground = GoldBrush, FontWeight = FontWeights.Bold, FontSize = 13, VerticalAlignment = VerticalAlignment.Center });
+            scaleCustomGrid.Children.Add(new TextBlock { Text = "1 :", Foreground = TacticalConfigPanel.BrushAccent, FontWeight = FontWeights.Bold, FontSize = 12.5, VerticalAlignment = VerticalAlignment.Center });
             _scaleInputBox = (TextBox)TacticalConfigPanel.TextCtrl("5000", _ => { });
             Grid.SetColumn(_scaleInputBox, 1); scaleCustomGrid.Children.Add(_scaleInputBox);
-            var btnSetScale = new Button { Content = "Ustaw skalę", Height = 26, Margin = new Thickness(6, 0, 0, 0), Background = BlueBtnBrush, Foreground = Brushes.White, FontWeight = FontWeights.Bold, BorderThickness = new Thickness(0), Cursor = Cursors.Hand };
-            btnSetScale.Click += (_, __) => { if (int.TryParse(_scaleInputBox.Text.Trim(), out int sc)) ApplyScaleDenominator(sc); };
+            var btnSetScale = MakeActionButton("Ustaw skalę", true, () => { if (int.TryParse(_scaleInputBox.Text.Trim(), out int sc)) ApplyScaleDenominator(sc); });
+            btnSetScale.Height = 25; btnSetScale.Margin = new Thickness(6, 0, 0, 0);
             Grid.SetColumn(btnSetScale, 2); scaleCustomGrid.Children.Add(btnSetScale);
             sec1.Children.Add(scaleCustomGrid);
 
+            _scalePresetButtons.Clear();
             var scalePresetsRow = new UniformGrid { Columns = 6, Margin = new Thickness(0, 0, 0, 4) };
             foreach (int p in new[] { 2500, 4000, 5000, 7500, 10000, 15000 })
             {
                 int cap = p;
-                var b = new Button { Content = $"1:{cap}", Height = 24, Margin = new Thickness(1), Background = TacticalConfigPanel.BrushInputBg, Foreground = Brushes.White, BorderBrush = TacticalConfigPanel.BrushInputBorder, BorderThickness = new Thickness(1), FontSize = 9.5, FontWeight = FontWeights.Bold, Cursor = Cursors.Hand };
-                b.Click += (_, __) => ApplyScaleDenominator(cap);
+                var b = MakeActionButton($"1:{cap}", cap == 5000, () => ApplyScaleDenominator(cap));
+                b.Height = 24; b.Margin = new Thickness(1); b.FontSize = 9.5;
+                _scalePresetButtons.Add(b);
                 scalePresetsRow.Children.Add(b);
             }
             sec1.Children.Add(scalePresetsRow);
-            var btnScale25k = new Button { Content = "1:25000", Height = 24, Margin = new Thickness(1, 0, 1, 8), Background = TacticalConfigPanel.BrushInputBg, Foreground = Brushes.White, BorderBrush = TacticalConfigPanel.BrushInputBorder, BorderThickness = new Thickness(1), FontSize = 10, FontWeight = FontWeights.Bold, Cursor = Cursors.Hand };
-            btnScale25k.Click += (_, __) => ApplyScaleDenominator(25000);
+            var btnScale25k = MakeActionButton("1:25000", false, () => ApplyScaleDenominator(25000));
+            btnScale25k.Height = 24; btnScale25k.Margin = new Thickness(1, 0, 1, 8); btnScale25k.FontSize = 10;
+            _scalePresetButtons.Add(btnScale25k);
             sec1.Children.Add(btnScale25k);
 
-            var layerCombo = new ComboBox { ItemsSource = Layers, SelectedIndex = 0, Height = 28, FontSize = 11, Margin = new Thickness(0, 0, 0, 8), Tag = "INJECTED" };
+            var layerCombo = new ComboBox { ItemsSource = Layers, SelectedIndex = 0, Height = 26, FontSize = 10.5, Margin = new Thickness(0, 0, 0, 8), Tag = "INJECTED" };
             TacticalConfigPanel.ApplyUnifiedComboBoxTheme(layerCombo, win);
             layerCombo.SelectionChanged += (_, __) => { if (layerCombo.SelectedItem is TacticalMapLayerDef def) { _activeLayer = def; _ = RenderMapTilesAsync(); } };
             sec1.Children.Add(TacticalConfigPanel.FieldBox("Podkład bazowy:", layerCombo));
 
-            var lidarBox = new Border { Background = new SolidColorBrush(Color.FromRgb(16, 38, 24)), BorderBrush = TacticalConfigPanel.CreateFrozenBrush(46, 160, 80), BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(6), Padding = new Thickness(10, 8, 10, 8) };
-            var chkLidar = new CheckBox { Content = "Nałóż rzeźbę LiDAR ISOK (1 zapytanie WMS - bez dziur)", IsChecked = false, Foreground = TacticalConfigPanel.CreateFrozenBrush(110, 235, 140), FontWeight = FontWeights.Bold, FontSize = 10.5 };
+            var lidarBox = new Border { Background = TacticalConfigPanel.BrushInputBg, BorderBrush = TacticalConfigPanel.BrushAccent, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(6), Padding = new Thickness(10, 7, 10, 7) };
+            var chkLidar = new CheckBox { Content = "Nałóż rzeźbę LiDAR ISOK (1 zapytanie WMS - bez dziur)", IsChecked = false, Foreground = TacticalConfigPanel.BrushAccent, FontWeight = FontWeights.SemiBold, FontSize = 10.5 };
             chkLidar.Checked += (_, __) => { _showLidarSingleWms = true; _ = RenderMapTilesAsync(); };
             chkLidar.Unchecked += (_, __) => { _showLidarSingleWms = false; _ = RenderMapTilesAsync(); };
             lidarBox.Child = chkLidar;
             sec1.Children.Add(lidarBox);
             leftStack.Children.Add(WrapCard(sec1));
 
-            var sec2 = CreateSectionCard("2. SYSTEM WSPÓŁRZĘDNYCH I SIATKA", GoldBrush);
+            // SEKCJA 2: SYSTEM WSPÓŁRZĘDNYCH I SIATKA (Z wyraźnym podziałem Keypad 1-9 i Ćwiartkami A,B,C,D)
+            var sec2 = CreateSectionCard("2. SYSTEM WSPÓŁRZĘDNYCH I SIATKA (MGRS / KEYPAD 1-9)");
             sec2.Children.Add(TacticalConfigPanel.FieldBox("System współrzędnych i typ siatki na mapie:", TacticalConfigPanel.ComboCtrl(new[] { "MGRS / UTM (Siatka wojskowa w metrach)", "Siatka Sektorowa (A1, B2, C3...)", "WGS84 (Stopnie geograficzne Lat/Lon)", "Brak siatki" }, _coordSystem, win, v => { _coordSystem = v; _ = RenderMapTilesAsync(); })));
 
             var subGridRow = new UniformGrid { Columns = 2 };
-            subGridRow.Children.Add(TacticalConfigPanel.FieldBox("Podział wewnątrz 100 m:", TacticalConfigPanel.ComboCtrl(new[] { "Co 50 m (Ćwiartki A,B,C,D)", "Co 33 m (Keypad 1-9)", "Brak podziału (Tylko 100 m)", "Siatka co 250 m", "Siatka co 500 m" }, _subGridDivision, win, v => { _subGridDivision = v; _ = RenderMapTilesAsync(); })));
+            subGridRow.Children.Add(TacticalConfigPanel.FieldBox("Podział wewnątrz 100 m:", TacticalConfigPanel.ComboCtrl(new[] { "Co 33 m (Keypad 1-9)", "Co 50 m (Ćwiartki A,B,C,D)", "Brak podziału (Tylko 100 m)", "Siatka co 250 m", "Siatka co 500 m" }, _subGridDivision, win, v => { _subGridDivision = v; _ = RenderMapTilesAsync(); })));
             subGridRow.Children.Add(TacticalConfigPanel.FieldBox("Opisy kratek 100 m:", TacticalConfigPanel.ComboCtrl(new[] { "MGRS + Ćwiartki/Keypad", "Tylko główne linie MGRS", "Brak opisów wewnątrz" }, _gridLabelsMode, win, v => { _gridLabelsMode = v; _ = RenderMapTilesAsync(); })));
             sec2.Children.Add(subGridRow);
 
             var thickHeaderDock = new DockPanel { Margin = new Thickness(0, 2, 0, 2) };
-            _gridThicknessValueLabel = new TextBlock { Text = "1.0x", Foreground = GoldBrush, FontWeight = FontWeights.Bold, FontSize = 11 };
+            _gridThicknessValueLabel = new TextBlock { Text = "1.0x", Foreground = TacticalConfigPanel.BrushAccent, FontWeight = FontWeights.Bold, FontSize = 10.5 };
             DockPanel.SetDock(_gridThicknessValueLabel, Dock.Right);
             thickHeaderDock.Children.Add(_gridThicknessValueLabel);
-            thickHeaderDock.Children.Add(new TextBlock { Text = "Grubość linii siatki:", Foreground = TacticalConfigPanel.BrushMutedText, FontSize = 10.5 });
+            thickHeaderDock.Children.Add(new TextBlock { Text = "Grubość linii siatki (głównej i Keypad):", Foreground = TacticalConfigPanel.BrushMutedText, FontSize = 10 });
             sec2.Children.Add(thickHeaderDock);
 
             var thickSlider = new Slider { Minimum = 0.5, Maximum = 3.0, Value = 1.0, Margin = new Thickness(0, 0, 0, 6) };
@@ -292,67 +319,64 @@ namespace FieldTakHub.Builder.Services
             sec2.Children.Add(colAndHaloRow);
             leftStack.Children.Add(WrapCard(sec2));
 
-            // SEKCJA 3: ZNACZNIKI WEKTOROWE NATO APP-6 + PALETA RGB + KROPKI I TEREN GRY
-            var sec3 = CreateSectionCard("3. ZNACZNIKI WEKTOROWE NATO (APP-6), KOLOR RGB & TEREN GRY", GoldBrush);
+            // SEKCJA 3: ZNACZNIKI WEKTOROWE NATO APP-6, KROPKI KOLOROWE I TEREN GRY
+            var sec3 = CreateSectionCard("3. ZNACZNIKI WEKTOROWE NATO (APP-6), KOLOR RGB & TEREN GRY");
             void UpdateToolButtonsVisual()
             {
                 void StyleTool(Button b, bool active)
                 {
                     if (b == null) return;
-                    b.Background = active ? GoldBrush : TacticalConfigPanel.BrushInputBg;
+                    b.Background = active ? TacticalConfigPanel.BrushButtonAccent : TacticalConfigPanel.BrushInputBg;
                     b.Foreground = active ? TacticalConfigPanel.BrushDarkFg : Brushes.White;
-                    b.BorderBrush = active ? Brushes.White : TacticalConfigPanel.BrushInputBorder;
+                    b.BorderBrush = active ? TacticalConfigPanel.BrushAccent : TacticalConfigPanel.BrushInputBorder;
                 }
                 StyleTool(_btnToolPan, _activeTool == "PAN"); StyleTool(_btnToolMarker, _activeTool == "MARKER");
                 StyleTool(_btnToolDot, _activeTool == "DOT"); StyleTool(_btnToolAo, _activeTool == "AO"); StyleTool(_btnToolRoute, _activeTool == "ROUTE");
             }
 
-            _btnToolPan = new Button { Content = "✋ Przesuwaj Mapę", Height = 32, Margin = new Thickness(0, 0, 0, 6), FontWeight = FontWeights.Bold, FontSize = 11.5, Cursor = Cursors.Hand };
-            _btnToolPan.Click += (_, __) => { _activeTool = "PAN"; _activeDraftPoly = null; UpdateToolButtonsVisual(); };
+            _btnToolPan = MakeActionButton("✋ Przesuwaj Mapę", true, () => { _activeTool = "PAN"; _activeDraftPoly = null; UpdateToolButtonsVisual(); });
+            _btnToolPan.Height = 30; _btnToolPan.Margin = new Thickness(0, 0, 0, 5);
             sec3.Children.Add(_btnToolPan);
 
             var toolsGrid = new UniformGrid { Columns = 2, Margin = new Thickness(0, 0, 0, 6) };
-            _btnToolMarker = new Button { Content = "🚩 Symbol NATO (Wektor)", Height = 30, Margin = new Thickness(0, 0, 3, 4), FontWeight = FontWeights.Bold, FontSize = 10.5, Cursor = Cursors.Hand };
-            _btnToolDot = new Button { Content = "⚫ Kropka (Kolor RGB)", Height = 30, Margin = new Thickness(3, 0, 0, 4), FontWeight = FontWeights.Bold, FontSize = 10.5, Cursor = Cursors.Hand };
-            _btnToolAo = new Button { Content = "⬠ Rysuj Obszar (AO)", Height = 30, Margin = new Thickness(0, 0, 3, 0), FontWeight = FontWeights.Bold, FontSize = 10.5, Cursor = Cursors.Hand };
-            _btnToolRoute = new Button { Content = "〰 Rysuj Trasę/Linię", Height = 30, Margin = new Thickness(3, 0, 0, 0), FontWeight = FontWeights.Bold, FontSize = 10.5, Cursor = Cursors.Hand };
+            _btnToolMarker = MakeActionButton("🚩 Symbol NATO (Wektor)", false, () => { _activeTool = "MARKER"; _activeDraftPoly = null; UpdateToolButtonsVisual(); });
+            _btnToolDot = MakeActionButton("⚫ Kropka (Kolor RGB)", false, () => { _activeTool = "DOT"; _activeDraftPoly = null; UpdateToolButtonsVisual(); });
+            _btnToolAo = MakeActionButton("⬠ Rysuj Obszar (AO)", false, () => { _activeTool = "AO"; _activeDraftPoly = null; UpdateToolButtonsVisual(); });
+            _btnToolRoute = MakeActionButton("〰 Rysuj Trasę/Linię", false, () => { _activeTool = "ROUTE"; _activeDraftPoly = null; UpdateToolButtonsVisual(); });
 
-            _btnToolMarker.Click += (_, __) => { _activeTool = "MARKER"; _activeDraftPoly = null; UpdateToolButtonsVisual(); };
-            _btnToolDot.Click += (_, __) => { _activeTool = "DOT"; _activeDraftPoly = null; UpdateToolButtonsVisual(); };
-            _btnToolAo.Click += (_, __) => { _activeTool = "AO"; _activeDraftPoly = null; UpdateToolButtonsVisual(); };
-            _btnToolRoute.Click += (_, __) => { _activeTool = "ROUTE"; _activeDraftPoly = null; UpdateToolButtonsVisual(); };
+            _btnToolMarker.Height = 28; _btnToolMarker.Margin = new Thickness(0, 0, 3, 4);
+            _btnToolDot.Height = 28; _btnToolDot.Margin = new Thickness(3, 0, 0, 4);
+            _btnToolAo.Height = 28; _btnToolAo.Margin = new Thickness(0, 0, 3, 0);
+            _btnToolRoute.Height = 28; _btnToolRoute.Margin = new Thickness(3, 0, 0, 0);
 
             toolsGrid.Children.Add(_btnToolMarker); toolsGrid.Children.Add(_btnToolDot);
             toolsGrid.Children.Add(_btnToolAo); toolsGrid.Children.Add(_btnToolRoute);
             sec3.Children.Add(toolsGrid);
             UpdateToolButtonsVisual();
 
-            // Wybór ikony wektorowej NATO APP-6
-            var natoCombo = new ComboBox { ItemsSource = NatoSymbols, SelectedIndex = 0, Height = 28, FontSize = 10.5, Margin = new Thickness(0, 0, 0, 4), Tag = "INJECTED" };
+            var natoCombo = new ComboBox { ItemsSource = NatoSymbols, SelectedIndex = 0, Height = 26, FontSize = 10.5, Margin = new Thickness(0, 0, 0, 4), Tag = "INJECTED" };
             TacticalConfigPanel.ApplyUnifiedComboBoxTheme(natoCombo, win);
             natoCombo.SelectionChanged += (_, __) =>
             {
                 if (natoCombo.SelectedItem is NatoSymbolOption opt)
                 {
                     _selectedNatoSymbolCode = opt.Code;
-                    if (_objectNameInputBox != null)
-                        _objectNameInputBox.Text = opt.Code.Replace("NATO_", "");
+                    if (_objectNameInputBox != null) _objectNameInputBox.Text = opt.Code.Replace("NATO_", "");
                 }
             };
             sec3.Children.Add(TacticalConfigPanel.FieldBox("Kształt wektorowego znacznika taktycznego (Standard NATO APP-6):", natoCombo));
 
-            // Nazwa obiektu + przycisk otwierający pełną Paletę RGB
             var objCfgRow = new Grid { Margin = new Thickness(0, 0, 0, 6) };
             objCfgRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
             objCfgRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(155) });
             _objectNameInputBox = (TextBox)TacticalConfigPanel.TextCtrl("HQ", _ => { });
 
-            var mapColorSwatch = new Border { Width = 14, Height = 14, CornerRadius = new CornerRadius(3), Background = TacticalConfigPanel.BrushFromHex(_selectedObjectColorHex, Color.FromRgb(38, 132, 255)), BorderBrush = Brushes.White, BorderThickness = new Thickness(1), Margin = new Thickness(0, 0, 6, 0), VerticalAlignment = VerticalAlignment.Center };
+            var mapColorSwatch = new Border { Width = 13, Height = 13, CornerRadius = new CornerRadius(3), Background = TacticalConfigPanel.BrushFromHex(_selectedObjectColorHex, Color.FromRgb(38, 132, 255)), BorderBrush = Brushes.White, BorderThickness = new Thickness(1), Margin = new Thickness(0, 0, 6, 0), VerticalAlignment = VerticalAlignment.Center };
             var mapColorText = new TextBlock { Text = $"Paleta RGB ({_selectedObjectColorHex})", Foreground = Brushes.White, FontSize = 10, FontWeight = FontWeights.Bold, VerticalAlignment = VerticalAlignment.Center };
             var mapColorStack = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Center };
             mapColorStack.Children.Add(mapColorSwatch); mapColorStack.Children.Add(mapColorText);
 
-            var btnPickMapRgb = new Button { Content = mapColorStack, Height = 26, Background = TacticalConfigPanel.BrushInputBg, BorderBrush = TacticalConfigPanel.BrushAccent, BorderThickness = new Thickness(1), Cursor = Cursors.Hand, ToolTip = "Wybierz dowolny kolor znacznika z pełnej palety RGB" };
+            var btnPickMapRgb = new Button { Content = mapColorStack, Height = 25, Background = TacticalConfigPanel.BrushInputBg, BorderBrush = TacticalConfigPanel.BrushAccent, BorderThickness = new Thickness(1), Cursor = Cursors.Hand };
             btnPickMapRgb.Click += (_, __) =>
             {
                 string picked = TacticalConfigPanel.ShowRgbColorPickerDialog(win, "Kolor znacznika taktycznego NATO", _selectedObjectColorHex);
@@ -370,8 +394,8 @@ namespace FieldTakHub.Builder.Services
             objCfgRow.Children.Add(fNameBox); objCfgRow.Children.Add(fRgbBtn);
             sec3.Children.Add(objCfgRow);
 
-            sec3.Children.Add(new TextBlock { Text = "Naniesione obiekty (kliknij ✖ aby usunąć):", Foreground = TacticalConfigPanel.BrushMutedText, FontSize = 10.5, Margin = new Thickness(0, 0, 0, 4) });
-            var objListBorder = new Border { Background = TacticalConfigPanel.BrushInputBg, BorderBrush = TacticalConfigPanel.BrushInputBorder, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(4), MinHeight = 46, MaxHeight = 110, Padding = new Thickness(6) };
+            sec3.Children.Add(new TextBlock { Text = "Naniesione obiekty (kliknij ✖ aby usunąć):", Foreground = TacticalConfigPanel.BrushMutedText, FontSize = 10, Margin = new Thickness(0, 0, 0, 3) });
+            var objListBorder = new Border { Background = TacticalConfigPanel.BrushInputBg, BorderBrush = TacticalConfigPanel.BrushInputBorder, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(4), MinHeight = 44, MaxHeight = 105, Padding = new Thickness(6) };
             var objListScroll = new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
             _objectsListStack = new StackPanel();
             objListScroll.Content = _objectsListStack; objListBorder.Child = objListScroll;
@@ -379,7 +403,8 @@ namespace FieldTakHub.Builder.Services
             RefreshObjectsListUI();
             leftStack.Children.Add(WrapCard(sec3));
 
-            var sec4 = CreateSectionCard("4. ELEMENTY MAPY (PÓŁNOC / PODZIAŁKA / LEGENDA) & EKSPORT", GoldBrush);
+            // SEKCJA 4: ELEMENTY MAPY (PÓŁNOC / PODZIAŁKA / LEGENDA) & EKSPORT (W spójnym motywie Field TAK Hub)
+            var sec4 = CreateSectionCard("4. ELEMENTY MAPY (PÓŁNOC / PODZIAŁKA / LEGENDA) & EKSPORT");
             string[] corners = { "Lewy górny róg", "Prawy górny róg", "Lewy dolny róg", "Prawy dolny róg", "Ukryj" };
             var posGrid = new UniformGrid { Columns = 2, Margin = new Thickness(0, 0, 0, 8) };
             posGrid.Children.Add(TacticalConfigPanel.FieldBox("Znacznik Północy (N):", TacticalConfigPanel.ComboCtrl(corners, _northArrowPos, win, v => { _northArrowPos = v; _ = RenderMapTilesAsync(); })));
@@ -389,25 +414,25 @@ namespace FieldTakHub.Builder.Services
             sec4.Children.Add(posGrid);
 
             var expRow1 = new UniformGrid { Columns = 2, Margin = new Thickness(0, 0, 0, 6) };
-            var btnGpx = new Button { Content = "⌚ Pobierz .GPX\n(Garmin/Suunto)", Height = 40, Margin = new Thickness(0, 0, 4, 0), Background = PurpleBtnBrush, Foreground = Brushes.White, BorderThickness = new Thickness(0), FontWeight = FontWeights.Bold, FontSize = 11, Cursor = Cursors.Hand, HorizontalContentAlignment = HorizontalAlignment.Center };
-            var btnKmz = new Button { Content = "📦 Pobierz .KMZ (ATAK)", Height = 40, Margin = new Thickness(4, 0, 0, 0), Background = OrangeBtnBrush, Foreground = Brushes.White, BorderThickness = new Thickness(0), FontWeight = FontWeights.Bold, FontSize = 11, Cursor = Cursors.Hand };
-            btnGpx.Click += async (_, __) => await ExportStandaloneFilesAsync(win, "gpx");
-            btnKmz.Click += async (_, __) => await ExportStandaloneFilesAsync(win, "kmz");
+            var btnGpx = MakeActionButton("⌚ Pobierz .GPX (Garmin/ATAK)", false, async () => await ExportStandaloneFilesAsync(win, "gpx"));
+            var btnKmz = MakeActionButton("📦 Pobierz .KMZ (GRG ATAK)", false, async () => await ExportStandaloneFilesAsync(win, "kmz"));
+            btnGpx.Height = 32; btnGpx.Margin = new Thickness(0, 0, 3, 0); btnGpx.BorderBrush = TacticalConfigPanel.BrushAccent;
+            btnKmz.Height = 32; btnKmz.Margin = new Thickness(3, 0, 0, 0); btnKmz.BorderBrush = TacticalConfigPanel.BrushAccent;
             expRow1.Children.Add(btnGpx); expRow1.Children.Add(btnKmz);
             sec4.Children.Add(expRow1);
 
             var expRow2 = new UniformGrid { Columns = 3, Margin = new Thickness(0, 0, 0, 6) };
-            var btnPdf = new Button { Content = "🖨️ Drukuj / PDF", Height = 36, Margin = new Thickness(0, 0, 4, 0), Background = BlueBtnBrush, Foreground = Brushes.White, BorderThickness = new Thickness(0), FontWeight = FontWeights.Bold, FontSize = 11, Cursor = Cursors.Hand };
-            var btnSaveJson = new Button { Content = "💾 Zapisz .json", Height = 36, Margin = new Thickness(2, 0, 2, 0), Background = TacticalConfigPanel.BrushInputBg, Foreground = Brushes.White, BorderBrush = TacticalConfigPanel.BrushInputBorder, BorderThickness = new Thickness(1), FontWeight = FontWeights.Bold, FontSize = 11, Cursor = Cursors.Hand };
-            var btnLoadJson = new Button { Content = "📂 Wczytaj", Height = 36, Margin = new Thickness(4, 0, 0, 0), Background = TacticalConfigPanel.BrushInputBg, Foreground = Brushes.White, BorderBrush = TacticalConfigPanel.BrushInputBorder, BorderThickness = new Thickness(1), FontWeight = FontWeights.Bold, FontSize = 11, Cursor = Cursors.Hand };
-            btnPdf.Click += async (_, __) => await ExportTacticalMapPdfAsync(win);
-            btnSaveJson.Click += (_, __) => SaveMapProjectJson();
-            btnLoadJson.Click += (_, __) => LoadMapProjectJsonOrKml();
+            var btnPdf = MakeActionButton("🖨️ Drukuj / PDF", false, async () => await ExportTacticalMapPdfAsync(win));
+            var btnSaveJson = MakeActionButton("💾 Zapisz .json", false, () => SaveMapProjectJson());
+            var btnLoadJson = MakeActionButton("📂 Wczytaj", false, () => LoadMapProjectJsonOrKml());
+            btnPdf.Height = 30; btnPdf.Margin = new Thickness(0, 0, 3, 0); btnPdf.BorderBrush = TacticalConfigPanel.BrushAccent;
+            btnSaveJson.Height = 30; btnSaveJson.Margin = new Thickness(2, 0, 2, 0);
+            btnLoadJson.Height = 30; btnLoadJson.Margin = new Thickness(3, 0, 0, 0);
             expRow2.Children.Add(btnPdf); expRow2.Children.Add(btnSaveJson); expRow2.Children.Add(btnLoadJson);
             sec4.Children.Add(expRow2);
 
-            var btnAddToFtak = new Button { Content = "📦 Zapisz bezpośrednio do paczki .ftak (source/maps & atak)", Height = 32, Background = TacticalConfigPanel.BrushButtonAccent, Foreground = TacticalConfigPanel.BrushDarkFg, BorderThickness = new Thickness(0), FontWeight = FontWeights.Bold, FontSize = 11, Cursor = Cursors.Hand };
-            btnAddToFtak.Click += async (_, __) => await ExportMapToFtakSourceAsync(win);
+            var btnAddToFtak = MakeActionButton("⚡ Zapisz bezpośrednio do paczki .ftak (source/maps & atak)", true, async () => await ExportMapToFtakSourceAsync(win));
+            btnAddToFtak.Height = 32;
             sec4.Children.Add(btnAddToFtak);
 
             leftStack.Children.Add(WrapCard(sec4));
@@ -436,13 +461,13 @@ namespace FieldTakHub.Builder.Services
             {
                 Point p = e.GetPosition(_mapCanvas);
                 var (hoverLat, hoverLon) = ScreenToLatLon(p.X, p.Y, _mapCanvas.ActualWidth, _mapCanvas.ActualHeight);
-                if (_coordsBadge != null) _coordsBadge.Text = $"WGS84: {hoverLat:0.00000}, {hoverLon:0.00000}  |  Skala ~ 1:{_targetScaleDenominator} (Zoom {_zoom})  |  PPM = Dalmierz / Zamknij poligon";
+                if (_coordsBadge != null) _coordsBadge.Text = $"WGS84: {hoverLat:0.00000}, {hoverLon:0.00000}  |  Dokładna Skala 1:{_targetScaleDenominator:N0} ({GetExactMetersPerPixel():0.00} m/px)  |  PPM = Dalmierz / Zamknij poligon";
                 if (_isDragging && _activeTool == "PAN")
                 {
                     double dx = p.X - _dragStartPoint.X, dy = p.Y - _dragStartPoint.Y;
-                    double worldSize = 256.0 * Math.Pow(2, _zoom);
-                    _centerLon = Math.Clamp(_dragStartLon - dx * (360.0 / worldSize), -180.0, 180.0);
-                    _centerLat = Math.Clamp(_dragStartLat + dy * ((360.0 / worldSize) * Math.Cos(_dragStartLat * Math.PI / 180.0)), -85.0, 85.0);
+                    double scaledWorldSize = GetScaledTileSizePx() * Math.Pow(2, _zoom);
+                    _centerLon = Math.Clamp(_dragStartLon - dx * (360.0 / scaledWorldSize), -180.0, 180.0);
+                    _centerLat = Math.Clamp(_dragStartLat + dy * ((360.0 / scaledWorldSize) * Math.Cos(_dragStartLat * Math.PI / 180.0)), -85.0, 85.0);
                 }
             };
             _mapCanvas.MouseLeftButtonUp += (_, e) =>
@@ -455,26 +480,43 @@ namespace FieldTakHub.Builder.Services
             };
             _mapCanvas.MouseWheel += (_, e) =>
             {
-                int oldZoom = _zoom;
-                _zoom = e.Delta > 0 ? Math.Min(19, _zoom + 1) : Math.Max(5, _zoom - 1);
-                if (_zoom != oldZoom) _ = RenderMapTilesAsync();
+                double factor = e.Delta > 0 ? 0.8 : 1.25;
+                int newScale = (int)(Math.Round((_targetScaleDenominator * factor) / 100.0) * 100);
+                ApplyScaleDenominator(Math.Clamp(newScale, 500, 100000));
             };
             _mapCanvas.SizeChanged += (_, __) => { _ = RenderMapTilesAsync(); };
             mapOverlayGrid.Children.Add(_mapCanvas);
 
-            var hudBorder = new Border { Background = new SolidColorBrush(Color.FromArgb(215, 8, 19, 22)), BorderBrush = TacticalConfigPanel.BrushAccent, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(6), Padding = new Thickness(10, 4, 10, 4), Margin = new Thickness(12), HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Top, IsHitTestVisible = false };
-            _coordsBadge = new TextBlock { Text = $"WGS84: {_centerLat:0.00000}, {_centerLon:0.00000}  |  Zoom: {_zoom}", Foreground = Brushes.White, FontSize = 11, FontWeight = FontWeights.SemiBold };
+            var hudBorder = new Border { Background = new SolidColorBrush(Color.FromArgb(220, 8, 19, 22)), BorderBrush = TacticalConfigPanel.BrushAccent, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(6), Padding = new Thickness(12, 5, 12, 5), Margin = new Thickness(12), HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Top, IsHitTestVisible = false };
+            _coordsBadge = new TextBlock { Text = $"WGS84: {_centerLat:0.00000}, {_centerLon:0.00000}  |  Skala 1:{_targetScaleDenominator:N0}", Foreground = Brushes.White, FontSize = 11, FontWeight = FontWeights.SemiBold };
             hudBorder.Child = _coordsBadge; mapOverlayGrid.Children.Add(hudBorder);
 
             mapBorder.Child = mapOverlayGrid; Grid.SetColumn(mapBorder, 1); bodyGrid.Children.Add(mapBorder);
             Grid.SetRow(bodyGrid, 0); mainGrid.Children.Add(bodyGrid);
 
             var bottomBar = new Border { Background = TacticalConfigPanel.BrushInputBg, BorderBrush = TacticalConfigPanel.BrushCardBorder, BorderThickness = new Thickness(0, 1, 0, 0), Padding = new Thickness(16, 0, 16, 0) };
-            _statusText = new TextBlock { Text = "Gotowy. Wektorowe znaki taktyczne NATO APP-6 (HQ, Piechota, Zwiad, MEDEVAC, Snajper, OP, LZ, Obj) z wyborem koloru z Palety RGB.", Foreground = TacticalConfigPanel.BrushAccent, FontSize = 11, VerticalAlignment = VerticalAlignment.Center };
+            _statusText = new TextBlock { Text = "Gotowy. Spójny motyw Field TAK Hub, płynna skala matematyczna 1:X, wzmocniona siatka MGRS Keypad 1-9 / Ćwiartki A-D oraz wektorowe znaki NATO APP-6.", Foreground = TacticalConfigPanel.BrushAccent, FontSize = 11, VerticalAlignment = VerticalAlignment.Center };
             bottomBar.Child = _statusText; Grid.SetRow(bottomBar, 1); mainGrid.Children.Add(bottomBar);
 
             rootBorder.Child = mainGrid;
             return rootBorder;
+        }
+
+        private static Button MakeActionButton(string text, bool isPrimaryAccent, Action onClick)
+        {
+            var b = new Button
+            {
+                Content = text,
+                Background = isPrimaryAccent ? TacticalConfigPanel.BrushButtonAccent : TacticalConfigPanel.BrushInputBg,
+                Foreground = isPrimaryAccent ? TacticalConfigPanel.BrushDarkFg : Brushes.White,
+                BorderBrush = isPrimaryAccent ? TacticalConfigPanel.BrushAccent : TacticalConfigPanel.BrushInputBorder,
+                BorderThickness = new Thickness(1),
+                FontWeight = FontWeights.Bold,
+                FontSize = 10.5,
+                Cursor = Cursors.Hand
+            };
+            b.Click += (_, __) => onClick();
+            return b;
         }
 
         private static void HandleMapClickToolAction(Point clickPt)
@@ -532,10 +574,10 @@ namespace FieldTakHub.Builder.Services
             }
         }
 
-        private static StackPanel CreateSectionCard(string title, Brush headerBrush)
+        private static StackPanel CreateSectionCard(string title)
         {
             var sp = new StackPanel();
-            sp.Children.Add(new TextBlock { Text = title, Foreground = headerBrush, FontWeight = FontWeights.Bold, FontSize = 11.5, Margin = new Thickness(0, 0, 0, 8) });
+            sp.Children.Add(new TextBlock { Text = title, Foreground = TacticalConfigPanel.BrushAccent, FontWeight = FontWeights.Bold, FontSize = 11.5, Margin = new Thickness(0, 0, 0, 8) });
             return sp;
         }
 
@@ -576,15 +618,17 @@ namespace FieldTakHub.Builder.Services
 
         private static (double Lat, double Lon) ScreenToLatLon(double screenX, double screenY, double viewW, double viewH)
         {
+            double tilePx = GetScaledTileSizePx();
             var (cx, cy) = LatLonToTileXY(_centerLat, _centerLon, _zoom);
-            return TileXYToLatLon(cx + (screenX - viewW / 2.0) / 256.0, cy + (screenY - viewH / 2.0) / 256.0, _zoom);
+            return TileXYToLatLon(cx + (screenX - viewW / 2.0) / tilePx, cy + (screenY - viewH / 2.0) / tilePx, _zoom);
         }
 
         private static Point LatLonToScreen(double lat, double lon, double viewW, double viewH)
         {
+            double tilePx = GetScaledTileSizePx();
             var (cx, cy) = LatLonToTileXY(_centerLat, _centerLon, _zoom);
             var (px, py) = LatLonToTileXY(lat, lon, _zoom);
-            return new Point(viewW / 2.0 + (px - cx) * 256.0, viewH / 2.0 + (py - cy) * 256.0);
+            return new Point(viewW / 2.0 + (px - cx) * tilePx, viewH / 2.0 + (py - cy) * tilePx);
         }
 
         private static (double X, double Y) LatLonToEpsg3857(double lat, double lon) => (lon * 20037508.34 / 180.0, Math.Log(Math.Tan((90.0 + lat) * Math.PI / 360.0)) / (Math.PI / 180.0) * 20037508.34 / 180.0);
@@ -616,10 +660,11 @@ namespace FieldTakHub.Builder.Services
             if (_mapCanvas == null || _activeLayer == null || _fullScreenOverlay?.Visibility != Visibility.Visible) return;
             double w = _mapCanvas.ActualWidth > 100 ? _mapCanvas.ActualWidth : 900;
             double h = _mapCanvas.ActualHeight > 100 ? _mapCanvas.ActualHeight : 650;
+            double tilePx = GetScaledTileSizePx();
 
             var (centerTileX, centerTileY) = LatLonToTileXY(_centerLat, _centerLon, _zoom);
-            int minTx = (int)Math.Floor(centerTileX - (w / 2.0) / 256.0) - 1, maxTx = (int)Math.Floor(centerTileX + (w / 2.0) / 256.0) + 1;
-            int minTy = (int)Math.Floor(centerTileY - (h / 2.0) / 256.0) - 1, maxTy = (int)Math.Floor(centerTileY + (h / 2.0) / 256.0) + 1;
+            int minTx = (int)Math.Floor(centerTileX - (w / 2.0) / tilePx) - 1, maxTx = (int)Math.Floor(centerTileX + (w / 2.0) / tilePx) + 1;
+            int minTy = (int)Math.Floor(centerTileY - (h / 2.0) / tilePx) - 1, maxTy = (int)Math.Floor(centerTileY + (h / 2.0) / tilePx) + 1;
             int maxIndex = (1 << _zoom) - 1;
 
             byte[] singleLidarBytes = null;
@@ -633,7 +678,7 @@ namespace FieldTakHub.Builder.Services
                     {
                         if (ty < 0 || ty > maxIndex) continue;
                         int wrappedTx = ((tx % (maxIndex + 1)) + (maxIndex + 1)) % (maxIndex + 1);
-                        tileJobs.Add((wrappedTx, ty, (w / 2.0) + (tx - centerTileX) * 256.0, (h / 2.0) + (ty - centerTileY) * 256.0, BuildTileUrl(_activeLayer, wrappedTx, ty, _zoom)));
+                        tileJobs.Add((wrappedTx, ty, (w / 2.0) + (tx - centerTileX) * tilePx, (h / 2.0) + (ty - centerTileY) * tilePx, BuildTileUrl(_activeLayer, wrappedTx, ty, _zoom)));
                     }
 
                 var tilesTask = Task.WhenAll(tileJobs.Select(async job => (job.ScreenX, job.ScreenY, await FetchTileBytesAsync(job.Url))));
@@ -658,7 +703,7 @@ namespace FieldTakHub.Builder.Services
 
             if (!transparentGrgOnly && fetchedTiles != null)
             {
-                foreach (var t in fetchedTiles) if (t.Item3 != null) AddCanvasImage(t.Item3, t.ScreenX, t.ScreenY, 256.5, 256.5, 1.0);
+                foreach (var t in fetchedTiles) if (t.Item3 != null) AddCanvasImage(t.Item3, t.ScreenX, t.ScreenY, tilePx + 0.6, tilePx + 0.6, 1.0);
                 if (singleLidarBytes != null) AddCanvasImage(singleLidarBytes, 0, 0, w, h, 0.45);
             }
 
@@ -683,28 +728,101 @@ namespace FieldTakHub.Builder.Services
             catch { }
         }
 
-        private static Brush GetGridColorBrush(byte alpha = 210)
+        private static Brush GetGridColorBrush(byte alpha = 230)
         {
-            Color c = _gridColorName switch { "Turkusowy" => Color.FromArgb(alpha, 31, 224, 197), "Biały" => Color.FromArgb(alpha, 255, 255, 255), "Czerwony" => Color.FromArgb(alpha, 235, 64, 52), "Czarny" => Color.FromArgb(alpha, 15, 15, 15), _ => Color.FromArgb(alpha, 245, 200, 40) };
+            Color c = _gridColorName switch { "Turkusowy" => Color.FromArgb(alpha, 31, 224, 197), "Biały" => Color.FromArgb(alpha, 255, 255, 255), "Czerwony" => Color.FromArgb(alpha, 235, 64, 52), "Czarny" => Color.FromArgb(alpha, 15, 15, 15), _ => Color.FromArgb(alpha, 250, 208, 44) };
             var b = new SolidColorBrush(c); b.Freeze(); return b;
         }
 
+        // =========================================================================
+        // SIATKA WOJSKOWA MGRS / UTM + WZMOCNIONE MAŁE KRATKI KEYPAD 1-9 (CO 33m) I ĆWIARTKI A,B,C,D (CO 50m)
+        // =========================================================================
         private static void DrawMilitaryMgrsAndSubGridOverlay(double w, double h)
         {
             if (_coordSystem == "Brak siatki") return;
-            var mainBrush = GetGridColorBrush(215); var subBrush = GetGridColorBrush(110);
-            var haloBrush = new SolidColorBrush(Color.FromArgb(_gridHaloMode.StartsWith("Pełny") ? (byte)210 : (byte)110, 0, 0, 0)); haloBrush.Freeze();
+            var mainBrush = GetGridColorBrush(240);
+            var subBrush = GetGridColorBrush(200);
+            var haloBrush = new SolidColorBrush(Color.FromArgb(_gridHaloMode.StartsWith("Pełny") ? (byte)220 : (byte)130, 0, 0, 0)); haloBrush.Freeze();
+            var subHaloBrush = new SolidColorBrush(Color.FromArgb(165, 0, 0, 0)); subHaloBrush.Freeze();
             bool useHalo = !_gridHaloMode.StartsWith("Brak");
 
-            double metersPerPixel = Math.Max(0.05, (156543.03392 * Math.Cos(_centerLat * Math.PI / 180.0)) / Math.Pow(2.0, _zoom));
+            double metersPerPixel = GetExactMetersPerPixel();
+
+            if (_coordSystem.StartsWith("Sektorowa"))
+            {
+                int cols = 8, rows = 8; double cw = w / cols, ch = h / rows;
+                for (int c = 1; c < cols; c++) _mapCanvas.Children.Add(new Line { X1 = c * cw, Y1 = 0, X2 = c * cw, Y2 = h, Stroke = mainBrush, StrokeThickness = 1.4 * _gridThicknessMultiplier });
+                for (int r = 1; r < rows; r++) _mapCanvas.Children.Add(new Line { X1 = 0, Y1 = r * ch, X2 = w, Y2 = r * ch, Stroke = mainBrush, StrokeThickness = 1.4 * _gridThicknessMultiplier });
+                for (int r = 0; r < rows; r++)
+                    for (int c = 0; c < cols; c++)
+                        AddHaloLabel($"{(char)('A' + r)}{c + 1}", c * cw + 6, r * ch + 4, mainBrush, 10.5);
+                return;
+            }
+
             int stepMeters = _subGridDivision.Contains("250") ? 250 : (_subGridDivision.Contains("500") ? 500 : 100);
-            double stepPx = Math.Clamp(stepMeters / metersPerPixel, 65.0, 260.0);
-            double mainThick = Math.Max(0.6, 1.2 * _gridThicknessMultiplier);
+            double stepPx = Math.Clamp(stepMeters / metersPerPixel, 72.0, 340.0);
+            double mainThick = Math.Max(0.8, 1.45 * _gridThicknessMultiplier);
+            double subThick = Math.Max(0.7, 0.95 * _gridThicknessMultiplier);
             double startX = (w / 2.0) % stepPx, startY = (h / 2.0) % stepPx;
 
+            // 1. Podział wewnętrzny 100 m: Co 33 m (Keypad 1-9) lub Co 50 m (Ćwiartki A,B,C,D)
+            if (_coordSystem.StartsWith("MGRS") && (_subGridDivision.Contains("50 m") || _subGridDivision.Contains("33 m")))
+            {
+                bool isQuarters = _subGridDivision.Contains("50 m");
+                int div = isQuarters ? 2 : 3;
+                double subStep = stepPx / div;
+
+                for (double x = startX - stepPx; x < w; x += stepPx)
+                {
+                    for (int i = 1; i < div; i++)
+                    {
+                        double sx = x + i * subStep;
+                        if (sx < 0 || sx > w) continue;
+                        if (useHalo) _mapCanvas.Children.Add(new Line { X1 = sx, Y1 = 0, X2 = sx, Y2 = h, Stroke = subHaloBrush, StrokeThickness = subThick + 1.4 });
+                        _mapCanvas.Children.Add(new Line { X1 = sx, Y1 = 0, X2 = sx, Y2 = h, Stroke = subBrush, StrokeThickness = subThick, StrokeDashArray = new DoubleCollection { 4, 2 } });
+                    }
+                }
+
+                for (double y = startY - stepPx; y < h; y += stepPx)
+                {
+                    for (int j = 1; j < div; j++)
+                    {
+                        double sy = y + j * subStep;
+                        if (sy < 0 || sy > h) continue;
+                        if (useHalo) _mapCanvas.Children.Add(new Line { X1 = 0, Y1 = sy, X2 = w, Y2 = sy, Stroke = subHaloBrush, StrokeThickness = subThick + 1.4 });
+                        _mapCanvas.Children.Add(new Line { X1 = 0, Y1 = sy, X2 = w, Y2 = sy, Stroke = subBrush, StrokeThickness = subThick, StrokeDashArray = new DoubleCollection { 4, 2 } });
+                    }
+                }
+
+                // Wyraźne oznaczenia małych kratek (Keypad 1..9 lub Ćwiartki A,B,C,D)
+                if (_gridLabelsMode.Contains("Ćwiartki/Keypad") && stepPx >= 68)
+                {
+                    string[,] keypad3x3 = { { "7", "8", "9" }, { "4", "5", "6" }, { "1", "2", "3" } };
+                    string[,] quarters2x2 = { { "A", "B" }, { "C", "D" } };
+
+                    for (double x = startX; x < w - stepPx * 0.6; x += stepPx)
+                    {
+                        for (double y = startY; y < h - stepPx * 0.6; y += stepPx)
+                        {
+                            for (int r = 0; r < div; r++)
+                            {
+                                for (int c = 0; c < div; c++)
+                                {
+                                    string subTxt = isQuarters ? quarters2x2[r, c] : keypad3x3[r, c];
+                                    double cx = x + (c + 0.5) * subStep - 6;
+                                    double cy = y + (r + 0.5) * subStep - 7;
+                                    AddSubCellBadge(subTxt, cx, cy, subBrush);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // 2. Główne linie siatki MGRS 100m (rysowane na wierzchu podziału wewnętrznego)
             for (double x = startX; x < w; x += stepPx)
             {
-                if (useHalo) _mapCanvas.Children.Add(new Line { X1 = x, Y1 = 0, X2 = x, Y2 = h, Stroke = haloBrush, StrokeThickness = mainThick + 1.8 });
+                if (useHalo) _mapCanvas.Children.Add(new Line { X1 = x, Y1 = 0, X2 = x, Y2 = h, Stroke = haloBrush, StrokeThickness = mainThick + 2.0 });
                 _mapCanvas.Children.Add(new Line { X1 = x, Y1 = 0, X2 = x, Y2 = h, Stroke = mainBrush, StrokeThickness = mainThick });
                 var (_, lon) = ScreenToLatLon(x, 20, w, h);
                 int utmEast = (int)Math.Round(((lon + 180.0) % 6.0) * 111320.0 * Math.Cos(_centerLat * Math.PI / 180.0));
@@ -712,48 +830,33 @@ namespace FieldTakHub.Builder.Services
             }
             for (double y = startY; y < h; y += stepPx)
             {
-                if (useHalo) _mapCanvas.Children.Add(new Line { X1 = 0, Y1 = y, X2 = w, Y2 = y, Stroke = haloBrush, StrokeThickness = mainThick + 1.8 });
+                if (useHalo) _mapCanvas.Children.Add(new Line { X1 = 0, Y1 = y, X2 = w, Y2 = y, Stroke = haloBrush, StrokeThickness = mainThick + 2.0 });
                 _mapCanvas.Children.Add(new Line { X1 = 0, Y1 = y, X2 = w, Y2 = y, Stroke = mainBrush, StrokeThickness = mainThick });
                 var (lat, _) = ScreenToLatLon(20, y, w, h);
                 int utmNorth = (int)Math.Round(lat * 110574.0);
                 AddHaloLabel($"{(utmNorth / 100) % 1000:D3}", 8, y + 2, mainBrush, 9.5);
             }
+        }
 
-            if (_coordSystem.StartsWith("MGRS") && (_subGridDivision.Contains("50 m") || _subGridDivision.Contains("33 m")))
+        private static void AddSubCellBadge(string text, double x, double y, Brush fg)
+        {
+            var b = new Border
             {
-                bool isQuarters = _subGridDivision.Contains("50 m");
-                int div = isQuarters ? 2 : 3;
-                double subStep = stepPx / div;
-                for (double x = startX; x < w; x += stepPx)
-                    for (int i = 1; i < div; i++)
-                        _mapCanvas.Children.Add(new Line { X1 = x + i * subStep, Y1 = 0, X2 = x + i * subStep, Y2 = h, Stroke = subBrush, StrokeThickness = 0.7, StrokeDashArray = new DoubleCollection { 3, 3 } });
-                for (double y = startY; y < h; y += stepPx)
-                    for (int j = 1; j < div; j++)
-                        _mapCanvas.Children.Add(new Line { X1 = 0, Y1 = y + j * subStep, X2 = w, Y2 = y + j * subStep, Stroke = subBrush, StrokeThickness = 0.7, StrokeDashArray = new DoubleCollection { 3, 3 } });
-
-                if (_gridLabelsMode.Contains("Ćwiartki/Keypad") && stepPx >= 80 && isQuarters)
-                {
-                    for (double x = startX; x < w - stepPx; x += stepPx)
-                        for (double y = startY; y < h - stepPx; y += stepPx)
-                        {
-                            AddHaloLabel("A", x + subStep * 0.4, y + subStep * 0.3, subBrush, 8.5);
-                            AddHaloLabel("B", x + subStep * 1.4, y + subStep * 0.3, subBrush, 8.5);
-                            AddHaloLabel("C", x + subStep * 0.4, y + subStep * 1.3, subBrush, 8.5);
-                            AddHaloLabel("D", x + subStep * 1.4, y + subStep * 1.3, subBrush, 8.5);
-                        }
-                }
-            }
+                Background = new SolidColorBrush(Color.FromArgb(150, 0, 0, 0)),
+                CornerRadius = new CornerRadius(2),
+                Padding = new Thickness(2.5, 0, 2.5, 0),
+                IsHitTestVisible = false,
+                Child = new TextBlock { Text = text, Foreground = fg, FontSize = 8.5, FontWeight = FontWeights.Bold }
+            };
+            Canvas.SetLeft(b, x); Canvas.SetTop(b, y); _mapCanvas.Children.Add(b);
         }
 
         private static void AddHaloLabel(string text, double x, double y, Brush fg, double fontSize)
         {
-            var b = new Border { Background = new SolidColorBrush(Color.FromArgb(175, 5, 12, 15)), BorderBrush = fg, BorderThickness = new Thickness(0.8), CornerRadius = new CornerRadius(3), Padding = new Thickness(4, 1, 4, 1), IsHitTestVisible = false, Child = new TextBlock { Text = text, Foreground = fg, FontSize = fontSize, FontWeight = FontWeights.Bold } };
+            var b = new Border { Background = new SolidColorBrush(Color.FromArgb(185, 5, 12, 15)), BorderBrush = fg, BorderThickness = new Thickness(0.8), CornerRadius = new CornerRadius(3), Padding = new Thickness(4, 1, 4, 1), IsHitTestVisible = false, Child = new TextBlock { Text = text, Foreground = fg, FontSize = fontSize, FontWeight = FontWeights.Bold } };
             Canvas.SetLeft(b, x); Canvas.SetTop(b, y); _mapCanvas.Children.Add(b);
         }
 
-        // =========================================================================
-        // RENDERER WEKTOROWYCH SYMBOLI TAKTYCZNYCH NATO APP-6 (Z DOWOLNYM KOLOREM RGB)
-        // =========================================================================
         private static void DrawNatoVectorSymbolOnCanvas(Point pt, string symbolCode, string name, string colorHex)
         {
             Color c = Color.FromRgb(38, 132, 255);
@@ -769,7 +872,6 @@ namespace FieldTakHub.Builder.Services
             switch (symbolCode)
             {
                 case "NATO_HQ":
-                    // Sztab / Dowództwo NATO: Prostokąt taktyczny + maszt flagowy po lewej stronie sięgający punktu (pt.X, pt.Y)
                     double hqLeft = pt.X, hqTop = pt.Y - fh - 12;
                     _mapCanvas.Children.Add(new Line { X1 = hqLeft, Y1 = hqTop, X2 = hqLeft, Y2 = pt.Y, Stroke = Brushes.Black, StrokeThickness = 4.2 });
                     _mapCanvas.Children.Add(new Line { X1 = hqLeft, Y1 = hqTop, X2 = hqLeft, Y2 = pt.Y, Stroke = strokeBrush, StrokeThickness = 2.4 });
@@ -783,40 +885,34 @@ namespace FieldTakHub.Builder.Services
                     return;
 
                 case "NATO_INF":
-                    // Piechota NATO APP-6: Prostokąt ze skrzyżowanymi przekątnymi (X)
                     DrawStandardNatoBox(left, top, fw, fh, strokeBrush, fillBrush, darkBgBrush);
                     _mapCanvas.Children.Add(new Line { X1 = left, Y1 = top, X2 = left + fw, Y2 = top + fh, Stroke = Brushes.White, StrokeThickness = 1.8 });
                     _mapCanvas.Children.Add(new Line { X1 = left, Y1 = top + fh, X2 = left + fw, Y2 = top, Stroke = Brushes.White, StrokeThickness = 1.8 });
                     break;
 
                 case "NATO_RECON":
-                    // Zwiad / Kawaleria NATO APP-6: Prostokąt z pojedynczą przekątną (/)
                     DrawStandardNatoBox(left, top, fw, fh, strokeBrush, fillBrush, darkBgBrush);
                     _mapCanvas.Children.Add(new Line { X1 = left, Y1 = top + fh, X2 = left + fw, Y2 = top, Stroke = Brushes.White, StrokeThickness = 2.0 });
                     break;
 
                 case "NATO_MED":
-                    // Punkt Medyczny / MEDEVAC NATO APP-6: Prostokąt z krzyżem (+)
                     DrawStandardNatoBox(left, top, fw, fh, strokeBrush, fillBrush, darkBgBrush);
                     _mapCanvas.Children.Add(new Line { X1 = pt.X, Y1 = top, X2 = pt.X, Y2 = top + fh, Stroke = Brushes.White, StrokeThickness = 2.2 });
                     _mapCanvas.Children.Add(new Line { X1 = left, Y1 = pt.Y, X2 = left + fw, Y2 = pt.Y, Stroke = Brushes.White, StrokeThickness = 2.2 });
                     break;
 
                 case "NATO_COMMS":
-                    // Węzeł łączności / Przekaźnik LoRa: Prostokąt z symbolem błyskawicy radiowej
                     DrawStandardNatoBox(left, top, fw, fh, strokeBrush, fillBrush, darkBgBrush);
                     var bolt = new Polyline { Stroke = Brushes.White, StrokeThickness = 2.0, Points = new PointCollection { new Point(left + 6, top + fh - 3), new Point(pt.X - 1, top + 4), new Point(pt.X + 2, top + fh - 5), new Point(left + fw - 6, top + 3) } };
                     _mapCanvas.Children.Add(bolt);
                     break;
 
                 case "NATO_SUPPLY":
-                    // Punkt Amunicyjny / Zaopatrzenie NATO APP-6: Prostokąt z dolną linią poziomą
                     DrawStandardNatoBox(left, top, fw, fh, strokeBrush, fillBrush, darkBgBrush);
                     _mapCanvas.Children.Add(new Line { X1 = left, Y1 = top + fh - 5, X2 = left + fw, Y2 = top + fh - 5, Stroke = Brushes.White, StrokeThickness = 2.0 });
                     break;
 
                 case "NATO_OP":
-                    // Punkt Obserwacyjny (OP): Trójkąt taktyczny z punktem w środku
                     var triHalo = new Polygon { Stroke = Brushes.Black, StrokeThickness = 3.4, Fill = darkBgBrush, Points = new PointCollection { new Point(pt.X, pt.Y - 13), new Point(pt.X - 13, pt.Y + 11), new Point(pt.X + 13, pt.Y + 11) } };
                     _mapCanvas.Children.Add(triHalo);
                     var tri = new Polygon { Stroke = strokeBrush, StrokeThickness = 2.0, Fill = fillBrush, Points = triHalo.Points };
@@ -826,7 +922,6 @@ namespace FieldTakHub.Builder.Services
                     break;
 
                 case "NATO_SNIPER":
-                    // Snajper: Siatka celownicza (okrąg + krzyż nitkowy)
                     var snHalo = new Ellipse { Width = 24, Height = 24, Stroke = Brushes.Black, StrokeThickness = 3.2, Fill = darkBgBrush };
                     Canvas.SetLeft(snHalo, pt.X - 12); Canvas.SetTop(snHalo, pt.Y - 12); _mapCanvas.Children.Add(snHalo);
                     var snCirc = new Ellipse { Width = 22, Height = 22, Stroke = strokeBrush, StrokeThickness = 2.0, Fill = fillBrush };
@@ -836,7 +931,6 @@ namespace FieldTakHub.Builder.Services
                     break;
 
                 case "NATO_CP":
-                    // Punkt Kontrolny / Respawn: Tarcza taktyczna
                     var shPts = new PointCollection { new Point(pt.X - 12, pt.Y - 11), new Point(pt.X + 12, pt.Y - 11), new Point(pt.X + 12, pt.Y + 2), new Point(pt.X, pt.Y + 13), new Point(pt.X - 12, pt.Y + 2) };
                     _mapCanvas.Children.Add(new Polygon { Stroke = Brushes.Black, StrokeThickness = 3.2, Fill = darkBgBrush, Points = shPts });
                     _mapCanvas.Children.Add(new Polygon { Stroke = strokeBrush, StrokeThickness = 2.0, Fill = fillBrush, Points = shPts });
@@ -845,7 +939,6 @@ namespace FieldTakHub.Builder.Services
                     break;
 
                 case "NATO_LZ":
-                    // Strefa Lądowania / Zrzutu (LZ): Okrąg z oznaczeniem LZ
                     var lzHalo = new Ellipse { Width = 26, Height = 26, Stroke = Brushes.Black, StrokeThickness = 3.2, Fill = darkBgBrush };
                     Canvas.SetLeft(lzHalo, pt.X - 13); Canvas.SetTop(lzHalo, pt.Y - 13); _mapCanvas.Children.Add(lzHalo);
                     var lzCirc = new Ellipse { Width = 24, Height = 24, Stroke = strokeBrush, StrokeThickness = 2.0, Fill = fillBrush };
@@ -855,7 +948,6 @@ namespace FieldTakHub.Builder.Services
                     break;
 
                 case "NATO_OBJ":
-                    // Cel Operacji (Objective): Romb szturmowy z krzyżem
                     var dmPts = new PointCollection { new Point(pt.X, pt.Y - 14), new Point(pt.X + 14, pt.Y), new Point(pt.X, pt.Y + 14), new Point(pt.X - 14, pt.Y) };
                     _mapCanvas.Children.Add(new Polygon { Stroke = Brushes.Black, StrokeThickness = 3.2, Fill = darkBgBrush, Points = dmPts });
                     _mapCanvas.Children.Add(new Polygon { Stroke = strokeBrush, StrokeThickness = 2.0, Fill = fillBrush, Points = dmPts });
@@ -864,7 +956,6 @@ namespace FieldTakHub.Builder.Services
                     break;
 
                 case "NATO_HAZARD":
-                    // Zagrożenie / No-Go: Trójkąt ostrzegawczy z wykrzyknikiem (!)
                     var hzPts = new PointCollection { new Point(pt.X, pt.Y - 13), new Point(pt.X - 13, pt.Y + 11), new Point(pt.X + 13, pt.Y + 11) };
                     _mapCanvas.Children.Add(new Polygon { Stroke = Brushes.Black, StrokeThickness = 3.4, Fill = darkBgBrush, Points = hzPts });
                     _mapCanvas.Children.Add(new Polygon { Stroke = strokeBrush, StrokeThickness = 2.0, Fill = fillBrush, Points = hzPts });
@@ -874,7 +965,7 @@ namespace FieldTakHub.Builder.Services
 
                 default:
                     var dot = new Ellipse { Width = 12, Height = 12, Fill = strokeBrush, Stroke = Brushes.White, StrokeThickness = 2 };
-                    Canvas.SetLeft(dot, pt.X - 6); Canvas.SetTop(pt.Y - 6, dot); _mapCanvas.Children.Add(dot);
+                    Canvas.SetLeft(dot, pt.X - 6); Canvas.SetTop(dot, pt.Y - 6); _mapCanvas.Children.Add(dot);
                     break;
             }
 
@@ -947,15 +1038,14 @@ namespace FieldTakHub.Builder.Services
 
             if (_scaleBarPos != "Ukryj")
             {
-                double metersPerPixel = Math.Max(0.05, (156543.03392 * Math.Cos(_centerLat * Math.PI / 180.0)) / Math.Pow(2.0, _zoom));
+                double metersPerPixel = GetExactMetersPerPixel();
                 double chosen = 200;
-                foreach (var d in new[] { 50.0, 100.0, 200.0, 500.0, 1000.0, 2000.0, 5000.0 }) { double px = d / metersPerPixel; if (px >= 80 && px <= 220) { chosen = d; break; } }
+                foreach (var d in new[] { 20.0, 50.0, 100.0, 200.0, 500.0, 1000.0, 2000.0, 5000.0 }) { double px = d / metersPerPixel; if (px >= 75 && px <= 230) { chosen = d; break; } }
                 double barW = Math.Clamp(chosen / metersPerPixel, 60, 240);
-                int scaleRatio = (int)(Math.Round((metersPerPixel / 0.0002645833) / 50.0) * 50);
 
-                var sbBorder = new Border { Width = barW + 32, Height = 54, Background = new SolidColorBrush(Color.FromArgb(225, 8, 19, 22)), BorderBrush = TacticalConfigPanel.BrushAccent, BorderThickness = new Thickness(1.2), CornerRadius = new CornerRadius(6), IsHitTestVisible = false };
+                var sbBorder = new Border { Width = barW + 36, Height = 54, Background = new SolidColorBrush(Color.FromArgb(225, 8, 19, 22)), BorderBrush = TacticalConfigPanel.BrushAccent, BorderThickness = new Thickness(1.2), CornerRadius = new CornerRadius(6), IsHitTestVisible = false };
                 var cnv = new Canvas();
-                var hdr = new TextBlock { Text = $"SKALA 1:{scaleRatio:N0}", Foreground = TacticalConfigPanel.BrushAccent, FontSize = 10, FontWeight = FontWeights.Bold };
+                var hdr = new TextBlock { Text = $"SKALA 1:{_targetScaleDenominator:N0}", Foreground = TacticalConfigPanel.BrushAccent, FontSize = 10, FontWeight = FontWeights.Bold };
                 Canvas.SetLeft(hdr, 12); Canvas.SetTop(hdr, 4); cnv.Children.Add(hdr);
                 double segW = barW / 4.0;
                 for (int s = 0; s < 4; s++)
@@ -964,16 +1054,17 @@ namespace FieldTakHub.Builder.Services
                     Canvas.SetLeft(r, 12 + s * segW); Canvas.SetTop(r, 23); cnv.Children.Add(r);
                 }
                 var t0 = new TextBlock { Text = "0", Foreground = Brushes.White, FontSize = 9 }; Canvas.SetLeft(t0, 12); Canvas.SetTop(t0, 32); cnv.Children.Add(t0);
-                var t1 = new TextBlock { Text = $"{chosen:0} m", Foreground = Brushes.White, FontSize = 9, FontWeight = FontWeights.Bold }; Canvas.SetLeft(t1, 12 + barW - 24); Canvas.SetTop(t1, 32); cnv.Children.Add(t1);
-                sbBorder.Child = cnv; PlaceInCorner(sbBorder, _scaleBarPos, w, h, barW + 32, 54);
+                var tHalf = new TextBlock { Text = $"{chosen / 2:0}m", Foreground = TacticalConfigPanel.BrushMutedText, FontSize = 8.5 }; Canvas.SetLeft(tHalf, 12 + barW / 2 - 10); Canvas.SetTop(tHalf, 32); cnv.Children.Add(tHalf);
+                var t1 = new TextBlock { Text = $"{chosen:0} m", Foreground = Brushes.White, FontSize = 9, FontWeight = FontWeights.Bold }; Canvas.SetLeft(t1, 12 + barW - 22); Canvas.SetTop(t1, 32); cnv.Children.Add(t1);
+                sbBorder.Child = cnv; PlaceInCorner(sbBorder, _scaleBarPos, w, h, barW + 36, 54);
             }
 
             if (_legendPos != "Ukryj")
             {
-                var legBorder = new Border { Width = 235, Height = 68, Background = new SolidColorBrush(Color.FromArgb(225, 8, 19, 22)), BorderBrush = TacticalConfigPanel.BrushAccent, BorderThickness = new Thickness(1.2), CornerRadius = new CornerRadius(6), Padding = new Thickness(10, 6, 10, 6), IsHitTestVisible = false };
+                var legBorder = new Border { Width = 245, Height = 68, Background = new SolidColorBrush(Color.FromArgb(225, 8, 19, 22)), BorderBrush = TacticalConfigPanel.BrushAccent, BorderThickness = new Thickness(1.2), CornerRadius = new CornerRadius(6), Padding = new Thickness(10, 6, 10, 6), IsHitTestVisible = false };
                 var ls = new StackPanel();
-                ls.Children.Add(new TextBlock { Text = $"MAPA TAKTYCZNA ({_sheetFormat.Split(' ')[0]})", Foreground = Brushes.White, FontWeight = FontWeights.Bold, FontSize = 10.5 });
-                ls.Children.Add(new TextBlock { Text = $"Siatka: {_coordSystem.Split(' ')[0]} | {_subGridDivision.Split('(')[0]}", Foreground = TacticalConfigPanel.BrushMutedText, FontSize = 9, Margin = new Thickness(0, 2, 0, 4) });
+                ls.Children.Add(new TextBlock { Text = $"MAPA TAKTYCZNA ({_sheetFormat.Split(' ')[0]} | 1:{_targetScaleDenominator:N0})", Foreground = Brushes.White, FontWeight = FontWeights.Bold, FontSize = 10 });
+                ls.Children.Add(new TextBlock { Text = $"Siatka: {_coordSystem.Split(' ')[0]} | {_subGridDivision}", Foreground = TacticalConfigPanel.BrushMutedText, FontSize = 9, Margin = new Thickness(0, 2, 0, 4) });
                 var fw = new WrapPanel();
                 foreach (var f in TacticalConfigPanel.GetConfiguredFactions())
                 {
@@ -983,7 +1074,7 @@ namespace FieldTakHub.Builder.Services
                     fw.Children.Add(sp);
                 }
                 ls.Children.Add(fw); legBorder.Child = ls;
-                PlaceInCorner(legBorder, _legendPos, w, h, 235, 68);
+                PlaceInCorner(legBorder, _legendPos, w, h, 245, 68);
             }
         }
 
@@ -992,12 +1083,11 @@ namespace FieldTakHub.Builder.Services
             if (_rulerStart == null || _rulerEnd == null) return;
             Point p1 = LatLonToScreen(_rulerStart.Value.Lat, _rulerStart.Value.Lon, w, h);
             Point p2 = LatLonToScreen(_rulerEnd.Value.Lat, _rulerEnd.Value.Lon, w, h);
-            var yb = TacticalConfigPanel.CreateFrozenBrush(245, 184, 46);
-            _mapCanvas.Children.Add(new Line { X1 = p1.X, Y1 = p1.Y, X2 = p2.X, Y2 = p2.Y, Stroke = yb, StrokeThickness = 2.2, StrokeDashArray = new DoubleCollection { 4, 2 } });
+            _mapCanvas.Children.Add(new Line { X1 = p1.X, Y1 = p1.Y, X2 = p2.X, Y2 = p2.Y, Stroke = TacticalConfigPanel.BrushAccent, StrokeThickness = 2.2, StrokeDashArray = new DoubleCollection { 4, 2 } });
             double dLat = (_rulerEnd.Value.Lat - _rulerStart.Value.Lat) * Math.PI / 180.0, dLon = (_rulerEnd.Value.Lon - _rulerStart.Value.Lon) * Math.PI / 180.0;
             double a = Math.Sin(dLat / 2) * Math.Sin(dLat / 2) + Math.Cos(_rulerStart.Value.Lat * Math.PI / 180.0) * Math.Cos(_rulerEnd.Value.Lat * Math.PI / 180.0) * Math.Sin(dLon / 2) * Math.Sin(dLon / 2);
             double dist = 6371000.0 * 2.0 * Math.Atan2(Math.Sqrt(a), Math.Sqrt(1.0 - a));
-            AddHaloLabel($"📏 {dist:0} m", (p1.X + p2.X) / 2, (p1.Y + p2.Y) / 2 - 12, yb, 10.5);
+            AddHaloLabel($"📏 {dist:0} m", (p1.X + p2.X) / 2, (p1.Y + p2.Y) / 2 - 12, TacticalConfigPanel.BrushAccent, 10.5);
         }
 
         private static byte[] CaptureMapCanvasPngBytes()
@@ -1039,7 +1129,7 @@ namespace FieldTakHub.Builder.Services
                 {
                     if (double.TryParse(root["centerLat"]?.ToString(), NumberStyles.Any, CultureInfo.InvariantCulture, out double la)) _centerLat = la;
                     if (double.TryParse(root["centerLon"]?.ToString(), NumberStyles.Any, CultureInfo.InvariantCulture, out double lo)) _centerLon = lo;
-                    if (int.TryParse(root["zoom"]?.ToString(), out int zm)) _zoom = zm;
+                    if (int.TryParse(root["scale"]?.ToString(), out int sc)) _targetScaleDenominator = sc;
                     _mapObjects.Clear();
                     if (root["objects"] is JsonArray arr)
                         foreach (var node in arr.OfType<JsonObject>())
@@ -1058,7 +1148,7 @@ namespace FieldTakHub.Builder.Services
                         if (double.TryParse(m.Groups[1].Value, NumberStyles.Any, CultureInfo.InvariantCulture, out double la) && double.TryParse(m.Groups[2].Value, NumberStyles.Any, CultureInfo.InvariantCulture, out double lo))
                         { var it = new TacticalMapObjectItem { Kind = "Marker", SymbolCode = _selectedNatoSymbolCode, Name = $"GPX-{_mapObjects.Count + 1}", ColorHex = _selectedObjectColorHex }; it.Points.Add((la, lo)); _mapObjects.Add(it); }
                 }
-                RefreshObjectsListUI(); _ = RenderMapTilesAsync();
+                RefreshObjectsListUI(); ApplyScaleDenominator(_targetScaleDenominator);
             }
             catch { }
         }
