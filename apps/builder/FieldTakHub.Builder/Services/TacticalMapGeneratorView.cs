@@ -58,7 +58,7 @@ namespace FieldTakHub.Builder.Services
 
         private static UIElement _originalWindowContent;
         private static Border _fullScreenOverlay;
-        private static Button _tabBuilderBtn, _tabFactionsBtn, _tabMapBtn;
+        private static Button _tabBuilderBtn, _tabMapBtn;
         private static Canvas _mapCanvas;
         private static TextBlock _statusText, _coordsBadge;
         private static ListBox _objectsListBox;
@@ -112,6 +112,7 @@ namespace FieldTakHub.Builder.Services
             return c;
         }
 
+        // Górny pasek nawigacyjny z dwoma głównymi zakładkami (bez przycisku Strony Konfliktu)
         public static void AttachFullScreenTab(Window win)
         {
             if (Application.Current == null || win == null) return;
@@ -134,15 +135,14 @@ namespace FieldTakHub.Builder.Services
                     navDock.Children.Add(rightInfo);
 
                     var tabsStack = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
-                    _tabBuilderBtn = new Button { Content = "📦 Konfigurator Paczek (.ftak)", Height = 30, Padding = new Thickness(14, 0, 14, 0), Margin = new Thickness(0, 0, 8, 0), Background = TacticalConfigPanel.BrushButtonAccent, Foreground = TacticalConfigPanel.BrushDarkFg, BorderBrush = TacticalConfigPanel.BrushAccent, BorderThickness = new Thickness(1), FontWeight = FontWeights.Bold, FontSize = 11.5, Cursor = Cursors.Hand };
-                    _tabFactionsBtn = new Button { Content = "🚩 Strony Konfliktu (Karty: OTS / Mesh / RGB)", Height = 30, Padding = new Thickness(14, 0, 14, 0), Margin = new Thickness(0, 0, 8, 0), Background = TacticalConfigPanel.BrushItemBg, Foreground = Brushes.White, BorderBrush = TacticalConfigPanel.BrushAccent, BorderThickness = new Thickness(1), FontWeight = FontWeights.Bold, FontSize = 11.5, Cursor = Cursors.Hand };
-                    _tabMapBtn = new Button { Content = "🗺️ Generator Map Taktycznych 1:1 (Pełny Ekran)", Height = 30, Padding = new Thickness(14, 0, 14, 0), Background = TacticalConfigPanel.BrushItemBg, Foreground = TacticalConfigPanel.BrushAccent, BorderBrush = TacticalConfigPanel.BrushAccent, BorderThickness = new Thickness(1), FontWeight = FontWeights.Bold, FontSize = 11.5, Cursor = Cursors.Hand };
+                    _tabBuilderBtn = new Button { Content = "📦 Konfigurator Paczek (.ftak)", Height = 30, Padding = new Thickness(16, 0, 16, 0), Margin = new Thickness(0, 0, 8, 0), Background = TacticalConfigPanel.BrushButtonAccent, Foreground = TacticalConfigPanel.BrushDarkFg, BorderBrush = TacticalConfigPanel.BrushAccent, BorderThickness = new Thickness(1), FontWeight = FontWeights.Bold, FontSize = 11.5, Cursor = Cursors.Hand };
+                    _tabMapBtn = new Button { Content = "🗺️ Generator Map Taktycznych 1:1 (Pełny Ekran)", Height = 30, Padding = new Thickness(16, 0, 16, 0), Background = TacticalConfigPanel.BrushItemBg, Foreground = TacticalConfigPanel.BrushAccent, BorderBrush = TacticalConfigPanel.BrushAccent, BorderThickness = new Thickness(1), FontWeight = FontWeights.Bold, FontSize = 11.5, Cursor = Cursors.Hand };
 
                     _tabBuilderBtn.Click += (_, __) => HideFullScreenMapTab();
-                    _tabFactionsBtn.Click += (_, __) => TacticalConfigPanel.ScrollToFactionsCard(win);
                     _tabMapBtn.Click += (_, __) => ShowFullScreenMapTab(win);
 
-                    tabsStack.Children.Add(_tabBuilderBtn); tabsStack.Children.Add(_tabFactionsBtn); tabsStack.Children.Add(_tabMapBtn);
+                    tabsStack.Children.Add(_tabBuilderBtn);
+                    tabsStack.Children.Add(_tabMapBtn);
                     navDock.Children.Add(tabsStack); navBorder.Child = navDock;
                     Grid.SetRow(navBorder, 0); masterGrid.Children.Add(navBorder);
 
