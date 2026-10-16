@@ -127,7 +127,7 @@ namespace FieldTakHub.Builder.Services
         private static Style _darkComboBoxStyle, _darkComboBoxItemStyle;
         private static Button _injectedRefreshButton;
         private static FrameworkElement _factionsCardElement;
-        private static StackPanel _horizontalFactionsPanel;
+        private static WrapPanel _factionsWrapPanel;
         private static bool _syncingValidity;
         private static DispatcherTimer _previewTimer;
         private static readonly List<FactionProfileModel> _factions = new List<FactionProfileModel>();
@@ -147,15 +147,15 @@ namespace FieldTakHub.Builder.Services
 
         private const string DarkComboBoxXaml = @"
 <Style xmlns=""http://schemas.microsoft.com/winfx/2006/xaml/presentation"" xmlns:x=""http://schemas.microsoft.com/winfx/2006/xaml"" TargetType=""ComboBox"">
-    <Setter Property=""Foreground"" Value=""#FFFFFF""/><Setter Property=""Background"" Value=""#081316""/><Setter Property=""BorderBrush"" Value=""#1E424A""/><Setter Property=""BorderThickness"" Value=""1""/><Setter Property=""Padding"" Value=""8,0,8,0""/>
+    <Setter Property=""Foreground"" Value=""#FFFFFF""/><Setter Property=""Background"" Value=""#081316""/><Setter Property=""BorderBrush"" Value=""#1E424A""/><Setter Property=""BorderThickness"" Value=""1""/><Setter Property=""Padding"" Value=""6,0,6,0""/>
     <Setter Property=""Template""><Setter.Value><ControlTemplate TargetType=""ComboBox"">
         <Grid SnapsToDevicePixels=""True"">
             <Border x:Name=""MainBorder"" Background=""{TemplateBinding Background}"" BorderBrush=""{TemplateBinding BorderBrush}"" BorderThickness=""{TemplateBinding BorderThickness}"" CornerRadius=""4"" />
             <ToggleButton Focusable=""False"" IsChecked=""{Binding IsDropDownOpen, Mode=TwoWay, RelativeSource={RelativeSource TemplatedParent}}"" ClickMode=""Press"">
-                <ToggleButton.Template><ControlTemplate TargetType=""ToggleButton""><Border Background=""Transparent""><Grid><Grid.ColumnDefinitions><ColumnDefinition Width=""*""/><ColumnDefinition Width=""22""/></Grid.ColumnDefinitions><Path Grid.Column=""1"" HorizontalAlignment=""Center"" VerticalAlignment=""Center"" Data=""M 0 0 L 4 4 L 8 0"" Stroke=""#FFFFFF"" StrokeThickness=""1.5"" /></Grid></Border></ControlTemplate></ToggleButton.Template>
+                <ToggleButton.Template><ControlTemplate TargetType=""ToggleButton""><Border Background=""Transparent""><Grid><Grid.ColumnDefinitions><ColumnDefinition Width=""*""/><ColumnDefinition Width=""20""/></Grid.ColumnDefinitions><Path Grid.Column=""1"" HorizontalAlignment=""Center"" VerticalAlignment=""Center"" Data=""M 0 0 L 4 4 L 8 0"" Stroke=""#FFFFFF"" StrokeThickness=""1.5"" /></Grid></Border></ControlTemplate></ToggleButton.Template>
             </ToggleButton>
-            <ContentPresenter IsHitTestVisible=""False"" Content=""{TemplateBinding SelectionBoxItem}"" Margin=""7,0,22,0"" VerticalAlignment=""Center"" HorizontalAlignment=""Left"" TextElement.Foreground=""#FFFFFF"" />
-            <TextBlock x:Name=""FallbackText"" IsHitTestVisible=""False"" Text=""{Binding Text, RelativeSource={RelativeSource TemplatedParent}}"" Foreground=""#FFFFFF"" Margin=""7,0,22,0"" VerticalAlignment=""Center"" HorizontalAlignment=""Left"" Visibility=""Collapsed"" />
+            <ContentPresenter IsHitTestVisible=""False"" Content=""{TemplateBinding SelectionBoxItem}"" Margin=""6,0,20,0"" VerticalAlignment=""Center"" HorizontalAlignment=""Left"" TextElement.Foreground=""#FFFFFF"" />
+            <TextBlock x:Name=""FallbackText"" IsHitTestVisible=""False"" Text=""{Binding Text, RelativeSource={RelativeSource TemplatedParent}}"" Foreground=""#FFFFFF"" Margin=""6,0,20,0"" VerticalAlignment=""Center"" HorizontalAlignment=""Left"" Visibility=""Collapsed"" />
             <Popup Placement=""Bottom"" IsOpen=""{TemplateBinding IsDropDownOpen}"" AllowsTransparency=""True"" Focusable=""False"" PopupAnimation=""Slide"">
                 <Grid SnapsToDevicePixels=""True"" MinWidth=""{TemplateBinding ActualWidth}"" MaxHeight=""{TemplateBinding MaxDropDownHeight}"">
                     <Border Background=""#0F2025"" BorderBrush=""#1FE0C5"" BorderThickness=""1"" CornerRadius=""4"" Margin=""0,2,0,0""><ScrollViewer Margin=""2""><StackPanel IsItemsHost=""True"" /></ScrollViewer></Border>
@@ -229,7 +229,6 @@ namespace FieldTakHub.Builder.Services
             return false;
         }
 
-        // Znajduje zewnętrzny Border karty (nigdy sam TextBlock!), dzięki czemu stare okna znikają w 100%
         private static Border FindEnclosingCardBorder(DependencyObject startEl)
         {
             Border bestBorder = null;
@@ -242,7 +241,6 @@ namespace FieldTakHub.Builder.Services
                         break;
                     var tbs = new List<TextBlock>();
                     FindVisualChildren(b, tbs);
-                    // Pojedyncza karta ma od 1 do 35 etykiet (główny kontener okna ma ich > 45)
                     if (tbs.Count >= 1 && tbs.Count <= 35)
                         bestBorder = b;
                 }
@@ -266,7 +264,6 @@ namespace FieldTakHub.Builder.Services
 
                     RemoveStandaloneLegacyCardsAndInsertFactions(win);
 
-                    // Przycisk pod kartą "Podgląd zawartości"
                     var allBorders = new List<Border>();
                     FindVisualChildren(win, allBorders);
                     Border previewBorder = allBorders.Where(b =>
@@ -291,6 +288,10 @@ namespace FieldTakHub.Builder.Services
                             BorderThickness = new Thickness(0),
                             Tag = "INJECTED_BTN"
                         };
+                        Grid.SetRow(_injectedRefreshButton, Grid.GetRow(previewBorder));
+                        Grid.SetColumn(_injectedRefreshButton, Grid.GetColumn(previewBorder));
+                        Grid.SetColumnSpan(_injectedRefreshButton, Grid.GetColumnSpan(previewBorder));
+
                         _injectedRefreshButton.Click += async (_, __) =>
                         {
                             _injectedRefreshButton.IsEnabled = false;
@@ -344,7 +345,6 @@ namespace FieldTakHub.Builder.Services
             }
         }
 
-        // Całkowicie ukrywa 3 stare okna (Meshtastic, Gateway, Enrollment) i wstawia w ich miejsce Generator Stron
         private static void RemoveStandaloneLegacyCardsAndInsertFactions(Window win)
         {
             var tbs = new List<TextBlock>();
@@ -369,43 +369,61 @@ namespace FieldTakHub.Builder.Services
                     Border cardBorder = FindEnclosingCardBorder(tb);
                     if (cardBorder != null)
                     {
-                        if (isMeshCard && _factionsCardElement == null && GetAnyParent(cardBorder) is Panel parentPanel)
+                        if (isMeshCard && _factionsCardElement == null)
                         {
-                            int idx = parentPanel.Children.IndexOf(cardBorder);
-                            _factionsCardElement = (FrameworkElement)BuildSideBySideFactionsSection(win);
-                            parentPanel.Children.Insert(Math.Max(0, idx), _factionsCardElement);
-                        }
-                        cardBorder.Visibility = Visibility.Collapsed;
+                            // Szukamy głównego pionowego StackPanela lub nadrzędnego Grida, aby moduł miał pełną szerokość
+                            Panel targetPanel = GetAnyParent(cardBorder) as Panel;
+                            FrameworkElement refElement = cardBorder;
 
-                        // Jeśli Gateway i Enrollment są w jednym wierszu Grid/UniformGrid, ukryj też ten wiersz
+                            if (targetPanel is Grid && GetAnyParent(targetPanel) is StackPanel outerSp)
+                            {
+                                refElement = targetPanel;
+                                targetPanel = outerSp;
+                            }
+
+                            if (targetPanel != null)
+                            {
+                                _factionsCardElement = (FrameworkElement)BuildWrappedFactionsSection(win);
+
+                                // Gwarancja pełnej szerokości na wszystkie kolumny Grida (eliminuje czarną dziurę po prawej!)
+                                Grid.SetRow(_factionsCardElement, Grid.GetRow(refElement));
+                                Grid.SetColumn(_factionsCardElement, 0);
+                                Grid.SetColumnSpan(_factionsCardElement, 10);
+
+                                int idx = targetPanel.Children.IndexOf(refElement);
+                                targetPanel.Children.Insert(Math.Max(0, idx), _factionsCardElement);
+                            }
+                        }
+
+                        cardBorder.Visibility = Visibility.Collapsed;
                         if (GetAnyParent(cardBorder) is Panel p && p is not StackPanel && p.Children.Count <= 3)
                         {
                             bool allHidden = true;
-                            foreach (UIElement ch in p.Children) if (ch.Visibility == Visibility.Visible) allHidden = false;
-                            if (allHidden) p.Visibility = Visibility.Collapsed;
+                            foreach (UIElement ch in p.Children)
+                                if (ch.Visibility == Visibility.Visible && ch != _factionsCardElement) allHidden = false;
+                            if (allHidden && !p.Children.Contains(_factionsCardElement))
+                                p.Visibility = Visibility.Collapsed;
                         }
                     }
                 }
             }
 
-            // Dodatkowo sprawdź CheckBoxy ("Gateway enabled", "Secrets external") na wypadek braku nagłówka
-            var chks = new List<CheckBox>();
-            FindVisualChildren(win, chks);
-            foreach (var ck in chks)
+            // Rozciągnięcie nadrzędnych kontenerów na pełną szerokość Grida
+            if (_factionsCardElement != null)
             {
-                if (IsInsideInjectedFactions(ck)) continue;
-                string cContent = ck.Content?.ToString() ?? "";
-                if (cContent.Contains("Gateway enabled", StringComparison.OrdinalIgnoreCase) ||
-                    cContent.Contains("Secrets external", StringComparison.OrdinalIgnoreCase) ||
-                    cContent.Equals("OTS Relay", StringComparison.OrdinalIgnoreCase))
+                DependencyObject cur = _factionsCardElement;
+                while (cur != null && cur != win)
                 {
-                    Border cbBorder = FindEnclosingCardBorder(ck);
-                    if (cbBorder != null)
+                    if (cur is FrameworkElement fe)
                     {
-                        cbBorder.Visibility = Visibility.Collapsed;
-                        if (GetAnyParent(cbBorder) is Panel p && p is not StackPanel && p.Children.Count <= 3)
-                            p.Visibility = Visibility.Collapsed;
+                        fe.HorizontalAlignment = HorizontalAlignment.Stretch;
+                        if (GetAnyParent(fe) is Grid g && g.ColumnDefinitions.Count > 1 && Grid.GetColumn(fe) == 0)
+                        {
+                            // Rozciągnij kontener na wszystkie kolumny, jeśli prawa kolumna w tym wierszu jest pusta/ukryta
+                            Grid.SetColumnSpan(fe, g.ColumnDefinitions.Count);
+                        }
                     }
+                    cur = GetAnyParent(cur);
                 }
             }
         }
@@ -418,43 +436,69 @@ namespace FieldTakHub.Builder.Services
         }
 
         // =========================================================================
-        // GENERATOR STRON: PANELE OBOK SIEBIE + POPRAWIONE PRZYCISKI "+" (ZIELONY) I "−" (CZERWONY)
+        // GENERATOR STRON: UKŁAD KAFELKOWY WRAPPANEL (BEZ POZIOMEGO PASKA PRZEWIJANIA!)
+        // Kafelki układają się od lewej do prawej, a po wyczerpaniu miejsca przechodzą do kolejnego wiersza na dole
         // =========================================================================
-        private static UIElement BuildSideBySideFactionsSection(Window win)
+        private static UIElement BuildWrappedFactionsSection(Window win)
         {
             EnsureDefaultFactions();
-            var wrapperStack = new StackPanel { Margin = new Thickness(0, 0, 0, 14), Tag = "INJECTED_FACTIONS" };
-            var horizontalScroll = new ScrollViewer
+            var wrapperStack = new StackPanel
             {
-                HorizontalScrollBarVisibility = ScrollBarVisibility.Auto,
-                VerticalScrollBarVisibility = ScrollBarVisibility.Disabled,
-                Padding = new Thickness(0, 0, 0, 6)
+                HorizontalAlignment = HorizontalAlignment.Stretch,
+                Margin = new Thickness(0, 0, 0, 14),
+                Tag = "INJECTED_FACTIONS"
             };
-            _horizontalFactionsPanel = new StackPanel { Orientation = Orientation.Horizontal };
-            horizontalScroll.Content = _horizontalFactionsPanel;
-            wrapperStack.Children.Add(horizontalScroll);
 
-            RebuildSideBySideFactionPanels(win);
+            _factionsWrapPanel = new WrapPanel
+            {
+                Orientation = Orientation.Horizontal,
+                HorizontalAlignment = HorizontalAlignment.Stretch
+            };
+
+            // Automatyczne dopasowanie szerokości kafelków stron, aby mieściły się obok siebie bez ucinania i zawijały w dół
+            _factionsWrapPanel.SizeChanged += (_, e) => AdjustFactionCardsWidth(e.NewSize.Width);
+
+            wrapperStack.Children.Add(_factionsWrapPanel);
+            RebuildWrappedFactionPanels(win);
             return wrapperStack;
         }
 
-        private static void RebuildSideBySideFactionPanels(Window win)
+        private static void AdjustFactionCardsWidth(double availableWidth)
         {
-            if (_horizontalFactionsPanel == null) return;
-            EnsureDefaultFactions();
-            _horizontalFactionsPanel.Children.Clear();
-            for (int i = 0; i < _factions.Count; i++)
-                _horizontalFactionsPanel.Children.Add(BuildSingleSideBySideFactionPanel(win, _factions[i], i));
-            SyncActiveFactionToDefaultModel();
+            if (_factionsWrapPanel == null || availableWidth <= 100) return;
+
+            // Jeżeli mamy >= 740px szerokości, mieszczą się dokładnie 2 karty w wierszu (a 3. i 4. spadają na dół).
+            // Jeżeli >= 1140px, mieszczą się 3 karty w wierszu. W węższym oknie karta wypełnia kolumnę bez ucinania.
+            int columnsPerRow = availableWidth >= 1140 ? 3 : (availableWidth >= 720 ? 2 : 1);
+            double cardWidth = Math.Floor((availableWidth - (columnsPerRow * 14.0)) / columnsPerRow);
+            cardWidth = Math.Clamp(cardWidth, 320.0, 520.0);
+
+            foreach (UIElement child in _factionsWrapPanel.Children)
+            {
+                if (child is FrameworkElement fe)
+                    fe.Width = cardWidth;
+            }
         }
 
-        // Tworzy estetyczny, zaokrąglony przycisk narożny (+ / −)
+        private static void RebuildWrappedFactionPanels(Window win)
+        {
+            if (_factionsWrapPanel == null) return;
+            EnsureDefaultFactions();
+            _factionsWrapPanel.Children.Clear();
+            for (int i = 0; i < _factions.Count; i++)
+                _factionsWrapPanel.Children.Add(BuildSingleFactionCard(win, _factions[i], i));
+
+            SyncActiveFactionToDefaultModel();
+            if (_factionsWrapPanel.ActualWidth > 100)
+                AdjustFactionCardsWidth(_factionsWrapPanel.ActualWidth);
+        }
+
         private static Border CreateCornerIconButton(string symbol, Brush bgBrush, bool enabled, string tooltip, Action onClick)
         {
             var border = new Border
             {
-                Width = 34,
-                Height = 30,
+                Width = 32,
+                Height = 28,
                 CornerRadius = new CornerRadius(6),
                 Background = enabled ? bgBrush : BrushSwitchOff,
                 BorderBrush = enabled ? Brushes.White : BrushTileBorder,
@@ -465,7 +509,7 @@ namespace FieldTakHub.Builder.Services
                 {
                     Text = symbol,
                     Foreground = Brushes.White,
-                    FontSize = 18,
+                    FontSize = 17,
                     FontWeight = FontWeights.Bold,
                     HorizontalAlignment = HorizontalAlignment.Center,
                     VerticalAlignment = VerticalAlignment.Center,
@@ -477,30 +521,30 @@ namespace FieldTakHub.Builder.Services
             return border;
         }
 
-        private static UIElement BuildSingleSideBySideFactionPanel(Window win, FactionProfileModel fac, int index)
+        private static UIElement BuildSingleFactionCard(Window win, FactionProfileModel fac, int index)
         {
             var outerCard = new Border
             {
-                Width = 455,
+                Width = 385,
                 Background = BrushCardBg,
                 BorderBrush = BrushAccent,
                 BorderThickness = new Thickness(1.5),
                 CornerRadius = new CornerRadius(10),
-                Padding = new Thickness(14),
-                Margin = new Thickness(0, 0, 16, 0),
+                Padding = new Thickness(12),
+                Margin = new Thickness(0, 0, 12, 12),
                 Tag = "FACTION_PANEL_CARD"
             };
 
             var mainStack = new StackPanel();
 
             // GÓRNY PASEK NAROŻNY: Zielony "+" (lewy górny róg) | Tytuł strony | Czerwony "−" (prawy górny róg)
-            var topCornerBar = new Grid { Margin = new Thickness(0, 0, 0, 10) };
+            var topCornerBar = new Grid { Margin = new Thickness(0, 0, 0, 8) };
             topCornerBar.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
             topCornerBar.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
             topCornerBar.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
 
             string[] palette = { "#F5B82E", "#2ECC71", "#9B59B6", "#E67E22", "#1ABC9C", "#E84393" };
-            var btnPlus = CreateCornerIconButton("+", BrushGreenPlus, true, "Dodaj nową stronę konfliktu (otwiera identyczny panel po prawej stronie)", () =>
+            var btnPlus = CreateCornerIconButton("+", BrushGreenPlus, true, "Dodaj nową stronę (pojawia się po prawej, a po wyczerpaniu miejsca w wierszu poniżej)", () =>
             {
                 int nextNum = _factions.Count + 1;
                 string newName = nextNum == 3 ? "ORGA" : $"STRONA-{nextNum}";
@@ -516,14 +560,14 @@ namespace FieldTakHub.Builder.Services
                     LoraModemPreset = fac.LoraModemPreset,
                     OtsHost = fac.OtsHost
                 });
-                RebuildSideBySideFactionPanels(win);
+                RebuildWrappedFactionPanels(win);
             });
             Grid.SetColumn(btnPlus, 0);
             topCornerBar.Children.Add(btnPlus);
 
             var centerStack = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
-            var headerDot = new Border { Width = 13, Height = 13, CornerRadius = new CornerRadius(7), Background = BrushFromHex(fac.ColorHex, Color.FromRgb(38, 132, 255)), BorderBrush = Brushes.White, BorderThickness = new Thickness(1), Margin = new Thickness(0, 0, 8, 0), VerticalAlignment = VerticalAlignment.Center };
-            var headerTitle = new TextBlock { Text = $"Generator Stron — {fac.Name}", Foreground = Brushes.White, FontWeight = FontWeights.Bold, FontSize = 14, VerticalAlignment = VerticalAlignment.Center };
+            var headerDot = new Border { Width = 12, Height = 12, CornerRadius = new CornerRadius(6), Background = BrushFromHex(fac.ColorHex, Color.FromRgb(38, 132, 255)), BorderBrush = Brushes.White, BorderThickness = new Thickness(1), Margin = new Thickness(0, 0, 7, 0), VerticalAlignment = VerticalAlignment.Center };
+            var headerTitle = new TextBlock { Text = $"Generator Stron — {fac.Name}", Foreground = Brushes.White, FontWeight = FontWeights.Bold, FontSize = 13, VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis };
             centerStack.Children.Add(headerDot);
             centerStack.Children.Add(headerTitle);
             Grid.SetColumn(centerStack, 1);
@@ -534,18 +578,15 @@ namespace FieldTakHub.Builder.Services
             {
                 if (_factions.Count <= 1) return;
                 _factions.RemoveAt(index);
-                RebuildSideBySideFactionPanels(win);
+                RebuildWrappedFactionPanels(win);
             });
             Grid.SetColumn(btnMinus, 2);
             topCornerBar.Children.Add(btnMinus);
             mainStack.Children.Add(topCornerBar);
 
-            // PASEK IDENTYFIKACJI STRONY (Nazwa + Paleta RGB + Folder KML)
-            var idCard = new Border { Background = BrushItemBg, BorderBrush = BrushTileBorder, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(8), Padding = new Thickness(10), Margin = new Thickness(0, 0, 0, 10) };
-            var idGrid = new Grid();
-            idGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-            idGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(145) });
-            idGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(135) });
+            // PASEK IDENTYFIKACJI STRONY (Proporcjonalny UniformGrid 3-kolumnowy — nic się nie ucina!)
+            var idCard = new Border { Background = BrushItemBg, BorderBrush = BrushTileBorder, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(8), Padding = new Thickness(8), Margin = new Thickness(0, 0, 0, 8) };
+            var idGrid = new UniformGrid { Columns = 3 };
 
             var nameBox = (TextBox)TextCtrl(fac.Name, val =>
             {
@@ -554,11 +595,10 @@ namespace FieldTakHub.Builder.Services
                 SyncActiveFactionToDefaultModel();
             });
             nameBox.FontWeight = FontWeights.Bold;
-            var fName = FieldBox("Nazwa strony:", nameBox);
-            Grid.SetColumn(fName, 0); idGrid.Children.Add(fName);
+            idGrid.Children.Add(FieldBox("Nazwa strony:", nameBox));
 
-            var swatch = new Border { Width = 14, Height = 14, CornerRadius = new CornerRadius(3), Background = BrushFromHex(fac.ColorHex, Color.FromRgb(38, 132, 255)), BorderBrush = Brushes.White, BorderThickness = new Thickness(1), Margin = new Thickness(0, 0, 6, 0), VerticalAlignment = VerticalAlignment.Center };
-            var cLbl = new TextBlock { Text = $"RGB ({fac.ColorHex.ToUpperInvariant()})", Foreground = Brushes.White, FontSize = 10.5, FontWeight = FontWeights.SemiBold, VerticalAlignment = VerticalAlignment.Center };
+            var swatch = new Border { Width = 12, Height = 12, CornerRadius = new CornerRadius(3), Background = BrushFromHex(fac.ColorHex, Color.FromRgb(38, 132, 255)), BorderBrush = Brushes.White, BorderThickness = new Thickness(1), Margin = new Thickness(0, 0, 5, 0), VerticalAlignment = VerticalAlignment.Center };
+            var cLbl = new TextBlock { Text = fac.ColorHex.ToUpperInvariant(), Foreground = Brushes.White, FontSize = 10.5, FontWeight = FontWeights.SemiBold, VerticalAlignment = VerticalAlignment.Center };
             var cStack = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Center };
             cStack.Children.Add(swatch); cStack.Children.Add(cLbl);
             var colorBtn = new Button { Content = cStack, Height = 28, Background = BrushInputBg, BorderBrush = BrushAccent, BorderThickness = new Thickness(1), Cursor = Cursors.Hand };
@@ -570,12 +610,11 @@ namespace FieldTakHub.Builder.Services
                     fac.ColorHex = picked;
                     swatch.Background = BrushFromHex(picked, Color.FromRgb(38, 132, 255));
                     headerDot.Background = BrushFromHex(picked, Color.FromRgb(38, 132, 255));
-                    cLbl.Text = $"RGB ({picked.ToUpperInvariant()})";
+                    cLbl.Text = picked.ToUpperInvariant();
                     SyncActiveFactionToDefaultModel();
                 }
             };
-            var fCol = FieldBox("Kolor strony (RGB):", colorBtn);
-            Grid.SetColumn(fCol, 1); idGrid.Children.Add(fCol);
+            idGrid.Children.Add(FieldBox("Kolor (RGB):", colorBtn));
 
             var btnKml = new Button { Content = $"📁 factions/{SanitizeFileName(fac.Name).ToLowerInvariant()}", Height = 28, Background = BrushInputBg, Foreground = Brushes.White, BorderBrush = BrushInputBorder, BorderThickness = new Thickness(1), FontSize = 10, Cursor = Cursors.Hand };
             btnKml.Click += async (_, __) =>
@@ -585,16 +624,15 @@ namespace FieldTakHub.Builder.Services
                 await Task.Run(() => EnsureFactionFoldersInitialized(srcDir, new List<(string, string)> { (sl, fac.ColorHex) }));
                 TryOpenFolderInExplorer(Path.Combine(srcDir, "factions", sl));
             };
-            var fKml = FieldBox("Nakładki KML:", btnKml);
-            Grid.SetColumn(fKml, 2); idGrid.Children.Add(fKml);
+            idGrid.Children.Add(FieldBox("Nakładki KML:", btnKml));
             idCard.Child = idGrid;
             mainStack.Children.Add(idCard);
 
-            // TABELKA 1 WEWNĄTRZ GENERATORA STRON: KONFIGURACJA MESHTASTIC
-            var meshCard = new Border { Background = BrushItemBg, BorderBrush = BrushTileBorder, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(8), Padding = new Thickness(12), Margin = new Thickness(0, 0, 0, 10) };
+            // SEKCJA 1 WEWNĄTRZ KARTY: KONFIGURACJA MESHTASTIC
+            var meshCard = new Border { Background = BrushItemBg, BorderBrush = BrushTileBorder, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(8), Padding = new Thickness(10), Margin = new Thickness(0, 0, 0, 8) };
             var meshStack = new StackPanel();
-            meshStack.Children.Add(new TextBlock { Text = "Konfiguracja Meshtastic", Foreground = Brushes.White, FontWeight = FontWeights.Bold, FontSize = 13 });
-            meshStack.Children.Add(new TextBlock { Text = "HYBRID · PLI · GeoChat · OTS Relay", Foreground = BrushMutedText, FontSize = 10, Margin = new Thickness(0, 1, 0, 8) });
+            meshStack.Children.Add(new TextBlock { Text = "Konfiguracja Meshtastic", Foreground = Brushes.White, FontWeight = FontWeights.Bold, FontSize = 12.5 });
+            meshStack.Children.Add(new TextBlock { Text = "HYBRID · PLI · GeoChat · OTS Relay", Foreground = BrushMutedText, FontSize = 9.5, Margin = new Thickness(0, 1, 0, 6) });
 
             var meshRow1 = new UniformGrid { Columns = 3 };
             meshRow1.Children.Add(FieldBox("Tryb", ComboCtrl(new[] { "HYBRID", "PLUGIN_ONLY", "NATIVE_TAK", "OFF" }, fac.MeshMode, win, v => fac.MeshMode = v)));
@@ -602,32 +640,24 @@ namespace FieldTakHub.Builder.Services
             meshRow1.Children.Add(FieldBox("Model", ComboCtrl(new[] { "generic_meshtastic", "tbeam", "heltec_v3", "meshtracker_x1", "rak4631" }, fac.HardwareModel, win, v => { fac.HardwareModel = v; Current.HardwareModel = v; })));
             meshStack.Children.Add(meshRow1);
 
-            var meshRow2 = new Grid { Margin = new Thickness(0, 2, 0, 4) };
-            meshRow2.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(82) });
-            meshRow2.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(108) });
-            meshRow2.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(60) });
-            meshRow2.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-
-            var fReg = FieldBox("Region", ComboCtrl(new[] { "EU_868", "US_915", "EU_433", "ANZ_915" }, fac.LoraRegion, win, v => { fac.LoraRegion = v; Current.LoraRegion = v; }));
-            var fMod = FieldBox("Modem preset", ComboCtrl(new[] { "SHORT_FAST", "LONG_FAST", "MEDIUM_FAST", "MEDIUM_SLOW" }, fac.LoraModemPreset, win, v => { fac.LoraModemPreset = v; Current.LoraModemPreset = v; }));
-            var fHop = FieldBox("Hop limit", IntCtrl(fac.HopLimit, v => fac.HopLimit = v));
-            Grid.SetColumn(fReg, 0); Grid.SetColumn(fMod, 1); Grid.SetColumn(fHop, 2);
-            meshRow2.Children.Add(fReg); meshRow2.Children.Add(fMod); meshRow2.Children.Add(fHop);
+            var meshRow2 = new UniformGrid { Columns = 3 };
+            meshRow2.Children.Add(FieldBox("Region", ComboCtrl(new[] { "EU_868", "US_915", "EU_433", "ANZ_915" }, fac.LoraRegion, win, v => { fac.LoraRegion = v; Current.LoraRegion = v; })));
+            meshRow2.Children.Add(FieldBox("Modem preset", ComboCtrl(new[] { "SHORT_FAST", "LONG_FAST", "MEDIUM_FAST", "MEDIUM_SLOW" }, fac.LoraModemPreset, win, v => { fac.LoraModemPreset = v; Current.LoraModemPreset = v; })));
+            meshRow2.Children.Add(FieldBox("Hop limit", IntCtrl(fac.HopLimit, v => fac.HopLimit = v)));
+            meshStack.Children.Add(meshRow2);
 
             CheckBox MakeChk(string label, bool init, Action<bool> onChg)
             {
-                var c = new CheckBox { Content = label, IsChecked = init, Foreground = Brushes.White, FontSize = 10, Margin = new Thickness(0, 0, 6, 2) };
+                var c = new CheckBox { Content = label, IsChecked = init, Foreground = Brushes.White, FontSize = 10, Margin = new Thickness(0, 2, 6, 4) };
                 c.Checked += (_, __) => onChg(true); c.Unchecked += (_, __) => onChg(false);
                 return c;
             }
-            var flagsWrap = new WrapPanel { VerticalAlignment = VerticalAlignment.Bottom, Margin = new Thickness(2, 0, 0, 6) };
-            flagsWrap.Children.Add(MakeChk("PLI", fac.EnablePli, v => fac.EnablePli = v));
-            flagsWrap.Children.Add(MakeChk("GeoChat", fac.EnableGeoChat, v => fac.EnableGeoChat = v));
-            flagsWrap.Children.Add(MakeChk("OTS Relay", fac.EnableOtsRelay, v => fac.EnableOtsRelay = v));
-            flagsWrap.Children.Add(MakeChk("File Transfer", fac.EnableFileTransfer, v => fac.EnableFileTransfer = v));
-            Grid.SetColumn(flagsWrap, 3);
-            meshRow2.Children.Add(flagsWrap);
-            meshStack.Children.Add(meshRow2);
+            var flagsGrid = new UniformGrid { Columns = 4, Margin = new Thickness(0, 2, 0, 4) };
+            flagsGrid.Children.Add(MakeChk("PLI", fac.EnablePli, v => fac.EnablePli = v));
+            flagsGrid.Children.Add(MakeChk("GeoChat", fac.EnableGeoChat, v => fac.EnableGeoChat = v));
+            flagsGrid.Children.Add(MakeChk("OTS Relay", fac.EnableOtsRelay, v => fac.EnableOtsRelay = v));
+            flagsGrid.Children.Add(MakeChk("File Transfer", fac.EnableFileTransfer, v => fac.EnableFileTransfer = v));
+            meshStack.Children.Add(flagsGrid);
 
             var meshRow3 = new UniformGrid { Columns = 2 };
             var chNameBox = (TextBox)TextCtrl(fac.ChannelName, v => { fac.ChannelName = v.Trim(); SyncActiveFactionToDefaultModel(); });
@@ -638,26 +668,26 @@ namespace FieldTakHub.Builder.Services
 
             var pskGrid = new Grid { Margin = new Thickness(0, 0, 0, 4) };
             pskGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-            pskGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(105) });
+            pskGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(95) });
             var pskBox = (TextBox)TextCtrl(fac.Psk, v => { fac.Psk = v.Trim(); SyncActiveFactionToDefaultModel(); });
             pskBox.FontFamily = new FontFamily("Consolas");
             var fPsk = FieldBox("Klucz szyfrujący PSK (AES-256 Base64):", pskBox);
             Grid.SetColumn(fPsk, 0); pskGrid.Children.Add(fPsk);
-            var btnRoll = new Button { Content = "🎲 Losuj PSK", Height = 28, Margin = new Thickness(0, 14, 0, 6), Background = BrushInputBg, Foreground = BrushAccent, BorderBrush = BrushAccent, BorderThickness = new Thickness(1), FontSize = 10.5, FontWeight = FontWeights.Bold, Cursor = Cursors.Hand };
+            var btnRoll = new Button { Content = "🎲 Losuj PSK", Height = 28, Margin = new Thickness(0, 14, 0, 6), Background = BrushInputBg, Foreground = BrushAccent, BorderBrush = BrushAccent, BorderThickness = new Thickness(1), FontSize = 10, FontWeight = FontWeights.Bold, Cursor = Cursors.Hand };
             btnRoll.Click += (_, __) => { fac.Psk = TacticalConfigModel.GenerateRandomBase64Psk(); pskBox.Text = fac.Psk; SyncActiveFactionToDefaultModel(); };
             Grid.SetColumn(btnRoll, 1); pskGrid.Children.Add(btnRoll);
             meshStack.Children.Add(pskGrid);
 
-            var meshStatusTxt = new TextBlock { Text = "Wklej własny link kanału Meshtastic lub użyj klucza PSK strony.", Foreground = BrushMutedText, FontSize = 9.5, Margin = new Thickness(0, 0, 0, 6) };
+            var meshStatusTxt = new TextBlock { Text = "Wklej własny link kanału Meshtastic lub użyj klucza PSK strony.", Foreground = BrushMutedText, FontSize = 9.5, Margin = new Thickness(0, 0, 0, 4) };
             meshStack.Children.Add(meshStatusTxt);
 
             Button SmallActBtn(string cap, Action act)
             {
-                var b = new Button { Content = cap, Height = 26, Padding = new Thickness(12, 0, 12, 0), Margin = new Thickness(0, 0, 6, 0), Background = BrushInputBg, Foreground = Brushes.White, BorderBrush = BrushInputBorder, BorderThickness = new Thickness(1), FontSize = 10.5, Cursor = Cursors.Hand };
+                var b = new Button { Content = cap, Height = 25, Margin = new Thickness(0, 0, 4, 0), Background = BrushInputBg, Foreground = Brushes.White, BorderBrush = BrushInputBorder, BorderThickness = new Thickness(1), FontSize = 10, Cursor = Cursors.Hand };
                 b.Click += (_, __) => act();
                 return b;
             }
-            var meshBtnBar = new StackPanel { Orientation = Orientation.Horizontal };
+            var meshBtnBar = new UniformGrid { Columns = 4 };
             meshBtnBar.Children.Add(SmallActBtn("Save", () => { WriteConfigsToDirectory(GetPrimarySourceDirectory(win), fac); meshStatusTxt.Text = $"✓ Zapisano kanał {fac.ChannelName}."; meshStatusTxt.Foreground = BrushAccent; }));
             meshBtnBar.Children.Add(SmallActBtn("Open", () => TryOpenFolderInExplorer(GetPrimarySourceDirectory(win))));
             meshBtnBar.Children.Add(SmallActBtn("Copy", () => { try { Clipboard.SetText(!string.IsNullOrWhiteSpace(fac.ChannelUrl) ? fac.ChannelUrl : fac.Psk); meshStatusTxt.Text = "✓ Skopiowano do schowka."; } catch { } }));
@@ -666,25 +696,22 @@ namespace FieldTakHub.Builder.Services
             meshCard.Child = meshStack;
             mainStack.Children.Add(meshCard);
 
-            // TABELKA 2 & 3 WEWNĄTRZ GENERATORA STRON: GATEWAY MESHTASTIC <-> OTS ORAZ ENROLLMENT OPENTAK
-            var bottomSplitGrid = new Grid { Margin = new Thickness(0, 0, 0, 10) };
-            bottomSplitGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-            bottomSplitGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(8) });
-            bottomSplitGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1.15, GridUnitType.Star) });
+            // SEKCJA 2 & 3 WEWNĄTRZ KARTY: GATEWAY MESHTASTIC <-> OTS ORAZ ENROLLMENT OPENTAK
+            var bottomSplitGrid = new UniformGrid { Columns = 2, Margin = new Thickness(0, 0, 0, 8) };
 
-            var gwCard = new Border { Background = BrushItemBg, BorderBrush = BrushTileBorder, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(8), Padding = new Thickness(10) };
+            var gwCard = new Border { Background = BrushItemBg, BorderBrush = BrushTileBorder, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(8), Padding = new Thickness(8), Margin = new Thickness(0, 0, 4, 0) };
             var gwStack = new StackPanel();
-            gwStack.Children.Add(new TextBlock { Text = "Gateway Meshtastic ↔ OpenTAKServer", Foreground = Brushes.White, FontWeight = FontWeights.Bold, FontSize = 11, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 6) });
+            gwStack.Children.Add(new TextBlock { Text = "Gateway Meshtastic ↔ OTS", Foreground = Brushes.White, FontWeight = FontWeights.Bold, FontSize = 10.5, Margin = new Thickness(0, 0, 0, 4) });
             gwStack.Children.Add(MakeChk("Gateway enabled", fac.GatewayEnabled, v => fac.GatewayEnabled = v));
 
-            var gwRow1 = new UniformGrid { Columns = 2, Margin = new Thickness(0, 4, 0, 4) };
+            var gwRow1 = new UniformGrid { Columns = 2, Margin = new Thickness(0, 2, 0, 4) };
             gwRow1.Children.Add(TextCtrl(fac.GatewayProfile, v => fac.GatewayProfile = v));
             gwRow1.Children.Add(TextCtrl(fac.GatewayMode, v => fac.GatewayMode = v));
             gwStack.Children.Add(gwRow1);
 
-            var gwRow2 = new Grid { Margin = new Thickness(0, 0, 0, 6) };
+            var gwRow2 = new Grid { Margin = new Thickness(0, 0, 0, 4) };
             gwRow2.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-            gwRow2.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(48) });
+            gwRow2.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(44) });
             gwRow2.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1.1, GridUnitType.Star) });
             var gwProto = TextCtrl(fac.GatewayProtocol, v => fac.GatewayProtocol = v);
             var gwPort = IntCtrl(fac.GatewayPort, v => fac.GatewayPort = v);
@@ -694,31 +721,29 @@ namespace FieldTakHub.Builder.Services
             gwStack.Children.Add(gwRow2);
             gwStack.Children.Add(MakeChk("Secrets external", fac.SecretsExternal, v => fac.SecretsExternal = v));
             gwCard.Child = gwStack;
-            Grid.SetColumn(gwCard, 0);
             bottomSplitGrid.Children.Add(gwCard);
 
-            var enrCard = new Border { Background = BrushItemBg, BorderBrush = BrushTileBorder, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(8), Padding = new Thickness(10) };
+            var enrCard = new Border { Background = BrushItemBg, BorderBrush = BrushTileBorder, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(8), Padding = new Thickness(8), Margin = new Thickness(4, 0, 0, 0) };
             var enrStack = new StackPanel();
-            enrStack.Children.Add(new TextBlock { Text = "Enrollment OpenTAK / wdrożenie jednym skanem", Foreground = Brushes.White, FontWeight = FontWeights.Bold, FontSize = 11, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 4) });
-            enrStack.Children.Add(new TextBlock { Text = "Opcjonalne. Wklej własny, krótkotrwały URI enrollmentu OpenTAK.", Foreground = BrushMutedText, FontSize = 9.5, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 6) });
+            enrStack.Children.Add(new TextBlock { Text = "Enrollment OpenTAK (1-skan)", Foreground = Brushes.White, FontWeight = FontWeights.Bold, FontSize = 10.5, Margin = new Thickness(0, 0, 0, 2) });
+            enrStack.Children.Add(new TextBlock { Text = "Wklej krótkotrwały URI enrollmentu OpenTAK.", Foreground = BrushMutedText, FontSize = 9, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 4) });
 
-            var enrUriBox = new TextBox { Text = fac.EnrollmentUri, Height = 52, AcceptsReturn = true, TextWrapping = TextWrapping.Wrap, Background = BrushInputBg, Foreground = Brushes.White, BorderBrush = BrushInputBorder, BorderThickness = new Thickness(1), FontSize = 10, Padding = new Thickness(6, 4, 6, 4), Margin = new Thickness(0, 0, 0, 6) };
+            var enrUriBox = new TextBox { Text = fac.EnrollmentUri, Height = 46, AcceptsReturn = true, TextWrapping = TextWrapping.Wrap, Background = BrushInputBg, Foreground = Brushes.White, BorderBrush = BrushInputBorder, BorderThickness = new Thickness(1), FontSize = 9.5, Padding = new Thickness(4), Margin = new Thickness(0, 0, 0, 6) };
             enrUriBox.TextChanged += (_, __) => fac.EnrollmentUri = enrUriBox.Text.Trim();
             enrStack.Children.Add(enrUriBox);
 
-            var enrBtnBar = new StackPanel { Orientation = Orientation.Horizontal };
+            var enrBtnBar = new UniformGrid { Columns = 2 };
             enrBtnBar.Children.Add(SmallActBtn("Save enrollment", () => WriteConfigsToDirectory(GetPrimarySourceDirectory(win), fac)));
             enrBtnBar.Children.Add(SmallActBtn("Clear", () => { enrUriBox.Text = ""; fac.EnrollmentUri = ""; }));
             enrStack.Children.Add(enrBtnBar);
             enrCard.Child = enrStack;
-            Grid.SetColumn(enrCard, 2);
             bottomSplitGrid.Children.Add(enrCard);
             mainStack.Children.Add(bottomSplitGrid);
 
-            var bottomBtnsGrid = new UniformGrid { Columns = 3, Margin = new Thickness(0, 2, 0, 0) };
-            var btnFolders = new Button { Content = "📁 Foldery KML", Height = 30, Margin = new Thickness(0, 0, 4, 0), Background = BrushItemBg, Foreground = Brushes.White, BorderBrush = BrushTileBorder, BorderThickness = new Thickness(1), FontSize = 11, FontWeight = FontWeights.SemiBold, Cursor = Cursors.Hand };
-            var btnPoster = new Button { Content = "🖨️ Plakat A4", Height = 30, Margin = new Thickness(2, 0, 2, 0), Background = BrushItemBg, Foreground = Brushes.White, BorderBrush = BrushAccent, BorderThickness = new Thickness(1), FontSize = 11, FontWeight = FontWeights.Bold, Cursor = Cursors.Hand };
-            var btnBuildAll = new Button { Content = "⚡ Buduj strony", Height = 30, Margin = new Thickness(4, 0, 0, 0), Background = BrushButtonAccent, Foreground = BrushDarkFg, BorderThickness = new Thickness(0), FontSize = 11, FontWeight = FontWeights.Bold, Cursor = Cursors.Hand };
+            var bottomBtnsGrid = new UniformGrid { Columns = 3 };
+            var btnFolders = new Button { Content = "📁 Foldery KML", Height = 28, Margin = new Thickness(0, 0, 3, 0), Background = BrushItemBg, Foreground = Brushes.White, BorderBrush = BrushTileBorder, BorderThickness = new Thickness(1), FontSize = 10.5, FontWeight = FontWeights.SemiBold, Cursor = Cursors.Hand };
+            var btnPoster = new Button { Content = "🖨️ Plakat A4", Height = 28, Margin = new Thickness(2, 0, 2, 0), Background = BrushItemBg, Foreground = Brushes.White, BorderBrush = BrushAccent, BorderThickness = new Thickness(1), FontSize = 10.5, FontWeight = FontWeights.Bold, Cursor = Cursors.Hand };
+            var btnBuildAll = new Button { Content = "⚡ Buduj strony", Height = 28, Margin = new Thickness(3, 0, 0, 0), Background = BrushButtonAccent, Foreground = BrushDarkFg, BorderThickness = new Thickness(0), FontSize = 10.5, FontWeight = FontWeights.Bold, Cursor = Cursors.Hand };
 
             btnFolders.Click += async (_, __) =>
             {
@@ -1231,15 +1256,15 @@ namespace FieldTakHub.Builder.Services
 
         internal static UIElement FieldBox(string label, UIElement ctrl)
         {
-            var sp = new StackPanel { Margin = new Thickness(0, 0, 6, 6) };
-            sp.Children.Add(new TextBlock { Text = label, Foreground = BrushMutedText, FontSize = 10.5, Margin = new Thickness(0, 0, 0, 3), TextTrimming = TextTrimming.CharacterEllipsis });
+            var sp = new StackPanel { Margin = new Thickness(0, 0, 5, 5) };
+            sp.Children.Add(new TextBlock { Text = label, Foreground = BrushMutedText, FontSize = 10, Margin = new Thickness(0, 0, 0, 2), TextTrimming = TextTrimming.CharacterEllipsis });
             sp.Children.Add(ctrl);
             return sp;
         }
 
         internal static UIElement TextCtrl(string init, Action<string> onChg)
         {
-            var tb = new TextBox { Text = init, Height = 28, VerticalContentAlignment = VerticalAlignment.Center, Padding = new Thickness(6, 0, 6, 0), FontSize = 11, Background = BrushInputBg, Foreground = Brushes.White, BorderBrush = BrushInputBorder, BorderThickness = new Thickness(1) };
+            var tb = new TextBox { Text = init, Height = 26, VerticalContentAlignment = VerticalAlignment.Center, Padding = new Thickness(5, 0, 5, 0), FontSize = 10.5, Background = BrushInputBg, Foreground = Brushes.White, BorderBrush = BrushInputBorder, BorderThickness = new Thickness(1) };
             tb.TextChanged += (_, __) => onChg(tb.Text);
             return tb;
         }
@@ -1248,7 +1273,7 @@ namespace FieldTakHub.Builder.Services
 
         internal static UIElement ComboCtrl(string[] items, string init, Window win, Action<string> onChg)
         {
-            var cb = new ComboBox { ItemsSource = items, SelectedItem = init, Height = 28, FontSize = 11, VerticalContentAlignment = VerticalAlignment.Center, Tag = "INJECTED" };
+            var cb = new ComboBox { ItemsSource = items, SelectedItem = init, Height = 26, FontSize = 10.5, VerticalContentAlignment = VerticalAlignment.Center, Tag = "INJECTED" };
             ApplyUnifiedComboBoxTheme(cb, win);
             cb.SelectionChanged += (_, __) => { if (cb.SelectedItem is string str) onChg(str); };
             return cb;

@@ -188,13 +188,12 @@ namespace FieldTakHub.Builder.Services
             var leftScroll = new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Background = TacticalConfigPanel.BrushCardBg, Padding = new Thickness(10) };
             var leftStack = new StackPanel { Margin = new Thickness(6) };
 
-            // SEKCJA 1: FORMAT ARKUSZA, SKALA 1:X, PODKŁAD & LiDAR ISOK
             var sec1 = CreateSectionCard("1. ARKUSZ, SKALA MAPY (1:X), PODKŁAD & LiDAR ISOK", GoldBrush);
             var searchRow = new Grid { Margin = new Thickness(0, 0, 0, 6) };
             searchRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
             searchRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(80) });
             _searchPlaceBox = (TextBox)TacticalConfigPanel.TextCtrl("Czechowice-Dziedzice", _ => { });
-            var btnFind = new Button { Content = "🔍 Szukaj", Height = 28, Margin = new Thickness(6, 0, 0, 0), Background = BlueBtnBrush, Foreground = Brushes.White, BorderThickness = new Thickness(0), FontWeight = FontWeights.Bold, Cursor = Cursors.Hand };
+            var btnFind = new Button { Content = "🔍 Szukaj", Height = 26, Margin = new Thickness(6, 0, 0, 0), Background = BlueBtnBrush, Foreground = Brushes.White, BorderThickness = new Thickness(0), FontWeight = FontWeights.Bold, Cursor = Cursors.Hand };
             btnFind.Click += async (_, __) => await SearchLocationNominatimAsync();
             Grid.SetColumn(_searchPlaceBox, 0); Grid.SetColumn(btnFind, 1);
             searchRow.Children.Add(_searchPlaceBox); searchRow.Children.Add(btnFind);
@@ -213,7 +212,7 @@ namespace FieldTakHub.Builder.Services
             scaleCustomGrid.Children.Add(new TextBlock { Text = "1 :", Foreground = GoldBrush, FontWeight = FontWeights.Bold, FontSize = 13, VerticalAlignment = VerticalAlignment.Center });
             _scaleInputBox = (TextBox)TacticalConfigPanel.TextCtrl("5000", _ => { });
             Grid.SetColumn(_scaleInputBox, 1); scaleCustomGrid.Children.Add(_scaleInputBox);
-            var btnSetScale = new Button { Content = "Ustaw skalę", Height = 30, Margin = new Thickness(6, 0, 0, 0), Background = BlueBtnBrush, Foreground = Brushes.White, FontWeight = FontWeights.Bold, BorderThickness = new Thickness(0), Cursor = Cursors.Hand };
+            var btnSetScale = new Button { Content = "Ustaw skalę", Height = 26, Margin = new Thickness(6, 0, 0, 0), Background = BlueBtnBrush, Foreground = Brushes.White, FontWeight = FontWeights.Bold, BorderThickness = new Thickness(0), Cursor = Cursors.Hand };
             btnSetScale.Click += (_, __) => { if (int.TryParse(_scaleInputBox.Text.Trim(), out int sc)) ApplyScaleDenominator(sc); };
             Grid.SetColumn(btnSetScale, 2); scaleCustomGrid.Children.Add(btnSetScale);
             sec1.Children.Add(scaleCustomGrid);
@@ -231,7 +230,7 @@ namespace FieldTakHub.Builder.Services
             btnScale25k.Click += (_, __) => ApplyScaleDenominator(25000);
             sec1.Children.Add(btnScale25k);
 
-            var layerCombo = new ComboBox { ItemsSource = Layers, SelectedIndex = 0, Height = 30, FontSize = 11, Margin = new Thickness(0, 0, 0, 8), Tag = "INJECTED" };
+            var layerCombo = new ComboBox { ItemsSource = Layers, SelectedIndex = 0, Height = 28, FontSize = 11, Margin = new Thickness(0, 0, 0, 8), Tag = "INJECTED" };
             TacticalConfigPanel.ApplyUnifiedComboBoxTheme(layerCombo, win);
             layerCombo.SelectionChanged += (_, __) => { if (layerCombo.SelectedItem is TacticalMapLayerDef def) { _activeLayer = def; _ = RenderMapTilesAsync(); } };
             sec1.Children.Add(TacticalConfigPanel.FieldBox("Podkład bazowy:", layerCombo));
@@ -244,7 +243,6 @@ namespace FieldTakHub.Builder.Services
             sec1.Children.Add(lidarBox);
             leftStack.Children.Add(WrapCard(sec1));
 
-            // SEKCJA 2: SYSTEM WSPÓŁRZĘDNYCH I SIATKA
             var sec2 = CreateSectionCard("2. SYSTEM WSPÓŁRZĘDNYCH I SIATKA", GoldBrush);
             sec2.Children.Add(TacticalConfigPanel.FieldBox("System współrzędnych i typ siatki na mapie:", TacticalConfigPanel.ComboCtrl(new[] { "MGRS / UTM (Siatka wojskowa w metrach)", "Siatka Sektorowa (A1, B2, C3...)", "WGS84 (Stopnie geograficzne Lat/Lon)", "Brak siatki" }, _coordSystem, win, v => { _coordSystem = v; _ = RenderMapTilesAsync(); })));
 
@@ -270,7 +268,6 @@ namespace FieldTakHub.Builder.Services
             sec2.Children.Add(colAndHaloRow);
             leftStack.Children.Add(WrapCard(sec2));
 
-            // SEKCJA 3: ZNACZNIKI, KROPKI KOLOROWE I TEREN GRY
             var sec3 = CreateSectionCard("3. ZNACZNIKI, KROPKI KOLOROWE I TEREN GRY", GoldBrush);
             void UpdateToolButtonsVisual()
             {
@@ -324,7 +321,6 @@ namespace FieldTakHub.Builder.Services
             RefreshObjectsListUI();
             leftStack.Children.Add(WrapCard(sec3));
 
-            // SEKCJA 4: ELEMENTY MAPY (PÓŁNOC / PODZIAŁKA / LEGENDA) & EKSPORT
             var sec4 = CreateSectionCard("4. ELEMENTY MAPY (PÓŁNOC / PODZIAŁKA / LEGENDA) & EKSPORT", GoldBrush);
             string[] corners = { "Lewy górny róg", "Prawy górny róg", "Lewy dolny róg", "Prawy dolny róg", "Ukryj" };
             var posGrid = new UniformGrid { Columns = 2, Margin = new Thickness(0, 0, 0, 8) };
