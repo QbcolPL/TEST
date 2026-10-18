@@ -226,18 +226,18 @@ namespace FieldTakHub.Builder.Services
 
         public static readonly List<NatoSymbolOption> NatoSymbols = new List<NatoSymbolOption>
         {
-            new NatoSymbolOption { Code = "NATO_HQ",     ShortBadge = "HQ",  NatoMeaning = "Sztab / Dowództwo",             Label = "[HQ] NATO Sztab / Dowództwo" },
-            new NatoSymbolOption { Code = "NATO_INF",    ShortBadge = "X",   NatoMeaning = "Piechota / Drużyna szturmowa",  Label = "[X] NATO Piechota / Drużyna" },
-            new NatoSymbolOption { Code = "NATO_RECON",  ShortBadge = "/",   NatoMeaning = "Zwiad / Rozpoznanie (Recon)",   Label = "[/] NATO Zwiad / Recon" },
-            new NatoSymbolOption { Code = "NATO_MED",    ShortBadge = "+",   NatoMeaning = "Punkt Medyczny / MEDEVAC",      Label = "[+] NATO Punkt Medyczny / MEDEVAC" },
-            new NatoSymbolOption { Code = "NATO_COMMS",  ShortBadge = "⚡",  NatoMeaning = "Węzeł Łączności / Przekaźnik",  Label = "[⚡] NATO Węzeł Łączności / LoRa" },
-            new NatoSymbolOption { Code = "NATO_SUPPLY", ShortBadge = "SUP", NatoMeaning = "Punkt Amunicyjny / Logistyka",  Label = "[SUP] NATO Punkt Amunicyjny / Logistyka" },
-            new NatoSymbolOption { Code = "NATO_OP",     ShortBadge = "△",   NatoMeaning = "Punkt Obserwacyjny (OP)",       Label = "[△] NATO Punkt Obserwacyjny (OP)" },
-            new NatoSymbolOption { Code = "NATO_SNIPER", ShortBadge = "⊕",   NatoMeaning = "Snajper / Strzelec Wyborowy",   Label = "[⊕] NATO Snajper / Strzelec" },
-            new NatoSymbolOption { Code = "NATO_CP",     ShortBadge = "CP",  NatoMeaning = "Punkt Kontrolny / Respawn",     Label = "[CP] NATO Punkt Kontrolny / Respawn" },
-            new NatoSymbolOption { Code = "NATO_LZ",     ShortBadge = "LZ",  NatoMeaning = "Strefa Lądowania / Zrzutu",     Label = "[LZ] NATO Strefa Lądowania / Zrzutu" },
-            new NatoSymbolOption { Code = "NATO_OBJ",    ShortBadge = "OBJ", NatoMeaning = "Cel Operacji (Objective)",      Label = "[OBJ] NATO Cel Operacji (Objective)" },
-            new NatoSymbolOption { Code = "NATO_HAZARD", ShortBadge = "!",   NatoMeaning = "Zagrożenie / Strefa No-Go",     Label = "[!] NATO Zagrożenie / Strefa No-Go" }
+            new NatoSymbolOption { Code = "NATO_HQ",     ShortBadge = "HQ",  NatoMeaning = "Sztab / Dowództwo (stopka masztu)", Label = "🚩 [HQ] NATO Sztab / Dowództwo (Flaga)" },
+            new NatoSymbolOption { Code = "NATO_INF",    ShortBadge = "X",   NatoMeaning = "Piechota / Drużyna szturmowa",      Label = "[X] NATO Piechota / Drużyna" },
+            new NatoSymbolOption { Code = "NATO_RECON",  ShortBadge = "/",   NatoMeaning = "Zwiad / Rozpoznanie (Recon)",       Label = "[/] NATO Zwiad / Recon" },
+            new NatoSymbolOption { Code = "NATO_MED",    ShortBadge = "+",   NatoMeaning = "Punkt Medyczny / MEDEVAC",          Label = "[+] NATO Punkt Medyczny / MEDEVAC" },
+            new NatoSymbolOption { Code = "NATO_COMMS",  ShortBadge = "⚡",  NatoMeaning = "Węzeł Łączności / Przekaźnik",      Label = "[⚡] NATO Węzeł Łączności / LoRa" },
+            new NatoSymbolOption { Code = "NATO_SUPPLY", ShortBadge = "SUP", NatoMeaning = "Punkt Amunicyjny / Logistyka",      Label = "[SUP] NATO Punkt Amunicyjny / Logistyka" },
+            new NatoSymbolOption { Code = "NATO_OP",     ShortBadge = "△",   NatoMeaning = "Punkt Obserwacyjny (OP)",           Label = "[△] NATO Punkt Obserwacyjny (OP)" },
+            new NatoSymbolOption { Code = "NATO_SNIPER", ShortBadge = "⊕",   NatoMeaning = "Snajper / Strzelec Wyborowy",       Label = "[⊕] NATO Snajper / Strzelec" },
+            new NatoSymbolOption { Code = "NATO_CP",     ShortBadge = "CP",  NatoMeaning = "Punkt Kontrolny / Respawn",         Label = "[CP] NATO Punkt Kontrolny / Respawn" },
+            new NatoSymbolOption { Code = "NATO_LZ",     ShortBadge = "LZ",  NatoMeaning = "Strefa Lądowania / Zrzutu",         Label = "[LZ] NATO Strefa Lądowania / Zrzutu" },
+            new NatoSymbolOption { Code = "NATO_OBJ",    ShortBadge = "OBJ", NatoMeaning = "Cel Operacji (Objective)",          Label = "[OBJ] NATO Cel Operacji (Objective)" },
+            new NatoSymbolOption { Code = "NATO_HAZARD", ShortBadge = "!",   NatoMeaning = "Zagrożenie / Strefa No-Go",         Label = "[!] NATO Zagrożenie / Strefa No-Go" }
         };
 
         public static readonly List<TacticalMapLayerDef> Layers = new List<TacticalMapLayerDef>
@@ -577,7 +577,7 @@ namespace FieldTakHub.Builder.Services
 
                     var navBorder = new Border { Background = TacticalConfigPanel.BrushInputBg, BorderBrush = TacticalConfigPanel.BrushAccent, BorderThickness = new Thickness(0, 0, 0, 1.5), Padding = new Thickness(16, 0, 16, 0) };
                     var navDock = new DockPanel();
-                    var rightInfo = new TextBlock { Text = "Field TAK Hub 2.4  •  Silnik 60 FPS  •  Shift = Kąt co 45°  •  Przesuwanie Całych Stref (✥)", Foreground = TacticalConfigPanel.BrushMutedText, FontSize = 11, VerticalAlignment = VerticalAlignment.Center };
+                    var rightInfo = new TextBlock { Text = "Field TAK Hub 2.4  •  Silnik 60 FPS  •  Flaga HQ (Stopka Masztu)  •  Shift = Kąt co 45°", Foreground = TacticalConfigPanel.BrushMutedText, FontSize = 11, VerticalAlignment = VerticalAlignment.Center };
                     DockPanel.SetDock(rightInfo, Dock.Right);
                     navDock.Children.Add(rightInfo);
 
@@ -804,8 +804,8 @@ namespace FieldTakHub.Builder.Services
             sec2.Children.Add(colAndHaloRow);
             leftStack.Children.Add(WrapCard(sec2));
 
-            // SEKCJA 3: ZNACZNIKI (CENTROWANE 1:1), PRZESUWANIE CAŁYCH STREF (✥), ETYKIETY & SHIFT CO 45°
-            var sec3 = CreateSectionCard("3. ZNACZNIKI (1:1), PRZESUWANIE STREF (✥), ETYKIETY & SHIFT 45°");
+            // SEKCJA 3: ZNACZNIKI (FLAGA HQ = DÓŁ MASZTU, INNE = ŚRODEK), PRZESUWANIE CAŁYCH STREF (✥), ETYKIETY & SHIFT CO 45°
+            var sec3 = CreateSectionCard("3. ZNACZNIKI (FLAGA = DÓŁ MASZTU), STREFY (✥), ETYKIETY & SHIFT 45°");
             void UpdateToolButtonsVisual()
             {
                 void StyleTool(Button b, bool active)
@@ -828,7 +828,7 @@ namespace FieldTakHub.Builder.Services
             sec3.Children.Add(_btnToolPan);
 
             var toolsGrid = new UniformGrid { Columns = 2, Margin = new Thickness(0, 0, 0, 6) };
-            _btnToolMarker = MakeActionButton("🚩 Symbol NATO (Środek 1:1)", false, () => { _activeTool = "MARKER"; _activeDraftPoly = null; _fastOverlayRenderer?.InvalidateVisual(); UpdateToolButtonsVisual(); });
+            _btnToolMarker = MakeActionButton("🚩 Symbol NATO (Wektor)", false, () => { _activeTool = "MARKER"; _activeDraftPoly = null; _fastOverlayRenderer?.InvalidateVisual(); UpdateToolButtonsVisual(); });
             _btnToolDot = MakeActionButton("⚫ Kropka (Kolor RGB)", false, () => { _activeTool = "DOT"; _activeDraftPoly = null; _fastOverlayRenderer?.InvalidateVisual(); UpdateToolButtonsVisual(); });
             _btnToolAo = MakeActionButton("🛡️ Teren Gry (Maska poza AO)", false, () => { _activeTool = "AO"; _activeDraftPoly = null; if (_objectNameInputBox != null) _objectNameInputBox.Text = "Granica Terenu Gry"; _fastOverlayRenderer?.InvalidateVisual(); UpdateToolButtonsVisual(); });
             _btnToolSector = MakeActionButton("⬠ Sektor / Strefa (Wypełniony)", false, () => { _activeTool = "SECTOR"; _activeDraftPoly = null; if (_objectNameInputBox != null) _objectNameInputBox.Text = $"Sektor-{_mapObjects.Count + 1}"; _fastOverlayRenderer?.InvalidateVisual(); UpdateToolButtonsVisual(); });
@@ -1240,7 +1240,8 @@ namespace FieldTakHub.Builder.Services
                 Point endPt = e.GetPosition(_interactiveCanvas);
                 if ((endPt - _mouseDownPoint).Length < 5.0 && _activeTool != "PAN")
                 {
-                    HandleMapClickToolAction(win, endPt);
+                    // Używamy dokładnego punktu wciśnięcia przycisku myszy (_mouseDownPoint)
+                    HandleMapClickToolAction(win, _mouseDownPoint);
                     RedrawVectorsOnly();
                     UpdateOfflineTileEstimateUI();
                 }
@@ -1271,7 +1272,7 @@ namespace FieldTakHub.Builder.Services
             mainGrid.Children.Add(bodyGrid);
 
             var bottomBar = new Border { Background = TacticalConfigPanel.BrushInputBg, BorderBrush = TacticalConfigPanel.BrushCardBorder, BorderThickness = new Thickness(0, 1, 0, 0), Padding = new Thickness(16, 0, 16, 0) };
-            _statusText = new TextBlock { Text = "Gotowy. Ikony centrowane 1:1 w miejscu kliknięcia, przesuwanie całych stref (uchwyt ✥), wyłączanie etykiet oraz rysowanie co 45° z klawiszem SHIFT.", Foreground = TacticalConfigPanel.BrushAccent, FontSize = 11, VerticalAlignment = VerticalAlignment.Center };
+            _statusText = new TextBlock { Text = "Gotowy. Flaga HQ zakotwiczona w dolnej części masztu, pozostałe ikony na środku 1:1, uchwyt stref ✥ oraz rysowanie co 45° z klawiszem SHIFT.", Foreground = TacticalConfigPanel.BrushAccent, FontSize = 11, VerticalAlignment = VerticalAlignment.Center };
             bottomBar.Child = _statusText; Grid.SetRow(bottomBar, 1); mainGrid.Children.Add(bottomBar);
 
             UpdateOfflineTileEstimateUI();
@@ -2360,12 +2361,12 @@ namespace FieldTakHub.Builder.Services
             Canvas.SetLeft(b, x); Canvas.SetTop(b, y); _interactiveCanvas.Children.Add(b);
         }
 
-        private static void AttachCenteredMarkerDragHandler(UIElement el, TacticalMapObjectItem obj, Point exactMarkerCenterScreenPt)
+        private static void AttachCenteredMarkerDragHandler(UIElement el, TacticalMapObjectItem obj, Point exactMarkerAnchorScreenPt, string tooltipSuffix = "środek 1:1")
         {
             if (el is FrameworkElement fe)
             {
                 fe.Cursor = Cursors.SizeAll;
-                fe.ToolTip = $"Przeciągnij myszą, aby przesunąć: {obj.Name} (środek 1:1)";
+                fe.ToolTip = $"Przeciągnij myszą, aby przesunąć: {obj.Name} ({tooltipSuffix})";
             }
             el.MouseLeftButtonDown += (s, e) =>
             {
@@ -2373,11 +2374,14 @@ namespace FieldTakHub.Builder.Services
                 _draggedObject = obj;
                 _draggedVertexIndex = 0;
                 Point mousePt = e.GetPosition(_interactiveCanvas);
-                _markerDragScreenOffset = new Point(mousePt.X - exactMarkerCenterScreenPt.X, mousePt.Y - exactMarkerCenterScreenPt.Y);
+                _markerDragScreenOffset = new Point(mousePt.X - exactMarkerAnchorScreenPt.X, mousePt.Y - exactMarkerAnchorScreenPt.Y);
                 _interactiveCanvas.CaptureMouse();
             };
         }
 
+        // =========================================================================
+        // RYSOWANIE ZNAKÓW NATO: DLA FLAGI (NATO_HQ) PUNKT KLIKNIĘCIA TO DOLNA CZĘŚĆ MASZTU, DLA POZOSTAŁYCH ŚRODEK 1:1
+        // =========================================================================
         private static void DrawNatoVectorSymbolOnCanvas(Point pt, TacticalMapObjectItem obj)
         {
             string symbolCode = obj.SymbolCode ?? "NATO_HQ";
@@ -2391,6 +2395,60 @@ namespace FieldTakHub.Builder.Services
             var fillBrush = new SolidColorBrush(Color.FromArgb(185, c.R, c.G, c.B)); fillBrush.Freeze();
             var darkBgBrush = new SolidColorBrush(Color.FromArgb(225, 8, 16, 20)); darkBgBrush.Freeze();
 
+            // Specjalna obsługa dla znacznika w kształcie flagi (NATO_HQ): punkt kliknięcia (pt.X, pt.Y) to dolny koniec masztu!
+            if (symbolCode == "NATO_HQ")
+            {
+                const double flagBoxW = 36.0, flagBoxH = 36.0;
+                const double poleX = 4.0;
+                const double poleTopY = 2.0;
+                const double poleBottomY = 32.0; // Punkt kotwiczenia (dolna część masztu)
+                const double flagW = 28.0, flagH = 17.0;
+
+                var flagCanvas = new Canvas
+                {
+                    Width = flagBoxW,
+                    Height = flagBoxH,
+                    Background = Brushes.Transparent
+                };
+                AttachCenteredMarkerDragHandler(flagCanvas, obj, pt, "dolna część masztu flagi");
+
+                // Maszt flagi (od góry chorągiewki do dolnego punktu kotwiczenia poleBottomY)
+                flagCanvas.Children.Add(new Line { X1 = poleX, Y1 = poleTopY, X2 = poleX, Y2 = poleBottomY, Stroke = Brushes.Black, StrokeThickness = 4.4 });
+                flagCanvas.Children.Add(new Line { X1 = poleX, Y1 = poleTopY, X2 = poleX, Y2 = poleBottomY, Stroke = strokeBrush, StrokeThickness = 2.4 });
+
+                // Wyraźna stopka u dołu masztu wskazująca dokładny punkt kliknięcia
+                var baseDot = new Ellipse { Width = 6, Height = 6, Fill = Brushes.White, Stroke = Brushes.Black, StrokeThickness = 1.2 };
+                Canvas.SetLeft(baseDot, poleX - 3.0);
+                Canvas.SetTop(baseDot, poleBottomY - 3.0);
+                flagCanvas.Children.Add(baseDot);
+
+                // Prostokąt chorągiewki HQ na szczycie masztu (rozwinięty w prawo od masztu)
+                var hqHalo = new Rectangle { Width = flagW + 2, Height = flagH + 2, Stroke = Brushes.Black, StrokeThickness = 3.0, Fill = darkBgBrush };
+                Canvas.SetLeft(hqHalo, poleX - 1);
+                Canvas.SetTop(hqHalo, poleTopY - 1);
+                flagCanvas.Children.Add(hqHalo);
+
+                var hqRect = new Rectangle { Width = flagW, Height = flagH, Stroke = strokeBrush, StrokeThickness = 2.0, Fill = fillBrush };
+                Canvas.SetLeft(hqRect, poleX);
+                Canvas.SetTop(hqRect, poleTopY);
+                flagCanvas.Children.Add(hqRect);
+
+                var hqTxt = new TextBlock { Text = "HQ", Foreground = Brushes.White, FontSize = 9.5, FontWeight = FontWeights.Bold };
+                Canvas.SetLeft(hqTxt, poleX + 6);
+                Canvas.SetTop(hqTxt, poleTopY + 2);
+                flagCanvas.Children.Add(hqTxt);
+
+                // Osadzamy kontener tak, aby (poleX, poleBottomY) znalazł się dokładnie w miejscu kliknięcia (pt.X, pt.Y)
+                Canvas.SetLeft(flagCanvas, pt.X - poleX);
+                Canvas.SetTop(flagCanvas, pt.Y - poleBottomY);
+                _interactiveCanvas.Children.Add(flagCanvas);
+
+                if (_showAllObjectLabels && obj.ShowLabel && !string.IsNullOrWhiteSpace(name))
+                    AddHaloLabel(name, pt.X + flagW + 5, pt.Y - poleBottomY + 1, strokeBrush, 10 * _fontScaleMultiplier);
+                return;
+            }
+
+            // Wszystkie pozostałe znaki NATO: środek geometryczny (cx = 18, cy = 14) pokrywa się 1:1 z punktem kliknięcia (pt.X, pt.Y)
             const double boxW = 36.0, boxH = 28.0;
             const double cx = 18.0, cy = 14.0;
             const double fw = 28.0, fh = 18.0;
@@ -2414,14 +2472,6 @@ namespace FieldTakHub.Builder.Services
 
             switch (symbolCode)
             {
-                case "NATO_HQ":
-                    AddBoxToIconCanvas();
-                    iconCanvas.Children.Add(new Line { X1 = left, Y1 = top, X2 = left, Y2 = boxH, Stroke = Brushes.Black, StrokeThickness = 3.8 });
-                    iconCanvas.Children.Add(new Line { X1 = left, Y1 = top, X2 = left, Y2 = boxH, Stroke = strokeBrush, StrokeThickness = 2.2 });
-                    var hqTxt = new TextBlock { Text = "HQ", Foreground = Brushes.White, FontSize = 9.5, FontWeight = FontWeights.Bold };
-                    Canvas.SetLeft(hqTxt, cx - 7); Canvas.SetTop(hqTxt, cy - 6); iconCanvas.Children.Add(hqTxt);
-                    break;
-
                 case "NATO_INF":
                     AddBoxToIconCanvas();
                     iconCanvas.Children.Add(new Line { X1 = left, Y1 = top, X2 = left + fw, Y2 = top + fh, Stroke = Brushes.White, StrokeThickness = 1.8 });
