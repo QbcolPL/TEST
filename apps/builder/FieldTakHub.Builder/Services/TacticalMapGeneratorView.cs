@@ -8,6 +8,7 @@ using System.IO.Compression;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -63,7 +64,134 @@ namespace FieldTakHub.Builder.Services
         public List<(double Lat, double Lon)> Points { get; set; } = new List<(double Lat, double Lon)>();
     }
 
-    // Sprzętowo akcelerowana warstwa rysująca siatkę MGRS/Keypad, maskę AO i sektory w < 0.5 ms (60 FPS bez klatkowania)
+    // Niskopoziomowy interfejs do systemowego silnika SQLite wbudowanego w Windows 10/11 (winsqlite3.dll)
+    internal static class NativeSqliteWriter
+    {
+        private const string SqliteDll = "winsqlite3.dll";
+
+        [DllImport(SqliteDll, CallingConvention = CallingConvention.Cdecl)]
+        private static extern int sqlite3_open(byte[] filenameUtf8, out IntPtr db);
+
+        [DllImport(SqliteDll, CallingConvention = CallingConvention.Cdecl)]
+        private static extern int sqlite3_close(IntPtr db);
+
+        [DllImport(SqliteDll, CallingConvention = CallingConvention.Cdecl)]
+        private static extern int sqlite3_exec(IntPtr db, byte[] sqlUtf8, IntPtr callback, IntPtr arg, out IntPtr errMsg);
+
+        [DllImport(SqliteDll, CallingConvention = CallingConvention.Cdecl)]
+        private static extern int sqlite3_prepare_v2(IntPtr db, byte[] sqlUtf8, int nByte, out IntPtr stmt, IntPtr pzTail);
+
+        [DllImport(SqliteDll, CallingConvention = CallingConvention.Cdecl)]
+        private static extern int sqlite3_bind_int(IntPtr stmt, int index, int val);
+
+        [DllImport(SqliteDll, CallingConvention = CallingConvention.Cdecl)]
+        private static extern int sqlite3_bind_blob(IntPtr stmt, int index, byte[] data, int nData, IntPtr destructor);
+
+        [DllImport(SqliteDll, CallingConvention = CallingConvention.Cdecl)]
+        private static extern int sqlite3_step(IntPtr stmt);
+
+        [DllImport(SqliteDll, CallingConvention = CallingConvention.Cdecl)]
+        private static extern int sqlite3_reset(IntPtr stmt);
+
+        [DllImport(SqliteDll, CallingConvention = CallingConvention.Cdecl)]
+        private static extern int sqlite3_finalize(IntPtr stmt);
+
+        private static byte[] ToUtf8NullTerm(string s) => Encoding.UTF8.GetBytes((s ?? "") + "\0");
+
+        private static void ExecSql(IntPtr db, string sql)
+        {
+            sqlite3_exec(db, ToUtf8NullTerm(sql), IntPtr.Zero, IntPtr.Zero, out _);
+        }
+
+        public static void WriteMbTilesDatabase(string filePath, string mapTitle, int minZoom, int maxZoom, double north, double south, double east, double west, List<(int Z, int X, int Y, byte[] Data)> tiles)
+        {
+            if (File.Exists(filePath)) File.Delete(filePath);
+            if (sqlite3_open(ToUtf8NullTerm(filePath), out IntPtr db) != 0) return;
+            try
+            {
+                ExecSql(db, "PRAGMA synchronous = OFF; PRAGMA journal_mode = MEMORY;");
+                ExecSql(db, "CREATE TABLE metadata (name text, value text);");
+                ExecSql(db, "CREATE TABLE tiles (zoom_level integer, tile_column integer, tile_row integer, tile_data blob);");
+                ExecSql(db, "CREATE UNIQUE INDEX tile_index on tiles (zoom_level, tile_column, tile_row);");
+
+                string bounds = string.Create(CultureInfo.InvariantCulture, $"{west:0.000000},{south:0.000000},{east:0.000000},{north:0.000000}");
+                string center = string.Create(CultureInfo.InvariantCulture, $"{(west + east) / 2.0:0.000000},{(south + north) / 2.0:0.000000},{minZoom}");
+                string safeTitle = (mapTitle ?? "FieldTakHub_Map").Replace("'", "");
+
+                ExecSql(db, "BEGIN TRANSACTION;");
+                ExecSql(db, $"INSERT INTO metadata VALUES ('name', '{safeTitle}');");
+                ExecSql(db, "INSERT INTO metadata VALUES ('type', 'baselayer');");
+                ExecSql(db, "INSERT INTO metadata VALUES ('version', '1.2');");
+                ExecSql(db, "INSERT INTO metadata VALUES ('description', 'Field TAK Hub 2.4 Offline Map');");
+                ExecSql(db, "INSERT INTO metadata VALUES ('format', 'jpg');");
+                ExecSql(db, $"INSERT INTO metadata VALUES ('bounds', '{bounds}');");
+                ExecSql(db, $"INSERT INTO metadata VALUES ('center', '{center}');");
+                ExecSql(db, $"INSERT INTO metadata VALUES ('minzoom', '{minZoom}');");
+                ExecSql(db, $"INSERT INTO metadata VALUES ('maxzoom', '{maxZoom}');");
+
+                byte[] insSql = ToUtf8NullTerm("INSERT OR REPLACE INTO tiles (zoom_level, tile_column, tile_row, tile_data) VALUES (?, ?, ?, ?);");
+                if (sqlite3_prepare_v2(db, insSql, insSql.Length, out IntPtr stmt, IntPtr.Zero) == 0)
+                {
+                    try
+                    {
+                        foreach (var t in tiles)
+                        {
+                            if (t.Data == null || t.Data.Length == 0) continue;
+                            int tmsY = (1 << t.Z) - 1 - t.Y; // Konwersja XYZ -> TMS dla standardu MBTiles
+                            sqlite3_bind_int(stmt, 1, t.Z);
+                            sqlite3_bind_int(stmt, 2, t.X);
+                            sqlite3_bind_int(stmt, 3, tmsY);
+                            sqlite3_bind_blob(stmt, 4, t.Data, t.Data.Length, IntPtr.Zero);
+                            sqlite3_step(stmt);
+                            sqlite3_reset(stmt);
+                        }
+                    }
+                    finally { sqlite3_finalize(stmt); }
+                }
+                ExecSql(db, "COMMIT;");
+            }
+            finally { sqlite3_close(db); }
+        }
+
+        public static void WriteAtakMobacSqliteDatabase(string filePath, int minZoom, int maxZoom, List<(int Z, int X, int Y, byte[] Data)> tiles)
+        {
+            if (File.Exists(filePath)) File.Delete(filePath);
+            if (sqlite3_open(ToUtf8NullTerm(filePath), out IntPtr db) != 0) return;
+            try
+            {
+                ExecSql(db, "PRAGMA synchronous = OFF; PRAGMA journal_mode = MEMORY;");
+                ExecSql(db, "CREATE TABLE info (minzoom INTEGER, maxzoom INTEGER);");
+                ExecSql(db, "CREATE TABLE tiles (x int, y int, z int, s int, image blob, PRIMARY KEY (x,y,z,s));");
+                ExecSql(db, "CREATE INDEX IND on tiles (x,y,z,s);");
+
+                ExecSql(db, "BEGIN TRANSACTION;");
+                ExecSql(db, $"INSERT INTO info VALUES ({17 - maxZoom}, {17 - minZoom});");
+
+                byte[] insSql = ToUtf8NullTerm("INSERT OR REPLACE INTO tiles (x, y, z, s, image) VALUES (?, ?, ?, 0, ?);");
+                if (sqlite3_prepare_v2(db, insSql, insSql.Length, out IntPtr stmt, IntPtr.Zero) == 0)
+                {
+                    try
+                    {
+                        foreach (var t in tiles)
+                        {
+                            if (t.Data == null || t.Data.Length == 0) continue;
+                            int bigPlanetZ = 17 - t.Z; // Konwersja zoomu dla czytnika BigPlanet / MOBAC w ATAK
+                            sqlite3_bind_int(stmt, 1, t.X);
+                            sqlite3_bind_int(stmt, 2, t.Y);
+                            sqlite3_bind_int(stmt, 3, bigPlanetZ);
+                            sqlite3_bind_blob(stmt, 4, t.Data, t.Data.Length, IntPtr.Zero);
+                            sqlite3_step(stmt);
+                            sqlite3_reset(stmt);
+                        }
+                    }
+                    finally { sqlite3_finalize(stmt); }
+                }
+                ExecSql(db, "COMMIT;");
+            }
+            finally { sqlite3_close(db); }
+        }
+    }
+
     internal sealed class FastTacticalOverlayRenderer : FrameworkElement
     {
         private readonly Action<DrawingContext, double, double> _renderCallback;
@@ -170,17 +298,26 @@ namespace FieldTakHub.Builder.Services
         private static Image _lidarOverlayImage;
         private static Button _tabBuilderBtn, _tabMapBtn, _btnToolPan, _btnToolMarker, _btnToolDot, _btnToolAo, _btnToolSector, _btnToolRoute;
         private static readonly List<Button> _scalePresetButtons = new List<Button>();
-        private static TextBlock _statusText, _coordsBadge, _sheetInfoBadge;
+        private static TextBlock _statusText, _coordsBadge, _sheetInfoBadge, _offlineEstimateLabel, _offlineProgressLabel;
+        private static ProgressBar _offlineProgressBar;
         private static StackPanel _objectsListStack;
         private static WrapPanel _factionsCheckboxesWrap;
         private static readonly HashSet<string> _selectedMapFactions = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        private static CancellationTokenSource _renderCts;
+        private static CancellationTokenSource _renderCts, _offlineDownloadCts;
 
         private static double _centerLat = 49.9135, _centerLon = 19.0238, _dragStartLat, _dragStartLon;
         private static int _zoom = 16, _targetScaleDenominator = 5000;
         private static SheetFormatDef _selectedSheet = SheetFormats[0];
         private static string _sheetOrientation = "Poziomo";
         private static bool _showLidarSingleWms;
+
+        // Ustawienia generatora map offline (.mbtiles / .sqlite)
+        private static int _offlineMinZoom = 13;
+        private static int _offlineMaxZoom = 17;
+        private static string _offlineBoundsMode = "Widoczny arkusz mapy";
+        private static string _offlineDbFormat = "MBTiles (.mbtiles — ATAK 5.x)";
+        private static bool _bakeLidarInOffline = true;
+        private static bool _includeVectorsWithOffline = true;
 
         private static string _coordSystem = "MGRS / UTM (Siatka wojskowa w metrach)";
         private static string _subGridDivision = "Co 33 m (Keypad 1-9)";
@@ -307,9 +444,10 @@ namespace FieldTakHub.Builder.Services
             double realHM = (hMm / 1000.0) * _targetScaleDenominator;
             if (_sheetInfoBadge != null)
                 _sheetInfoBadge.Text = $"📄 Arkusz: {_selectedSheet.Name.Split('—')[0].Trim()} ({_sheetOrientation}: {wMm:0}×{hMm:0} mm)  •  Skala 1:{_targetScaleDenominator:N0}  •  Wycinek terenu: {realWM:0} m × {realHM:0} m";
+
+            UpdateOfflineTileEstimateUI();
         }
 
-        // Tworzy czerwony przycisk z białym minusem "−" identyczny jak w Generatorze Stron Konfliktu
         private static Border CreateRedMinusDeleteButton(string tooltip, Action onClick)
         {
             var border = new Border
@@ -338,13 +476,12 @@ namespace FieldTakHub.Builder.Services
             return border;
         }
 
-        // Odświeża listę checkboxów wyboru stron konfliktu, których dotyczy mapa
         private static void RebuildFactionCheckboxesUI()
         {
             if (_factionsCheckboxesWrap == null) return;
             var configured = TacticalConfigPanel.GetConfiguredFactions();
             if (_selectedMapFactions.Count == 0 && configured.Count > 0)
-                _selectedMapFactions.Add(configured[0].Name); // Domyślnie zaznacz pierwszą stronę (np. BLUFOR), a nie wszystkie naraz!
+                _selectedMapFactions.Add(configured[0].Name);
 
             _factionsCheckboxesWrap.Children.Clear();
             foreach (var fac in configured)
@@ -408,7 +545,7 @@ namespace FieldTakHub.Builder.Services
 
                     var navBorder = new Border { Background = TacticalConfigPanel.BrushInputBg, BorderBrush = TacticalConfigPanel.BrushAccent, BorderThickness = new Thickness(0, 0, 0, 1.5), Padding = new Thickness(16, 0, 16, 0) };
                     var navDock = new DockPanel();
-                    var rightInfo = new TextBlock { Text = "Field TAK Hub 2.4  •  Silnik 60 FPS  •  Słownik NATO APP-6  •  Wybór Stron Konfliktu", Foreground = TacticalConfigPanel.BrushMutedText, FontSize = 11, VerticalAlignment = VerticalAlignment.Center };
+                    var rightInfo = new TextBlock { Text = "Field TAK Hub 2.4  •  Silnik 60 FPS  •  Offline Multi-Zoom (.mbtiles / .sqlite)  •  NATO APP-6", Foreground = TacticalConfigPanel.BrushMutedText, FontSize = 11, VerticalAlignment = VerticalAlignment.Center };
                     DockPanel.SetDock(rightInfo, Dock.Right);
                     navDock.Children.Add(rightInfo);
 
@@ -499,7 +636,7 @@ namespace FieldTakHub.Builder.Services
             mainGrid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(32) });
 
             var bodyGrid = new Grid();
-            bodyGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(435) });
+            bodyGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(440) });
             bodyGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
 
             var leftScroll = new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Background = TacticalConfigPanel.BrushCardBg, Padding = new Thickness(10) };
@@ -510,7 +647,6 @@ namespace FieldTakHub.Builder.Services
             // =====================================================================
             var sec1 = CreateSectionCard("1. STRONY KONFLIKTU, FORMAT ARKUSZA (A3–A6 / MAPNIK) & SKALA 1:X");
 
-            // Wybór w checkboxach, których stron konfliktu dotyczy przygotowywana mapa
             var facSelectBorder = new Border { Background = TacticalConfigPanel.BrushInputBg, BorderBrush = TacticalConfigPanel.BrushInputBorder, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(6), Padding = new Thickness(8, 6, 8, 6), Margin = new Thickness(0, 0, 0, 6) };
             var facSelectStack = new StackPanel();
             var facHeaderDock = new DockPanel { Margin = new Thickness(0, 0, 0, 4) };
@@ -613,7 +749,7 @@ namespace FieldTakHub.Builder.Services
             leftStack.Children.Add(WrapCard(sec1));
 
             // =====================================================================
-            // SEKCJA 2: SIATKA MGRS / KEYPAD & KONTROLA CZYTELNOŚCI MAPY (SUWAKI POINT-CLICK)
+            // SEKCJA 2: SIATKA MGRS / KEYPAD & KONTROLA CZYTELNOŚCI MAPY
             // =====================================================================
             var sec2 = CreateSectionCard("2. SIATKA MGRS / KEYPAD & KONTROLA CZYTELNOŚCI MAPY");
             sec2.Children.Add(TacticalConfigPanel.FieldBox("System współrzędnych i typ siatki na mapie:", TacticalConfigPanel.ComboCtrl(new[] { "MGRS / UTM (Siatka wojskowa w metrach)", "Siatka Sektorowa (A1, B2, C3...)", "WGS84 (Stopnie geograficzne Lat/Lon)", "Brak siatki" }, _coordSystem, win, v => { _coordSystem = v; _fastOverlayRenderer?.InvalidateVisual(); })));
@@ -641,7 +777,7 @@ namespace FieldTakHub.Builder.Services
             leftStack.Children.Add(WrapCard(sec2));
 
             // =====================================================================
-            // SEKCJA 3: ZNACZNIKI (DRAG & DROP), TEREN GRY (MASKA AO) & SEKTORY (Z CZERWONYM MINUSEM "−")
+            // SEKCJA 3: ZNACZNIKI (DRAG & DROP), TEREN GRY (MASKA AO) & SEKTORY
             // =====================================================================
             var sec3 = CreateSectionCard("3. ZNACZNIKI (DRAG & DROP), TEREN GRY (MASKA AO) & SEKTORY");
             void UpdateToolButtonsVisual()
@@ -741,7 +877,7 @@ namespace FieldTakHub.Builder.Services
             sec3.Children.Add(objCfgRow);
 
             sec3.Children.Add(new TextBlock { Text = "Naniesione obiekty (edytuj nazwę na żywo, kliknij kolor lub czerwony −):", Foreground = TacticalConfigPanel.BrushMutedText, FontSize = 10, Margin = new Thickness(0, 0, 0, 3) });
-            var objListBorder = new Border { Background = TacticalConfigPanel.BrushInputBg, BorderBrush = TacticalConfigPanel.BrushInputBorder, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(4), MinHeight = 52, MaxHeight = 140, Padding = new Thickness(6) };
+            var objListBorder = new Border { Background = TacticalConfigPanel.BrushInputBg, BorderBrush = TacticalConfigPanel.BrushInputBorder, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(4), MinHeight = 52, MaxHeight = 135, Padding = new Thickness(6) };
             var objListScroll = new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
             _objectsListStack = new StackPanel();
             objListScroll.Content = _objectsListStack; objListBorder.Child = objListScroll;
@@ -750,7 +886,7 @@ namespace FieldTakHub.Builder.Services
             leftStack.Children.Add(WrapCard(sec3));
 
             // =====================================================================
-            // SEKCJA 4: ELEMENTY MAPY (Z OBJAŚNIENIEM SYMBOLI NATO W LEGENDZIE) & EKSPORT
+            // SEKCJA 4: ELEMENTY MAPY (SŁOWNIK NATO W LEGENDZIE + DRAG & DROP) & EKSPORT ARKUSZA
             // =====================================================================
             var sec4 = CreateSectionCard("4. ELEMENTY MAPY (SŁOWNIK NATO W LEGENDZIE + DRAG & DROP) & EKSPORT");
             var hudChkGrid = new UniformGrid { Columns = 2, Margin = new Thickness(0, 0, 0, 6) };
@@ -778,8 +914,8 @@ namespace FieldTakHub.Builder.Services
             var expRow1 = new UniformGrid { Columns = 2, Margin = new Thickness(0, 0, 0, 6) };
             var btnGpx = MakeActionButton("⌚ Pobierz .GPX (Garmin/ATAK)", false, async () => await ExportStandaloneFilesAsync(win, "gpx"));
             var btnKmz = MakeActionButton("📦 Pobierz .KMZ (GRG ATAK)", false, async () => await ExportStandaloneFilesAsync(win, "kmz"));
-            btnGpx.Height = 32; btnGpx.Margin = new Thickness(0, 0, 3, 0); btnGpx.BorderBrush = TacticalConfigPanel.BrushAccent;
-            btnKmz.Height = 32; btnKmz.Margin = new Thickness(3, 0, 0, 0); btnKmz.BorderBrush = TacticalConfigPanel.BrushAccent;
+            btnGpx.Height = 30; btnGpx.Margin = new Thickness(0, 0, 3, 0); btnGpx.BorderBrush = TacticalConfigPanel.BrushAccent;
+            btnKmz.Height = 30; btnKmz.Margin = new Thickness(3, 0, 0, 0); btnKmz.BorderBrush = TacticalConfigPanel.BrushAccent;
             expRow1.Children.Add(btnGpx); expRow1.Children.Add(btnKmz);
             sec4.Children.Add(expRow1);
 
@@ -787,17 +923,100 @@ namespace FieldTakHub.Builder.Services
             var btnPdf = MakeActionButton("🖨️ Drukuj / PDF", false, async () => await ExportTacticalMapPdfAsync(win));
             var btnSaveJson = MakeActionButton("💾 Zapisz .json", false, () => SaveMapProjectJson());
             var btnLoadJson = MakeActionButton("📂 Wczytaj", false, () => LoadMapProjectJsonOrKml(win));
-            btnPdf.Height = 30; btnPdf.Margin = new Thickness(0, 0, 3, 0); btnPdf.BorderBrush = TacticalConfigPanel.BrushAccent;
-            btnSaveJson.Height = 30; btnSaveJson.Margin = new Thickness(2, 0, 2, 0);
-            btnLoadJson.Height = 30; btnLoadJson.Margin = new Thickness(3, 0, 0, 0);
+            btnPdf.Height = 28; btnPdf.Margin = new Thickness(0, 0, 3, 0); btnPdf.BorderBrush = TacticalConfigPanel.BrushAccent;
+            btnSaveJson.Height = 28; btnSaveJson.Margin = new Thickness(2, 0, 2, 0);
+            btnLoadJson.Height = 28; btnLoadJson.Margin = new Thickness(3, 0, 0, 0);
             expRow2.Children.Add(btnPdf); expRow2.Children.Add(btnSaveJson); expRow2.Children.Add(btnLoadJson);
             sec4.Children.Add(expRow2);
 
-            var btnAddToFtak = MakeActionButton("⚡ Zapisz bezpośrednio do paczki .ftak (dla zaznaczonych stron)", true, async () => await ExportMapToFtakSourceAsync(win));
-            btnAddToFtak.Height = 32;
+            var btnAddToFtak = MakeActionButton("⚡ Zapisz arkusz .KMZ / .GPX do paczki .ftak (dla zaznaczonych stron)", true, async () => await ExportMapToFtakSourceAsync(win));
+            btnAddToFtak.Height = 30;
             sec4.Children.Add(btnAddToFtak);
-
             leftStack.Children.Add(WrapCard(sec4));
+
+            // =====================================================================
+            // SEKCJA 5 (ETAP 3): GENERATOR MAP OFFLINE MULTI-ZOOM (.MBTILES / .SQLITE DLA ATAK)
+            // =====================================================================
+            var sec5 = CreateSectionCard("5. GENERATOR MAP OFFLINE MULTI-ZOOM (.MBTILES / .SQLITE DLA ATAK)");
+            sec5.Children.Add(new TextBlock
+            {
+                Text = "Pobiera piramidę kafelków na wielu przybliżeniach (np. Zoom 13–17) i buduje bazę danych SQLite do pracy w 100% offline w lesie bez zasięgu LTE.",
+                Foreground = TacticalConfigPanel.BrushMutedText,
+                FontSize = 9.5,
+                TextWrapping = TextWrapping.Wrap,
+                Margin = new Thickness(0, 0, 0, 6)
+            });
+
+            var zoomRangeGrid = new UniformGrid { Columns = 2, Margin = new Thickness(0, 0, 0, 4) };
+            zoomRangeGrid.Children.Add(TacticalConfigPanel.FieldBox("Od Zoom (Min — ogólny):", TacticalConfigPanel.ComboCtrl(new[] { "11", "12", "13", "14", "15", "16" }, _offlineMinZoom.ToString(), win, v =>
+            {
+                if (int.TryParse(v, out int z)) { _offlineMinZoom = z; if (_offlineMaxZoom < _offlineMinZoom) _offlineMaxZoom = _offlineMinZoom; UpdateOfflineTileEstimateUI(); }
+            })));
+            zoomRangeGrid.Children.Add(TacticalConfigPanel.FieldBox("Do Zoom (Max — detale):", TacticalConfigPanel.ComboCtrl(new[] { "14", "15", "16", "17", "18", "19" }, _offlineMaxZoom.ToString(), win, v =>
+            {
+                if (int.TryParse(v, out int z)) { _offlineMaxZoom = Math.Max(_offlineMinZoom, z); UpdateOfflineTileEstimateUI(); }
+            })));
+            sec5.Children.Add(zoomRangeGrid);
+
+            var fmtAndBoundsGrid = new UniformGrid { Columns = 2, Margin = new Thickness(0, 0, 0, 4) };
+            fmtAndBoundsGrid.Children.Add(TacticalConfigPanel.FieldBox("Obszar pobierania:", TacticalConfigPanel.ComboCtrl(new[] { "Widoczny arkusz mapy", "Granica Terenu Gry (AO)" }, _offlineBoundsMode, win, v => { _offlineBoundsMode = v; UpdateOfflineTileEstimateUI(); })));
+            fmtAndBoundsGrid.Children.Add(TacticalConfigPanel.FieldBox("Format bazy danych ATAK:", TacticalConfigPanel.ComboCtrl(new[] { "MBTiles (.mbtiles — ATAK 5.x)", "ATAK / MOBAC (.sqlite)", "Oba (.mbtiles + .sqlite)" }, _offlineDbFormat, win, v => _offlineDbFormat = v)));
+            sec5.Children.Add(fmtAndBoundsGrid);
+
+            var chkBakeLidar = new CheckBox
+            {
+                Content = "Wypal rzeźbę LiDAR ISOK bezpośrednio na kafelkach offline (jeśli LiDAR włączony)",
+                IsChecked = _bakeLidarInOffline,
+                Foreground = Brushes.White,
+                FontSize = 9.5,
+                Margin = new Thickness(0, 2, 0, 3)
+            };
+            chkBakeLidar.Checked += (_, __) => _bakeLidarInOffline = true;
+            chkBakeLidar.Unchecked += (_, __) => _bakeLidarInOffline = false;
+            sec5.Children.Add(chkBakeLidar);
+
+            var chkIncludeVec = new CheckBox
+            {
+                Content = "Dołącz automatycznie warstwy wektorowe (.KMZ / .GPX) obok bazy offline",
+                IsChecked = _includeVectorsWithOffline,
+                Foreground = Brushes.White,
+                FontSize = 9.5,
+                Margin = new Thickness(0, 0, 0, 6)
+            };
+            chkIncludeVec.Checked += (_, __) => _includeVectorsWithOffline = true;
+            chkIncludeVec.Unchecked += (_, __) => _includeVectorsWithOffline = false;
+            sec5.Children.Add(chkIncludeVec);
+
+            var estBorder = new Border { Background = TacticalConfigPanel.BrushInputBg, BorderBrush = TacticalConfigPanel.BrushTileBorder, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(5), Padding = new Thickness(8, 5, 8, 5), Margin = new Thickness(0, 0, 0, 6) };
+            var estStack = new StackPanel();
+            _offlineEstimateLabel = new TextBlock { Text = "Do pobrania: wyliczanie...", Foreground = TacticalConfigPanel.BrushAccent, FontSize = 10, FontWeight = FontWeights.Bold };
+            _offlineProgressLabel = new TextBlock { Text = "Gotowy do budowy bazy offline.", Foreground = TacticalConfigPanel.BrushMutedText, FontSize = 9.5, Margin = new Thickness(0, 2, 0, 4) };
+            _offlineProgressBar = new ProgressBar { Minimum = 0, Maximum = 100, Value = 0, Height = 8, Background = TacticalConfigPanel.BrushItemBg, Foreground = TacticalConfigPanel.BrushButtonAccent, BorderThickness = new Thickness(0) };
+            estStack.Children.Add(_offlineEstimateLabel);
+            estStack.Children.Add(_offlineProgressLabel);
+            estStack.Children.Add(_offlineProgressBar);
+            estBorder.Child = estStack;
+            sec5.Children.Add(estBorder);
+
+            var offBtnsRow = new Grid { Margin = new Thickness(0, 0, 0, 6) };
+            offBtnsRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            offBtnsRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(90) });
+
+            var btnDownloadStandaloneOffline = MakeActionButton("📥 Pobierz bazę Offline (do release_maps)", false, async () => await BuildMultiZoomOfflineDatabaseAsync(win, false));
+            btnDownloadStandaloneOffline.Height = 30; btnDownloadStandaloneOffline.Margin = new Thickness(0, 0, 4, 0); btnDownloadStandaloneOffline.BorderBrush = TacticalConfigPanel.BrushAccent;
+
+            var btnCancelOffline = MakeActionButton("⏹ Przerwij", false, () => _offlineDownloadCts?.Cancel());
+            btnCancelOffline.Height = 30; btnCancelOffline.Background = TacticalConfigPanel.BrushRedMinus; btnCancelOffline.BorderBrush = Brushes.White;
+
+            Grid.SetColumn(btnDownloadStandaloneOffline, 0); Grid.SetColumn(btnCancelOffline, 1);
+            offBtnsRow.Children.Add(btnDownloadStandaloneOffline); offBtnsRow.Children.Add(btnCancelOffline);
+            sec5.Children.Add(offBtnsRow);
+
+            var btnBuildOfflineToFtak = MakeActionButton("⚡ Buduj bazę Offline (.mbtiles / .sqlite) prosto do paczki .ftak", true, async () => await BuildMultiZoomOfflineDatabaseAsync(win, true));
+            btnBuildOfflineToFtak.Height = 32;
+            sec5.Children.Add(btnBuildOfflineToFtak);
+
+            leftStack.Children.Add(WrapCard(sec5));
             leftScroll.Content = leftStack; Grid.SetColumn(leftScroll, 0); bodyGrid.Children.Add(leftScroll);
 
             // =====================================================================
@@ -865,6 +1084,7 @@ namespace FieldTakHub.Builder.Services
                     _activeDraftPoly = null;
                     RefreshObjectsListUI(win);
                     RedrawVectorsOnly();
+                    UpdateOfflineTileEstimateUI();
                     return;
                 }
                 Point p = e.GetPosition(_interactiveCanvas);
@@ -883,7 +1103,6 @@ namespace FieldTakHub.Builder.Services
                 if (_coordsBadge != null)
                     _coordsBadge.Text = $"WGS84: {hoverLat:0.00000}, {hoverLon:0.00000}  |  Skala 1:{_targetScaleDenominator:N0} ({GetExactMetersPerPixel():0.00} m/px)  |  LPM = Przesuń element / mapę  |  PPM = Dalmierz / Zamknij poligon";
 
-                // 1. Przeciąganie elementu HUD (0 narzutu — przesuwamy wyłącznie pojedynczy Border!)
                 if (_draggedHudId != null && _draggedHudElement != null)
                 {
                     double nx = Math.Clamp(p.X - _hudStartOffset.X, 4, Math.Max(10, w - _draggedHudElement.Width - 4));
@@ -896,7 +1115,6 @@ namespace FieldTakHub.Builder.Services
                     return;
                 }
 
-                // 2. Przeciąganie wierzchołka lub znacznika
                 if (_draggedObject != null && _draggedVertexIndex >= 0 && _draggedVertexIndex < _draggedObject.Points.Count)
                 {
                     _draggedObject.Points[_draggedVertexIndex] = (hoverLat, hoverLon);
@@ -907,7 +1125,6 @@ namespace FieldTakHub.Builder.Services
                     return;
                 }
 
-                // 3. Przesuwanie mapy (60 FPS — bez przebudowy drzewa kontrolek podczas ruchu myszy!)
                 if (_isPanningMap && _activeTool == "PAN")
                 {
                     double dx = p.X - _mouseDownPoint.X, dy = p.Y - _mouseDownPoint.Y;
@@ -934,6 +1151,7 @@ namespace FieldTakHub.Builder.Services
                     _draggedVertexIndex = -1;
                     _interactiveCanvas.ReleaseMouseCapture();
                     RedrawVectorsOnly();
+                    UpdateOfflineTileEstimateUI();
                     return;
                 }
                 if (!_isPanningMap) return;
@@ -946,10 +1164,12 @@ namespace FieldTakHub.Builder.Services
                 {
                     HandleMapClickToolAction(win, endPt);
                     RedrawVectorsOnly();
+                    UpdateOfflineTileEstimateUI();
                 }
                 else
                 {
                     RedrawVectorsOnly();
+                    UpdateOfflineTileEstimateUI();
                     _ = RenderMapTilesAsync();
                 }
             };
@@ -973,14 +1193,292 @@ namespace FieldTakHub.Builder.Services
             mainGrid.Children.Add(bodyGrid);
 
             var bottomBar = new Border { Background = TacticalConfigPanel.BrushInputBg, BorderBrush = TacticalConfigPanel.BrushCardBorder, BorderThickness = new Thickness(0, 1, 0, 0), Padding = new Thickness(16, 0, 16, 0) };
-            _statusText = new TextBlock { Text = "Gotowy. Silnik 60 FPS (OnRender), suwaki ustawiające wartość w miejscu kliknięcia, słownik symboli NATO w legendzie oraz wybór stron w checkboxach.", Foreground = TacticalConfigPanel.BrushAccent, FontSize = 11, VerticalAlignment = VerticalAlignment.Center };
+            _statusText = new TextBlock { Text = "Gotowy. Kompletny Generator Map: 60 FPS, Formaty Naręczne, Maska AO, Słownik NATO oraz Generator Map Offline Multi-Zoom (.mbtiles / .sqlite).", Foreground = TacticalConfigPanel.BrushAccent, FontSize = 11, VerticalAlignment = VerticalAlignment.Center };
             bottomBar.Child = _statusText; Grid.SetRow(bottomBar, 1); mainGrid.Children.Add(bottomBar);
 
+            UpdateOfflineTileEstimateUI();
             rootBorder.Child = mainGrid;
             return rootBorder;
         }
 
-        // Suwak z natychmiastowym przeskokiem w miejsce kliknięcia LPM (bez skakania do min/max!) i płynnym przeciąganiem
+        // =========================================================================
+        // SILNIK POBIERANIA I BUDOWY MAP OFFLINE MULTI-ZOOM (.MBTILES / .SQLITE)
+        // =========================================================================
+        private static (double North, double South, double East, double West) GetTargetOfflineBoundsLatLon()
+        {
+            var aoPoly = _mapObjects.FirstOrDefault(o => o.Kind == "AO" && o.Points.Count >= 3);
+            if (_offlineBoundsMode.Contains("AO") && aoPoly != null)
+            {
+                double n = aoPoly.Points.Max(p => p.Lat);
+                double s = aoPoly.Points.Min(p => p.Lat);
+                double e = aoPoly.Points.Max(p => p.Lon);
+                double w = aoPoly.Points.Min(p => p.Lon);
+                return (n, s, e, w);
+            }
+
+            double vw = (_sheetFrameBorder != null && _sheetFrameBorder.Width > 60) ? _sheetFrameBorder.Width : 800;
+            double vh = (_sheetFrameBorder != null && _sheetFrameBorder.Height > 60) ? _sheetFrameBorder.Height : 600;
+            var (nwLat, nwLon) = ScreenToLatLon(0, 0, vw, vh);
+            var (seLat, seLon) = ScreenToLatLon(vw, vh, vw, vh);
+            return (Math.Max(nwLat, seLat), Math.Min(nwLat, seLat), Math.Max(nwLon, seLon), Math.Min(nwLon, seLon));
+        }
+
+        private static List<(int Z, int X, int Y)> CalculateOfflineTilePyramidCoords(int minZ, int maxZ, out double north, out double south, out double east, out double west)
+        {
+            (north, south, east, west) = GetTargetOfflineBoundsLatLon();
+            var list = new List<(int Z, int X, int Y)>();
+            int zStart = Math.Min(minZ, maxZ);
+            int zEnd = Math.Max(minZ, maxZ);
+
+            for (int z = zStart; z <= zEnd; z++)
+            {
+                var (x1, y1) = LatLonToTileXY(north, west, z);
+                var (x2, y2) = LatLonToTileXY(south, east, z);
+                int maxIdx = (1 << z) - 1;
+                int minTx = Math.Clamp((int)Math.Floor(Math.Min(x1, x2)), 0, maxIdx);
+                int maxTx = Math.Clamp((int)Math.Floor(Math.Max(x1, x2)), 0, maxIdx);
+                int minTy = Math.Clamp((int)Math.Floor(Math.Min(y1, y2)), 0, maxIdx);
+                int maxTy = Math.Clamp((int)Math.Floor(Math.Max(y1, y2)), 0, maxIdx);
+
+                for (int tx = minTx; tx <= maxTx; tx++)
+                {
+                    for (int ty = minTy; ty <= maxTy; ty++)
+                    {
+                        list.Add((z, tx, ty));
+                        if (list.Count >= 4500) return list; // Bezpieczny limit chroniący przed przypadkowym pobraniem całego kraju
+                    }
+                }
+            }
+            return list;
+        }
+
+        private static void UpdateOfflineTileEstimateUI()
+        {
+            if (_offlineEstimateLabel == null) return;
+            try
+            {
+                var coords = CalculateOfflineTilePyramidCoords(_offlineMinZoom, _offlineMaxZoom, out _, out _, out _, out _);
+                double estMb = (coords.Count * 26.0) / 1024.0;
+                string capNote = coords.Count >= 4500 ? " [Limit bezpieczeństwa 4500]" : "";
+                _offlineEstimateLabel.Text = $"Do pobrania: {coords.Count} kafelków (Zoom {_offlineMinZoom}–{_offlineMaxZoom}){capNote}  •  ~{estMb:0.0} MB";
+            }
+            catch { }
+        }
+
+        private static byte[] BlendBaseAndLidarTilesOnUiThread(byte[] baseBytes, byte[] lidarBytes, double lidarAlpha)
+        {
+            try
+            {
+                BitmapImage bmpBase = new BitmapImage();
+                using (var ms1 = new MemoryStream(baseBytes)) { bmpBase.BeginInit(); bmpBase.CacheOption = BitmapCacheOption.OnLoad; bmpBase.StreamSource = ms1; bmpBase.EndInit(); bmpBase.Freeze(); }
+
+                BitmapImage bmpLidar = new BitmapImage();
+                using (var ms2 = new MemoryStream(lidarBytes)) { bmpLidar.BeginInit(); bmpLidar.CacheOption = BitmapCacheOption.OnLoad; bmpLidar.StreamSource = ms2; bmpLidar.EndInit(); bmpLidar.Freeze(); }
+
+                var dv = new DrawingVisual();
+                using (DrawingContext dc = dv.RenderOpen())
+                {
+                    dc.DrawImage(bmpBase, new Rect(0, 0, 256, 256));
+                    dc.PushOpacity(lidarAlpha);
+                    dc.DrawImage(bmpLidar, new Rect(0, 0, 256, 256));
+                    dc.Pop();
+                }
+                var rtb = new RenderTargetBitmap(256, 256, 96, 96, PixelFormats.Pbgra32);
+                rtb.Render(dv);
+                var enc = new JpegBitmapEncoder { QualityLevel = 90 };
+                enc.Frames.Add(BitmapFrame.Create(rtb));
+                using var outMs = new MemoryStream();
+                enc.Save(outMs);
+                return outMs.ToArray();
+            }
+            catch { return baseBytes; }
+        }
+
+        private static async Task<byte[]> FetchSingleOfflineTileBytesAsync(TacticalMapLayerDef layer, int tx, int ty, int zoom, CancellationToken ct)
+        {
+            string url = BuildTileUrl(layer, tx, ty, zoom);
+            if (RawTileCache.TryGetValue(url, out var cached) && IsValidImagePayload(cached))
+                return cached;
+
+            string fallbackUrl = (!string.IsNullOrEmpty(layer.FallbackUrlTemplate) && layer.IsWmsEpsg3857)
+                ? layer.FallbackUrlTemplate.Replace("{bbox}", GetEpsg3857BBox(tx, ty, zoom)).Replace("{w}", "256").Replace("{h}", "256")
+                : null;
+
+            await TileThrottle.WaitAsync(ct);
+            try
+            {
+                for (int attempt = 0; attempt < 2 && !ct.IsCancellationRequested; attempt++)
+                {
+                    try
+                    {
+                        byte[] data = await Http.GetByteArrayAsync(url, ct);
+                        if (IsValidImagePayload(data))
+                        {
+                            if (RawTileCache.Count < 1500) RawTileCache[url] = data;
+                            return data;
+                        }
+                    }
+                    catch { }
+                    if (attempt == 0) await Task.Delay(80, ct);
+                }
+
+                if (!string.IsNullOrEmpty(fallbackUrl) && !ct.IsCancellationRequested)
+                {
+                    try
+                    {
+                        byte[] fb = await Http.GetByteArrayAsync(fallbackUrl, ct);
+                        if (IsValidImagePayload(fb))
+                        {
+                            if (RawTileCache.Count < 1500) RawTileCache[url] = fb;
+                            return fb;
+                        }
+                    }
+                    catch { }
+                }
+            }
+            finally { TileThrottle.Release(); }
+            return null;
+        }
+
+        private static async Task BuildMultiZoomOfflineDatabaseAsync(Window win, bool saveDirectlyToFtakSource)
+        {
+            _offlineDownloadCts?.Cancel();
+            var cts = new CancellationTokenSource();
+            _offlineDownloadCts = cts;
+            var ct = cts.Token;
+
+            try
+            {
+                var coords = CalculateOfflineTilePyramidCoords(_offlineMinZoom, _offlineMaxZoom, out double north, out double south, out double east, out double west);
+                if (coords.Count == 0) return;
+
+                if (_offlineProgressBar != null) { _offlineProgressBar.Maximum = coords.Count; _offlineProgressBar.Value = 0; }
+                if (_offlineProgressLabel != null) _offlineProgressLabel.Text = $"Pobieranie {coords.Count} kafelków (Zoom {_offlineMinZoom}–{_offlineMaxZoom})...";
+
+                var lidarLayer = Layers.First(l => l.Id == "geoportal_lidar");
+                bool doBakeLidar = _bakeLidarInOffline && _showLidarSingleWms && _activeLayer.Id != "geoportal_lidar";
+
+                var downloadedTiles = new ConcurrentBag<(int Z, int X, int Y, byte[] Data)>();
+                int completed = 0;
+
+                var jobs = coords.Select(async coord =>
+                {
+                    if (ct.IsCancellationRequested) return;
+                    byte[] baseData = await FetchSingleOfflineTileBytesAsync(_activeLayer, coord.X, coord.Y, coord.Z, ct);
+                    if (baseData != null && doBakeLidar && !ct.IsCancellationRequested)
+                    {
+                        byte[] lidarData = await FetchSingleOfflineTileBytesAsync(lidarLayer, coord.X, coord.Y, coord.Z, ct);
+                        if (lidarData != null && Application.Current != null)
+                        {
+                            baseData = await Application.Current.Dispatcher.InvokeAsync(
+                                () => BlendBaseAndLidarTilesOnUiThread(baseData, lidarData, _lidarOpacity),
+                                DispatcherPriority.Background);
+                        }
+                    }
+                    if (baseData != null)
+                        downloadedTiles.Add((coord.Z, coord.X, coord.Y, baseData));
+
+                    int done = Interlocked.Increment(ref completed);
+                    if (done % 5 == 0 || done == coords.Count)
+                    {
+                        _ = Application.Current?.Dispatcher.BeginInvoke(new Action(() =>
+                        {
+                            if (_offlineProgressBar != null) _offlineProgressBar.Value = done;
+                            if (_offlineProgressLabel != null) _offlineProgressLabel.Text = $"Pobrano {done} / {coords.Count} kafelków ({(done * 100) / Math.Max(1, coords.Count)}%)...";
+                        }));
+                    }
+                });
+
+                await Task.WhenAll(jobs);
+                if (ct.IsCancellationRequested)
+                {
+                    if (_offlineProgressLabel != null) _offlineProgressLabel.Text = "⏹ Przerwano pobieranie mapy offline.";
+                    return;
+                }
+
+                var finalTilesList = downloadedTiles.ToList();
+                string sourceDir = TacticalConfigPanel.GetPrimarySourceDirectory(win);
+                string eventName = TacticalConfigPanel.GetEventNameFromWindow(win);
+                var allConfigured = TacticalConfigPanel.GetConfiguredFactions();
+                var targetFacs = GetActiveMapFactions();
+                string facSuffix = string.Join("_", targetFacs.Select(f => TacticalConfigPanel.SanitizeFileName(f.Name)));
+                string baseFileName = $"Offline_{eventName}_{facSuffix}_Z{_offlineMinZoom}_{_offlineMaxZoom}";
+
+                if (_offlineProgressLabel != null) _offlineProgressLabel.Text = $"Zapisywanie {finalTilesList.Count} kafelków do bazy SQLite...";
+
+                bool writeMbtiles = _offlineDbFormat.Contains(".mbtiles") || _offlineDbFormat.StartsWith("Oba");
+                bool writeSqlite = _offlineDbFormat.Contains(".sqlite") || _offlineDbFormat.StartsWith("Oba");
+
+                string folderToOpen = "";
+
+                if (saveDirectlyToFtakSource)
+                {
+                    await Task.Run(() =>
+                    {
+                        if (targetFacs.Count > 0 && targetFacs.Count < allConfigured.Count)
+                        {
+                            foreach (var fac in targetFacs)
+                            {
+                                string sl = TacticalConfigPanel.SanitizeFileName(fac.Name).ToLowerInvariant();
+                                string facDir = System.IO.Path.Combine(sourceDir, "factions", sl);
+                                Directory.CreateDirectory(facDir);
+                                if (writeMbtiles)
+                                    NativeSqliteWriter.WriteMbTilesDatabase(System.IO.Path.Combine(facDir, $"mapa_offline_{sl}.mbtiles"), $"{eventName}_{fac.Name}", _offlineMinZoom, _offlineMaxZoom, north, south, east, west, finalTilesList);
+                                if (writeSqlite)
+                                    NativeSqliteWriter.WriteAtakMobacSqliteDatabase(System.IO.Path.Combine(facDir, $"mapa_offline_{sl}.sqlite"), _offlineMinZoom, _offlineMaxZoom, finalTilesList);
+                                folderToOpen = facDir;
+                            }
+                        }
+                        else
+                        {
+                            string mapsDir = System.IO.Path.Combine(sourceDir, "maps");
+                            Directory.CreateDirectory(mapsDir);
+                            if (writeMbtiles)
+                                NativeSqliteWriter.WriteMbTilesDatabase(System.IO.Path.Combine(mapsDir, $"{baseFileName}.mbtiles"), eventName, _offlineMinZoom, _offlineMaxZoom, north, south, east, west, finalTilesList);
+                            if (writeSqlite)
+                                NativeSqliteWriter.WriteAtakMobacSqliteDatabase(System.IO.Path.Combine(mapsDir, $"{baseFileName}.sqlite"), _offlineMinZoom, _offlineMaxZoom, finalTilesList);
+                            folderToOpen = mapsDir;
+                        }
+                    });
+
+                    if (_includeVectorsWithOffline)
+                        await ExportMapToFtakSourceAsync(win);
+                    else
+                        await TacticalConfigPanel.RefreshSourceSizeFromExternalAsync(win);
+
+                    if (_offlineProgressLabel != null) _offlineProgressLabel.Text = $"✓ Zapisano bazę offline ({finalTilesList.Count} kafelków) w folderze source paczki .ftak!";
+                    if (_statusText != null) _statusText.Text = $"✓ Zbudowano wielowarstwową mapę offline ({finalTilesList.Count} kafelków, Zoom {_offlineMinZoom}–{_offlineMaxZoom}) bezpośrednio do paczki .ftak!";
+                }
+                else
+                {
+                    string parentDir = System.IO.Path.GetDirectoryName(System.IO.Path.TrimEndingDirectorySeparator(sourceDir)) ?? AppDomain.CurrentDomain.BaseDirectory;
+                    string outDir = System.IO.Path.Combine(parentDir, "release_maps");
+                    Directory.CreateDirectory(outDir);
+                    folderToOpen = outDir;
+
+                    await Task.Run(() =>
+                    {
+                        if (writeMbtiles)
+                            NativeSqliteWriter.WriteMbTilesDatabase(System.IO.Path.Combine(outDir, $"{baseFileName}.mbtiles"), eventName, _offlineMinZoom, _offlineMaxZoom, north, south, east, west, finalTilesList);
+                        if (writeSqlite)
+                            NativeSqliteWriter.WriteAtakMobacSqliteDatabase(System.IO.Path.Combine(outDir, $"{baseFileName}.sqlite"), _offlineMinZoom, _offlineMaxZoom, finalTilesList);
+                    });
+
+                    if (_includeVectorsWithOffline)
+                        await ExportStandaloneFilesAsync(win, "kmz");
+                    else
+                        TacticalConfigPanel.TryOpenFolderInExplorer(folderToOpen);
+
+                    if (_offlineProgressLabel != null) _offlineProgressLabel.Text = $"✓ Wyeksportowano bazę offline ({finalTilesList.Count} kafelków) do release_maps!";
+                    if (_statusText != null) _statusText.Text = $"✓ Zapisano bazę offline ({baseFileName}) w folderze: {outDir}";
+                }
+            }
+            catch (Exception ex)
+            {
+                if (_offlineProgressLabel != null) _offlineProgressLabel.Text = $"Błąd zapisu: {ex.Message}";
+            }
+        }
+
         private static UIElement MakeSliderRow(string label, double min, double max, double initVal, Func<double, string> fmt, Action<double> onVal)
         {
             var sp = new StackPanel { Margin = new Thickness(0, 2, 0, 4) };
@@ -1009,20 +1507,9 @@ namespace FieldTakHub.Builder.Services
                 sl.Value = min + ratio * (max - min);
             }
 
-            sl.PreviewMouseLeftButtonDown += (_, e) =>
-            {
-                SetSliderFromMouse(e);
-            };
-            sl.PreviewMouseMove += (_, e) =>
-            {
-                if (e.LeftButton == MouseButtonState.Pressed)
-                    SetSliderFromMouse(e);
-            };
-            sl.ValueChanged += (_, e) =>
-            {
-                valTxt.Text = fmt(e.NewValue);
-                onVal(e.NewValue);
-            };
+            sl.PreviewMouseLeftButtonDown += (_, e) => SetSliderFromMouse(e);
+            sl.PreviewMouseMove += (_, e) => { if (e.LeftButton == MouseButtonState.Pressed) SetSliderFromMouse(e); };
+            sl.ValueChanged += (_, e) => { valTxt.Text = fmt(e.NewValue); onVal(e.NewValue); };
             sp.Children.Add(sl);
             return sp;
         }
@@ -1080,7 +1567,6 @@ namespace FieldTakHub.Builder.Services
             RefreshObjectsListUI(win);
         }
 
-        // Lista naniesionych obiektów z edycją nazwy na żywo oraz czerwonym przyciskiem minusa "−"
         private static void RefreshObjectsListUI(Window win)
         {
             if (_objectsListStack == null) return;
@@ -1154,6 +1640,7 @@ namespace FieldTakHub.Builder.Services
                     if (_activeDraftPoly == captured) _activeDraftPoly = null;
                     RefreshObjectsListUI(win);
                     RedrawVectorsOnly();
+                    UpdateOfflineTileEstimateUI();
                 });
                 Grid.SetColumn(btnMinusDel, 3);
                 row.Children.Add(btnMinusDel);
@@ -1185,6 +1672,7 @@ namespace FieldTakHub.Builder.Services
                 {
                     _centerLat = la; _centerLon = lo;
                     if (_statusText != null) _statusText.Text = $"✓ Znaleziono: {first["display_name"]}";
+                    UpdateOfflineTileEstimateUI();
                     await RenderMapTilesAsync();
                 }
             }
@@ -1293,7 +1781,7 @@ namespace FieldTakHub.Builder.Services
             try
             {
                 if (DecodedImageCache.Count > 260) DecodedImageCache.Clear();
-                if (RawTileCache.Count > 400) RawTileCache.Clear();
+                if (RawTileCache.Count > 1200) RawTileCache.Clear();
 
                 var bmp = new BitmapImage();
                 using (var mem = new MemoryStream(validBytes))
@@ -1310,9 +1798,6 @@ namespace FieldTakHub.Builder.Services
             catch { return null; }
         }
 
-        // =========================================================================
-        // NISKOPOZIOMOWY SILNIK DRAWINGCONTEXT (60 FPS — RYSUJE SIATKĘ, MASKĘ AO, SEKTORY I DALMIERZ BEZ TWORZENIA KONTROLEK WPF!)
-        // =========================================================================
         private static FormattedText GetCachedGlyph(string text, double fontSize, Brush fg, string keyPrefix)
         {
             string key = $"{keyPrefix}_{text}_{fontSize:0.0}";
@@ -1371,7 +1856,6 @@ namespace FieldTakHub.Builder.Services
 
         private static void RenderFastGridAndMasksOnContext(DrawingContext dc, double w, double h)
         {
-            // 1. Teren Gry (AO) — odwrócona maska poza obszarem gry
             foreach (var ao in _mapObjects.Where(o => o.Kind == "AO" && o.Points.Count >= 2))
             {
                 Color c = Color.FromRgb(235, 64, 52);
@@ -1396,7 +1880,6 @@ namespace FieldTakHub.Builder.Services
                 DrawFastBadgeOnContext(dc, $"🛡️ {ao.Name}", screenPts[0].X + 10, screenPts[0].Y + 6, strokeBrush, 10 * _fontScaleMultiplier, 1.0, $"AO_{ao.ColorHex}");
             }
 
-            // 2. Sektory / Strefy kolorowe
             foreach (var sec in _mapObjects.Where(o => o.Kind == "Sector" && o.Points.Count >= 2))
             {
                 Color c = Color.FromRgb(245, 184, 46);
@@ -1415,7 +1898,6 @@ namespace FieldTakHub.Builder.Services
                 DrawFastBadgeOnContext(dc, sec.Name, cx - 20, cy - 8, strokeBrush, 10 * _fontScaleMultiplier, 1.0, $"SEC_{sec.ColorHex}");
             }
 
-            // 3. Trasy / Linie
             foreach (var rt in _mapObjects.Where(o => o.Kind == "Route" && o.Points.Count >= 2))
             {
                 var strokeBrush = TacticalConfigPanel.BrushFromHex(rt.ColorHex, Color.FromRgb(38, 132, 255));
@@ -1427,7 +1909,6 @@ namespace FieldTakHub.Builder.Services
                 DrawFastBadgeOnContext(dc, rt.Name, screenPts[0].X + 8, screenPts[0].Y - 14, strokeBrush, 9.5 * _fontScaleMultiplier, 1.0, $"RT_{rt.ColorHex}");
             }
 
-            // 4. Siatka wojskowa MGRS / Sektorowa / WGS84 oraz Keypad 1-9 / Ćwiartki A-D
             if (_coordSystem != "Brak siatki")
             {
                 byte mainAlpha = (byte)Math.Clamp((int)Math.Round(_mainGridOpacity * 255), 0, 255);
@@ -1536,7 +2017,6 @@ namespace FieldTakHub.Builder.Services
                 }
             }
 
-            // 5. Dalmierz (PPM)
             if (_rulerStart != null && _rulerEnd != null)
             {
                 Point p1 = LatLonToScreen(_rulerStart.Value.Lat, _rulerStart.Value.Lon, w, h);
@@ -1551,7 +2031,6 @@ namespace FieldTakHub.Builder.Services
             }
         }
 
-        // Przebudowuje wyłącznie interaktywne uchwyty (znaczniki NATO, wierzchołki poligonów oraz elementy HUD)
         private static void RedrawVectorsOnly()
         {
             _fastOverlayRenderer?.InvalidateVisual();
@@ -1563,7 +2042,6 @@ namespace FieldTakHub.Builder.Services
 
             _interactiveCanvas.Children.Clear();
 
-            // Uchwyty wierzchołków dla AO, Sektorów i Tras
             foreach (var polyObj in _mapObjects.Where(o => (o.Kind == "AO" || o.Kind == "Sector" || o.Kind == "Route") && o.Points.Count > 0))
             {
                 var strokeBrush = TacticalConfigPanel.BrushFromHex(polyObj.ColorHex, Color.FromRgb(38, 132, 255));
@@ -1571,9 +2049,7 @@ namespace FieldTakHub.Builder.Services
                 DrawDraggableVertexHandles(polyObj, screenPts, strokeBrush);
             }
 
-            // Znaczniki wektorowe NATO i kropki
             DrawTacticalMarkersOverlay(w, h);
-            // Przesuwana Północ, Podziałka i Legenda ze słownikiem NATO
             DrawDraggableCornerElements(w, h);
         }
 
@@ -1922,7 +2398,6 @@ namespace FieldTakHub.Builder.Services
             _interactiveCanvas.Children.Add(el);
         }
 
-        // Rysuje Północ, Podziałkę oraz rozbudowaną Legendę z wybranymi stronami konfliktu i objaśnieniem symboli NATO APP-6
         private static void DrawDraggableCornerElements(double w, double h)
         {
             var (wMm, _) = GetActiveSheetDimensionsMm();
@@ -1975,7 +2450,6 @@ namespace FieldTakHub.Builder.Services
                 ls.Children.Add(new TextBlock { Text = $"MAPA TAKTYCZNA ({_selectedSheet.Name.Split('—')[0].Trim()} | 1:{_targetScaleDenominator:N0})", Foreground = TacticalConfigPanel.BrushAccent, FontWeight = FontWeights.Bold, FontSize = isCompactWrist ? 9 : 10 });
                 ls.Children.Add(new TextBlock { Text = $"Siatka: {_coordSystem.Split(' ')[0]} | {_subGridDivision}", Foreground = TacticalConfigPanel.BrushMutedText, FontSize = 8.5, Margin = new Thickness(0, 1, 0, 4) });
 
-                // Wyświetla wyłącznie strony zaznaczone w checkboxach
                 var activeFacs = GetActiveMapFactions();
                 if (activeFacs.Count > 0)
                 {
@@ -2039,7 +2513,6 @@ namespace FieldTakHub.Builder.Services
                     }
                     else
                     {
-                        // Domyślny słownik podstawowych symboli NATO, gdy mapa nie ma jeszcze postawionych punktów
                         AddLegendSymbolRow("HQ", "Sztab / Dowództwo strony", "#2684FF");
                         AddLegendSymbolRow("X", "Piechota / Drużyna szturmowa", "#2684FF");
                         AddLegendSymbolRow("+", "Punkt Medyczny / MEDEVAC", "#2ECC71");
@@ -2149,7 +2622,6 @@ namespace FieldTakHub.Builder.Services
             catch { }
         }
 
-        // Zapisuje mapę do folderów wybranych w checkboxach stron konfliktu (lub wspólnie, jeśli zaznaczono wszystkie)
         private static async Task ExportMapToFtakSourceAsync(Window win)
         {
             try
@@ -2168,7 +2640,6 @@ namespace FieldTakHub.Builder.Services
 
                 await Task.Run(() =>
                 {
-                    // Jeżeli wybrano konkretne strony (nie wszystkie naraz), zapisujemy do odizolowanych folderów tych stron
                     if (targetFacs.Count > 0 && targetFacs.Count < allConfigured.Count)
                     {
                         foreach (var fac in targetFacs)
