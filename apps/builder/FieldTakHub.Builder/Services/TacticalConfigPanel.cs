@@ -35,6 +35,8 @@ namespace FieldTakHub.Builder.Services
 
     public class FactionProfileModel
     {
+        public override string ToString() => $"{Name}  •  Kanał: {ChannelName} ({LoraRegion} / {LoraModemPreset})";
+
         public string Name { get; set; } = "BLUFOR";
         public string ColorHex { get; set; } = "#2684FF";
         public string PliStrategy { get; set; } = "Constant";

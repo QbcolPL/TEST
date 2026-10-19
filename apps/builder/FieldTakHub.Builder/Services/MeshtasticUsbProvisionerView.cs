@@ -741,11 +741,12 @@ namespace FieldTakHub.Builder.Services
             s1Stack.Children.Add(new TextBlock { Text = "1. WYBÓR STRONY KONFLIKTU (PROFIL RADIA LORA)", Foreground = TacticalConfigPanel.BrushAccent, FontWeight = FontWeights.Bold, FontSize = 12, Margin = new Thickness(0, 0, 0, 4) });
             s1Stack.Children.Add(new TextBlock { Text = "Wybierz stronę konfliktu — programator automatycznie pobierze jej kanał, klucz AES-256 PSK, region oraz preset.", Foreground = TacticalConfigPanel.BrushMutedText, FontSize = 9.5, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 8) });
 
-            var facRow = new Grid { Margin = new Thickness(0, 0, 0, 6) };
+            var facRow = new Grid { Margin = new Thickness(0, 0, 0, 8) };
             facRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-            facRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(110) });
+            facRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
 
-            _factionComboBox = new ComboBox { Height = 28, FontSize = 11, FontWeight = FontWeights.Bold, Tag = "INJECTED", DisplayMemberPath = "Name" };
+            // Usunięto DisplayMemberPath — ComboBox korzysta teraz z czytelnego FactionProfileModel.ToString()
+            _factionComboBox = new ComboBox { Height = 28, FontSize = 10.5, FontWeight = FontWeights.Bold, Tag = "INJECTED" };
             TacticalConfigPanel.ApplyUnifiedComboBoxTheme(_factionComboBox, win);
             _factionComboBox.SelectionChanged += (s, e) =>
             {
@@ -755,17 +756,38 @@ namespace FieldTakHub.Builder.Services
             Grid.SetColumn(_factionComboBox, 0);
             facRow.Children.Add(_factionComboBox);
 
-            var btnSyncFactions = new Button { Content = "🔄 Odśwież strony", Height = 28, Margin = new Thickness(6, 0, 0, 0), Background = TacticalConfigPanel.BrushInputBg, Foreground = TacticalConfigPanel.BrushAccent, BorderBrush = TacticalConfigPanel.BrushAccent, BorderThickness = new Thickness(1), FontSize = 10, FontWeight = FontWeights.Bold, Cursor = Cursors.Hand };
+            var btnSyncFactions = new Button
+            {
+                Content = "🔄 Odśwież strony",
+                Height = 28,
+                Padding = new Thickness(12, 0, 12, 0),
+                Margin = new Thickness(8, 0, 0, 0),
+                Background = TacticalConfigPanel.BrushInputBg,
+                Foreground = TacticalConfigPanel.BrushAccent,
+                BorderBrush = TacticalConfigPanel.BrushAccent,
+                BorderThickness = new Thickness(1),
+                FontSize = 10,
+                FontWeight = FontWeights.Bold,
+                Cursor = Cursors.Hand
+            };
             btnSyncFactions.Click += (s, e) => RefreshFactionsDropdown(win);
             Grid.SetColumn(btnSyncFactions, 1);
             facRow.Children.Add(btnSyncFactions);
             s1Stack.Children.Add(facRow);
 
+            s1Stack.Children.Add(new TextBlock
+            {
+                Text = "Docelowa rola wgrywanych płytek Meshtastic (TAK = integracja z ATAK po BLE/USB, TAK_Tracker = samodzielny lokalizator GPS):",
+                Foreground = TacticalConfigPanel.BrushMutedText,
+                FontSize = 9.5,
+                TextWrapping = TextWrapping.Wrap,
+                Margin = new Thickness(0, 0, 0, 3)
+            });
             _roleOverrideComboBox = (ComboBox)TacticalConfigPanel.ComboCtrl(new[] { "TAK", "TAK_Tracker", "Client", "Router" }, "TAK", win, v =>
             {
                 if (_selectedFaction != null) { _selectedFaction.DeviceRole = v; UpdateFactionPreviewBanner(_selectedFaction); }
             });
-            s1Stack.Children.Add(TacticalConfigPanel.FieldBox("Docelowa rola wgrywanych płytek Meshtastic (TAK = integracja z ATAK po BLE/USB, TAK_Tracker = samodzielny lokalizator GPS):", _roleOverrideComboBox));
+            s1Stack.Children.Add(_roleOverrideComboBox);
 
             sec1.Child = s1Stack;
             leftStack.Children.Add(sec1);
@@ -803,14 +825,27 @@ namespace FieldTakHub.Builder.Services
 
             var comRow = new Grid { Margin = new Thickness(0, 0, 0, 8) };
             comRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-            comRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(115) });
+            comRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
 
             _comPortComboBox = new ComboBox { Height = 28, FontSize = 10.5, Tag = "INJECTED" };
             TacticalConfigPanel.ApplyUnifiedComboBoxTheme(_comPortComboBox, win);
             Grid.SetColumn(_comPortComboBox, 0);
             comRow.Children.Add(_comPortComboBox);
 
-            var btnScanPorts = new Button { Content = "🔍 Skanuj COM", Height = 28, Margin = new Thickness(6, 0, 0, 0), Background = TacticalConfigPanel.BrushInputBg, Foreground = Brushes.White, BorderBrush = TacticalConfigPanel.BrushAccent, BorderThickness = new Thickness(1), FontSize = 10, FontWeight = FontWeights.Bold, Cursor = Cursors.Hand };
+            var btnScanPorts = new Button
+            {
+                Content = "🔍 Skanuj COM",
+                Height = 28,
+                Padding = new Thickness(12, 0, 12, 0),
+                Margin = new Thickness(8, 0, 0, 0),
+                Background = TacticalConfigPanel.BrushInputBg,
+                Foreground = Brushes.White,
+                BorderBrush = TacticalConfigPanel.BrushAccent,
+                BorderThickness = new Thickness(1),
+                FontSize = 10,
+                FontWeight = FontWeights.Bold,
+                Cursor = Cursors.Hand
+            };
             btnScanPorts.Click += (s, e) => RefreshComPortsDropdown(win);
             Grid.SetColumn(btnScanPorts, 1);
             comRow.Children.Add(btnScanPorts);
