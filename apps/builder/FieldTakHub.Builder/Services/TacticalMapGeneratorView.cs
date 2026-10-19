@@ -373,7 +373,7 @@ namespace FieldTakHub.Builder.Services
                 if (_layerComboBox.SelectedItem is TacticalMapLayerDef def)
                 {
                     _activeLayer = def;
-                    _tileCanvas?.Children.Clear();
+                    
                     TacticalConfigPanel.MarkDirty();
                     _ = RenderMapTilesAsync();
                 }
