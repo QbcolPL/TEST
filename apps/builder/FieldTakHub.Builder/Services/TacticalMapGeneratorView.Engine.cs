@@ -59,6 +59,7 @@ namespace FieldTakHub.Builder.Services
         public string Name { get; set; } = "HQ";
         public string ColorHex { get; set; } = "#2684FF";
         public bool ShowLabel { get; set; } = true;
+        public double SizeMultiplier { get; set; } = 1.0;
         public List<(double Lat, double Lon)> Points { get; set; } = new List<(double Lat, double Lon)>();
     }
 
