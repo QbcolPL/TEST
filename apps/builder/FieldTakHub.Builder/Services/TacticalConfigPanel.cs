@@ -1,6 +1,7 @@
 ﻿#pragma warning disable CS8600, CS8601, CS8602, CS8603, CS8604, CS8618, CS8625
 using System;
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.Diagnostics;
 using System.Globalization;
 using System.IO;
@@ -20,6 +21,7 @@ using System.Windows.Markup;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
+using Microsoft.Win32;
 
 namespace FieldTakHub.Builder.Services
 {
@@ -104,6 +106,13 @@ namespace FieldTakHub.Builder.Services
     {
         public static TacticalConfigModel Current { get; set; } = new TacticalConfigModel();
         public static string LastKnownSourceDir { get; set; } = "";
+        public static string LastExportDirectory { get; set; } = "";
+        public static string CurrentDraftProjectPath { get; set; } = "";
+        public static bool IsWorkspaceDirty { get; set; } = false;
+
+        // Delegaty pozwalające na wspólny zapis i odczyt stanu Generatora Map w jednym pliku projektu i auto-sesji
+        public static Func<JsonObject> MapStateExportProvider { get; set; }
+        public static Action<JsonObject> MapStateImportConsumer { get; set; }
 
         internal static readonly SolidColorBrush BrushInputBg = CreateFrozenBrush(8, 19, 22);
         internal static readonly SolidColorBrush BrushInputBorder = CreateFrozenBrush(30, 66, 74);
@@ -139,9 +148,21 @@ namespace FieldTakHub.Builder.Services
         private static Button _injectedRefreshButton;
         private static FrameworkElement _factionsCardElement;
         private static WrapPanel _factionsWrapPanel;
-        private static bool _syncingValidity;
+        private static bool _syncingValidity, _isRestoringSession, _closeConfirmed;
         private static DispatcherTimer _previewTimer;
         private static readonly List<FactionProfileModel> _factions = new List<FactionProfileModel>();
+
+        public static void MarkDirty()
+        {
+            if (!_isRestoringSession) IsWorkspaceDirty = true;
+        }
+
+        private static string GetAutoSessionFilePath()
+        {
+            string dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "FieldTakHub");
+            Directory.CreateDirectory(dir);
+            return Path.Combine(dir, "last_session_state_v24.json");
+        }
 
         public static List<(string Name, string Channel, string ColorHex, string Psk)> GetConfiguredFactions()
         {
@@ -154,6 +175,261 @@ namespace FieldTakHub.Builder.Services
             if (_factions.Count > 0) return;
             _factions.Add(new FactionProfileModel { Name = "BLUFOR", ColorHex = "#2684FF", ChannelName = "GGZS-TAK" });
             _factions.Add(new FactionProfileModel { Name = "OPFOR", ColorHex = "#EB4034", ChannelName = "OPFOR-TAK" });
+        }
+
+        // Serializuje cały stan Buildera (strony konfliktu + nazwa wydarzenia + mapa taktyczna) do obiektu JSON
+        public static JsonObject BuildFullWorkspaceStateJson(Window win)
+        {
+            EnsureDefaultFactions();
+            var root = new JsonObject
+            {
+                ["schemaVersion"] = "2.4-draft",
+                ["savedAt"] = DateTimeOffset.UtcNow.ToString("o"),
+                ["eventName"] = GetEventNameFromWindow(win),
+                ["lastSourceDir"] = LastKnownSourceDir ?? "",
+                ["lastExportDir"] = LastExportDirectory ?? "",
+                ["factions"] = JsonSerializer.SerializeToNode(_factions)
+            };
+            if (MapStateExportProvider != null)
+            {
+                try { root["mapState"] = MapStateExportProvider.Invoke(); } catch { }
+            }
+            return root;
+        }
+
+        public static void ApplyFullWorkspaceStateJson(Window win, JsonObject root)
+        {
+            if (root == null) return;
+            _isRestoringSession = true;
+            try
+            {
+                if (root["lastSourceDir"] != null && !string.IsNullOrWhiteSpace(root["lastSourceDir"].ToString()))
+                    LastKnownSourceDir = root["lastSourceDir"].ToString();
+                if (root["lastExportDir"] != null && !string.IsNullOrWhiteSpace(root["lastExportDir"].ToString()))
+                    LastExportDirectory = root["lastExportDir"].ToString();
+
+                if (root["eventName"] != null)
+                    SetEventNameInWindow(win, root["eventName"].ToString());
+
+                if (root["factions"] is JsonArray fArr && fArr.Count > 0)
+                {
+                    var loaded = JsonSerializer.Deserialize<List<FactionProfileModel>>(fArr.ToJsonString());
+                    if (loaded != null && loaded.Count > 0)
+                    {
+                        _factions.Clear();
+                        _factions.AddRange(loaded);
+                        if (win != null) RebuildWrappedFactionPanels(win);
+                    }
+                }
+
+                if (root["mapState"] is JsonObject mapObj && MapStateImportConsumer != null)
+                {
+                    MapStateImportConsumer.Invoke(mapObj);
+                }
+            }
+            catch { }
+            finally
+            {
+                _isRestoringSession = false;
+            }
+        }
+
+        public static void SaveSessionStateAuto(Window win = null)
+        {
+            try
+            {
+                var json = BuildFullWorkspaceStateJson(win);
+                File.WriteAllText(GetAutoSessionFilePath(), json.ToJsonString(new JsonSerializerOptions { WriteIndented = true }), Encoding.UTF8);
+            }
+            catch { }
+        }
+
+        public static void LoadSessionStateAuto(Window win = null)
+        {
+            try
+            {
+                string path = GetAutoSessionFilePath();
+                if (!File.Exists(path)) return;
+                var node = JsonNode.Parse(File.ReadAllText(path, Encoding.UTF8)) as JsonObject;
+                if (node != null)
+                {
+                    ApplyFullWorkspaceStateJson(win, node);
+                    IsWorkspaceDirty = false;
+                }
+            }
+            catch { }
+        }
+
+        public static bool SaveDraftProjectDialog(Window win)
+        {
+            try
+            {
+                string evName = GetEventNameFromWindow(win);
+                string initDir = !string.IsNullOrWhiteSpace(LastExportDirectory) && Directory.Exists(LastExportDirectory)
+                    ? LastExportDirectory
+                    : Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
+
+                var dlg = new SaveFileDialog
+                {
+                    Title = "Zapisz wersję roboczą projektu Field TAK Hub (Paczka .ftak + Mapa)",
+                    Filter = "Projekt roboczy Field TAK Hub (*.fthproj;*.json)|*.fthproj;*.json",
+                    InitialDirectory = initDir,
+                    FileName = !string.IsNullOrWhiteSpace(CurrentDraftProjectPath)
+                        ? Path.GetFileName(CurrentDraftProjectPath)
+                        : $"{evName}_Wersja_Robocza.fthproj"
+                };
+                if (dlg.ShowDialog(win) != true) return false;
+
+                LastExportDirectory = Path.GetDirectoryName(dlg.FileName) ?? LastExportDirectory;
+                CurrentDraftProjectPath = dlg.FileName;
+
+                var root = BuildFullWorkspaceStateJson(win);
+                File.WriteAllText(dlg.FileName, root.ToJsonString(new JsonSerializerOptions { WriteIndented = true }), Encoding.UTF8);
+                SaveSessionStateAuto(win);
+                IsWorkspaceDirty = false;
+                return true;
+            }
+            catch { return false; }
+        }
+
+        public static bool LoadDraftProjectDialog(Window win)
+        {
+            try
+            {
+                string initDir = !string.IsNullOrWhiteSpace(LastExportDirectory) && Directory.Exists(LastExportDirectory)
+                    ? LastExportDirectory
+                    : Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
+
+                var dlg = new OpenFileDialog
+                {
+                    Title = "Wczytaj wersję roboczą projektu Field TAK Hub (.fthproj / .json)",
+                    Filter = "Projekt roboczy Field TAK Hub (*.fthproj;*.json)|*.fthproj;*.json",
+                    InitialDirectory = initDir
+                };
+                if (dlg.ShowDialog(win) != true) return false;
+
+                LastExportDirectory = Path.GetDirectoryName(dlg.FileName) ?? LastExportDirectory;
+                CurrentDraftProjectPath = dlg.FileName;
+
+                var node = JsonNode.Parse(File.ReadAllText(dlg.FileName, Encoding.UTF8)) as JsonObject;
+                if (node != null)
+                {
+                    ApplyFullWorkspaceStateJson(win, node);
+                    SaveSessionStateAuto(win);
+                    IsWorkspaceDirty = false;
+                    return true;
+                }
+            }
+            catch { }
+            return false;
+        }
+
+        // Okno ostrzeżenia przed zamknięciem programu z propozycją zapisu wersji roboczej
+        private static void OnMainWindowClosing(Window win, CancelEventArgs e)
+        {
+            if (_closeConfirmed) return;
+            // Zawsze zapisz stan automatycznej sesji, aby przy kolejnym uruchomieniu ustawienia były pamiętane
+            SaveSessionStateAuto(win);
+
+            int choice = 0; // 0 = Anuluj, 1 = Zapisz do pliku .fthproj i zamknij, 2 = Zamknij (zachowaj w auto-pamięci)
+            var dlg = new Window
+            {
+                Title = "Zamykanie Field TAK Hub Builder — Zapis stanu projektu",
+                Width = 490,
+                Height = 235,
+                WindowStartupLocation = WindowStartupLocation.CenterOwner,
+                Owner = win,
+                Background = BrushCardBg,
+                Foreground = Brushes.White,
+                ResizeMode = ResizeMode.NoResize,
+                WindowStyle = WindowStyle.ToolWindow
+            };
+
+            var root = new StackPanel { Margin = new Thickness(18) };
+            root.Children.Add(new TextBlock
+            {
+                Text = "⚠️ Czy chcesz zapisać wersję roboczą projektu przed zamknięciem?",
+                Foreground = BrushAccent,
+                FontSize = 13.5,
+                FontWeight = FontWeights.Bold,
+                Margin = new Thickness(0, 0, 0, 8)
+            });
+            root.Children.Add(new TextBlock
+            {
+                Text = "Bieżące ustawienia stron konfliktu (.ftak) oraz stan Generatora Map zostały już automatycznie zapamiętane do kolejnego uruchomienia.\nMożesz dodatkowo zapisać kompletną kopię roboczą do pliku (.fthproj).",
+                Foreground = Brushes.White,
+                FontSize = 11,
+                TextWrapping = TextWrapping.Wrap,
+                Margin = new Thickness(0, 0, 0, 18)
+            });
+
+            var btnGrid = new Grid();
+            btnGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1.35, GridUnitType.Star) });
+            btnGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1.2, GridUnitType.Star) });
+            btnGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(0.8, GridUnitType.Star) });
+
+            var btnSaveFile = new Button
+            {
+                Content = "💾 Zapisz projekt (.fthproj) i wyjdź",
+                Height = 32,
+                Margin = new Thickness(0, 0, 6, 0),
+                Background = BrushButtonAccent,
+                Foreground = BrushDarkFg,
+                FontWeight = FontWeights.Bold,
+                FontSize = 10.5,
+                BorderThickness = new Thickness(0),
+                Cursor = Cursors.Hand
+            };
+            var btnExitAuto = new Button
+            {
+                Content = "⚡ Zamknij (auto-pamięć)",
+                Height = 32,
+                Margin = new Thickness(3, 0, 3, 0),
+                Background = BrushItemBg,
+                Foreground = Brushes.White,
+                BorderBrush = BrushAccent,
+                BorderThickness = new Thickness(1),
+                FontWeight = FontWeights.SemiBold,
+                FontSize = 10.5,
+                Cursor = Cursors.Hand
+            };
+            var btnCancel = new Button
+            {
+                Content = "Anuluj",
+                Height = 32,
+                Margin = new Thickness(6, 0, 0, 0),
+                Background = BrushInputBg,
+                Foreground = Brushes.White,
+                BorderBrush = BrushTileBorder,
+                BorderThickness = new Thickness(1),
+                FontSize = 10.5,
+                Cursor = Cursors.Hand
+            };
+
+            btnSaveFile.Click += (_, __) => { choice = 1; dlg.Close(); };
+            btnExitAuto.Click += (_, __) => { choice = 2; dlg.Close(); };
+            btnCancel.Click += (_, __) => { choice = 0; dlg.Close(); };
+
+            Grid.SetColumn(btnSaveFile, 0); Grid.SetColumn(btnExitAuto, 1); Grid.SetColumn(btnCancel, 2);
+            btnGrid.Children.Add(btnSaveFile); btnGrid.Children.Add(btnExitAuto); btnGrid.Children.Add(btnCancel);
+            root.Children.Add(btnGrid);
+            dlg.Content = root;
+            dlg.ShowDialog();
+
+            if (choice == 0)
+            {
+                e.Cancel = true;
+                return;
+            }
+            if (choice == 1)
+            {
+                if (!SaveDraftProjectDialog(win))
+                {
+                    e.Cancel = true;
+                    return;
+                }
+            }
+            _closeConfirmed = true;
         }
 
         private const string DarkComboBoxXaml = @"
@@ -336,8 +612,9 @@ namespace FieldTakHub.Builder.Services
             {
                 win.SetValue(IsHookedProperty, true);
                 win.AddHandler(UIElement.PreviewMouseLeftButtonDownEvent, new MouseButtonEventHandler((_, __) => ApplyIndefiniteValidityBeforeAction(win)), true);
+                win.Closing += (_, e) => OnMainWindowClosing(win, e);
 
-                _previewTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(1400) };
+                _previewTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(1800) };
                 _previewTimer.Tick += async (_, __) =>
                 {
                     try
@@ -359,6 +636,7 @@ namespace FieldTakHub.Builder.Services
                 win.Loaded += async (_, __) =>
                 {
                     Init();
+                    LoadSessionStateAuto(win);
                     var res = await ForceSizeUpdateAsync(win);
                     if (_injectedRefreshButton != null)
                         _injectedRefreshButton.Content = $"Odśwież / Skalkuluj (Plików: {res.FileCount} | {FormatBytes(res.TotalBytes)})";
@@ -541,7 +819,7 @@ namespace FieldTakHub.Builder.Services
             topCornerBar.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
 
             string[] palette = { "#F5B82E", "#2ECC71", "#9B59B6", "#E67E22", "#1ABC9C", "#E84393" };
-            var btnPlus = CreateCornerIconButton("+", BrushGreenPlus, true, "Dodaj nową stronę konfliktu (otwiera identyczny panel po prawej stronie, a kolejne poniżej)", () =>
+            var btnPlus = CreateCornerIconButton("+", BrushGreenPlus, true, "Dodaj nową stronę konfliktu", () =>
             {
                 int nextNum = _factions.Count + 1;
                 string newName = nextNum == 3 ? "ORGA" : $"STRONA-{nextNum}";
@@ -558,7 +836,9 @@ namespace FieldTakHub.Builder.Services
                     LoraModemPreset = fac.LoraModemPreset,
                     OtsHost = fac.OtsHost
                 });
+                MarkDirty();
                 RebuildWrappedFactionPanels(win);
+                SaveSessionStateAuto(win);
             });
             Grid.SetColumn(btnPlus, 0);
             topCornerBar.Children.Add(btnPlus);
@@ -576,7 +856,9 @@ namespace FieldTakHub.Builder.Services
             {
                 if (_factions.Count <= 1) return;
                 _factions.RemoveAt(index);
+                MarkDirty();
                 RebuildWrappedFactionPanels(win);
+                SaveSessionStateAuto(win);
             });
             Grid.SetColumn(btnMinus, 2);
             topCornerBar.Children.Add(btnMinus);
@@ -589,6 +871,7 @@ namespace FieldTakHub.Builder.Services
             {
                 fac.Name = string.IsNullOrWhiteSpace(val) ? "STRONA" : val.Trim();
                 headerTitle.Text = $"Generator Stron — {fac.Name}";
+                MarkDirty();
                 SyncActiveFactionToDefaultModel();
             });
             nameBox.FontWeight = FontWeights.Bold;
@@ -608,6 +891,7 @@ namespace FieldTakHub.Builder.Services
                     swatch.Background = BrushFromHex(picked, Color.FromRgb(38, 132, 255));
                     headerDot.Background = BrushFromHex(picked, Color.FromRgb(38, 132, 255));
                     cLbl.Text = picked.ToUpperInvariant();
+                    MarkDirty();
                     SyncActiveFactionToDefaultModel();
                 }
             };
@@ -631,21 +915,22 @@ namespace FieldTakHub.Builder.Services
             atakStack.Children.Add(new TextBlock { Text = "Częstotliwości wysyłania pozycji GPS/PLI oraz ważność paczki/QR (0 = bezterminowo).", Foreground = BrushMutedText, FontSize = 9.5, Margin = new Thickness(0, 1, 0, 5) });
 
             var atakRow1 = new UniformGrid { Columns = 3 };
-            atakRow1.Children.Add(FieldBox("Strategia PLI", ComboCtrl(new[] { "Constant", "Dynamic" }, fac.PliStrategy, win, v => { fac.PliStrategy = v; Current.LocationReportingStrategy = v; })));
-            atakRow1.Children.Add(FieldBox("Const Rel/LTE (s)", IntCtrl(fac.ConstRateReliable, v => { fac.ConstRateReliable = v; Current.ConstantReportingRateReliable = v; })));
-            atakRow1.Children.Add(FieldBox("Const Mesh (s)", IntCtrl(fac.ConstRateUnreliable, v => { fac.ConstRateUnreliable = v; Current.ConstantReportingRateUnreliable = v; })));
-            atakRow1.Children.Add(FieldBox("Dynamic Max (s)", IntCtrl(fac.DynRateMax, v => { fac.DynRateMax = v; Current.DynamicReportingRateMaxReliable = v; })));
-            atakRow1.Children.Add(FieldBox("Dynamic Min (s)", IntCtrl(fac.DynRateMin, v => { fac.DynRateMin = v; Current.DynamicReportingRateMinReliable = v; })));
-            atakRow1.Children.Add(FieldBox("Postój LTE (s)", IntCtrl(fac.StationaryReliable, v => { fac.StationaryReliable = v; Current.DynamicReportingRateStationaryReliable = v; })));
-            atakRow1.Children.Add(FieldBox("Postój Mesh (s)", IntCtrl(fac.StationaryMesh, v => { fac.StationaryMesh = v; Current.DynamicReportingRateStationaryUnreliable = v; })));
-            atakRow1.Children.Add(FieldBox("TCP Timeout (s)", IntCtrl(fac.TcpTimeout, v => { fac.TcpTimeout = v; Current.TcpConnectTimeout = v; })));
-            atakRow1.Children.Add(FieldBox("Ważność (0=bezterm.)", IntCtrl(fac.ValidityHours, v => { fac.ValidityHours = v; Current.PackageValidityHours = v; Current.QrValidityHours = v; })));
+            atakRow1.Children.Add(FieldBox("Strategia PLI", ComboCtrl(new[] { "Constant", "Dynamic" }, fac.PliStrategy, win, v => { fac.PliStrategy = v; Current.LocationReportingStrategy = v; MarkDirty(); })));
+            atakRow1.Children.Add(FieldBox("Const Rel/LTE (s)", IntCtrl(fac.ConstRateReliable, v => { fac.ConstRateReliable = v; Current.ConstantReportingRateReliable = v; MarkDirty(); })));
+            atakRow1.Children.Add(FieldBox("Const Mesh (s)", IntCtrl(fac.ConstRateUnreliable, v => { fac.ConstRateUnreliable = v; Current.ConstantReportingRateUnreliable = v; MarkDirty(); })));
+            atakRow1.Children.Add(FieldBox("Dynamic Max (s)", IntCtrl(fac.DynRateMax, v => { fac.DynRateMax = v; Current.DynamicReportingRateMaxReliable = v; MarkDirty(); })));
+            atakRow1.Children.Add(FieldBox("Dynamic Min (s)", IntCtrl(fac.DynRateMin, v => { fac.DynRateMin = v; Current.DynamicReportingRateMinReliable = v; MarkDirty(); })));
+            atakRow1.Children.Add(FieldBox("Postój LTE (s)", IntCtrl(fac.StationaryReliable, v => { fac.StationaryReliable = v; Current.DynamicReportingRateStationaryReliable = v; MarkDirty(); })));
+            atakRow1.Children.Add(FieldBox("Postój Mesh (s)", IntCtrl(fac.StationaryMesh, v => { fac.StationaryMesh = v; Current.DynamicReportingRateStationaryUnreliable = v; MarkDirty(); })));
+            atakRow1.Children.Add(FieldBox("TCP Timeout (s)", IntCtrl(fac.TcpTimeout, v => { fac.TcpTimeout = v; Current.TcpConnectTimeout = v; MarkDirty(); })));
+            atakRow1.Children.Add(FieldBox("Ważność (0=bezterm.)", IntCtrl(fac.ValidityHours, v => { fac.ValidityHours = v; Current.PackageValidityHours = v; Current.QrValidityHours = v; MarkDirty(); })));
             atakStack.Children.Add(atakRow1);
 
             CheckBox MakeChk(string label, bool init, Action<bool> onChg)
             {
                 var c = new CheckBox { Content = label, IsChecked = init, Foreground = Brushes.White, FontSize = 9.5, Margin = new Thickness(0, 2, 6, 2) };
-                c.Checked += (_, __) => onChg(true); c.Unchecked += (_, __) => onChg(false);
+                c.Checked += (_, __) => { onChg(true); MarkDirty(); };
+                c.Unchecked += (_, __) => { onChg(false); MarkDirty(); };
                 return c;
             }
             var atakFlags = new UniformGrid { Columns = 2, Margin = new Thickness(0, 2, 0, 0) };
@@ -661,15 +946,15 @@ namespace FieldTakHub.Builder.Services
             meshStack.Children.Add(new TextBlock { Text = "HYBRID · PLI · GeoChat · OTS Relay", Foreground = BrushMutedText, FontSize = 9.5, Margin = new Thickness(0, 1, 0, 5) });
 
             var meshRow1 = new UniformGrid { Columns = 3 };
-            meshRow1.Children.Add(FieldBox("Tryb", ComboCtrl(new[] { "HYBRID", "PLUGIN_ONLY", "NATIVE_TAK", "OFF" }, fac.MeshMode, win, v => fac.MeshMode = v)));
-            meshRow1.Children.Add(FieldBox("Rola urządzenia", ComboCtrl(new[] { "Auto", "TAK", "TAK_Tracker", "Client", "Router" }, fac.DeviceRole, win, v => { fac.DeviceRole = v; Current.DeviceRole = v; })));
-            meshRow1.Children.Add(FieldBox("Model", ComboCtrl(new[] { "generic_meshtastic", "tbeam", "heltec_v3", "meshtracker_x1", "rak4631" }, fac.HardwareModel, win, v => { fac.HardwareModel = v; Current.HardwareModel = v; })));
+            meshRow1.Children.Add(FieldBox("Tryb", ComboCtrl(new[] { "HYBRID", "PLUGIN_ONLY", "NATIVE_TAK", "OFF" }, fac.MeshMode, win, v => { fac.MeshMode = v; MarkDirty(); })));
+            meshRow1.Children.Add(FieldBox("Rola urządzenia", ComboCtrl(new[] { "Auto", "TAK", "TAK_Tracker", "Client", "Router" }, fac.DeviceRole, win, v => { fac.DeviceRole = v; Current.DeviceRole = v; MarkDirty(); })));
+            meshRow1.Children.Add(FieldBox("Model", ComboCtrl(new[] { "generic_meshtastic", "tbeam", "heltec_v3", "meshtracker_x1", "rak4631" }, fac.HardwareModel, win, v => { fac.HardwareModel = v; Current.HardwareModel = v; MarkDirty(); })));
             meshStack.Children.Add(meshRow1);
 
             var meshRow2 = new UniformGrid { Columns = 3 };
-            meshRow2.Children.Add(FieldBox("Region", ComboCtrl(new[] { "EU_868", "US_915", "EU_433", "ANZ_915" }, fac.LoraRegion, win, v => { fac.LoraRegion = v; Current.LoraRegion = v; })));
-            meshRow2.Children.Add(FieldBox("Modem preset", ComboCtrl(new[] { "SHORT_FAST", "LONG_FAST", "MEDIUM_FAST", "MEDIUM_SLOW" }, fac.LoraModemPreset, win, v => { fac.LoraModemPreset = v; Current.LoraModemPreset = v; })));
-            meshRow2.Children.Add(FieldBox("Hop limit", IntCtrl(fac.HopLimit, v => fac.HopLimit = v)));
+            meshRow2.Children.Add(FieldBox("Region", ComboCtrl(new[] { "EU_868", "US_915", "EU_433", "ANZ_915" }, fac.LoraRegion, win, v => { fac.LoraRegion = v; Current.LoraRegion = v; MarkDirty(); })));
+            meshRow2.Children.Add(FieldBox("Modem preset", ComboCtrl(new[] { "SHORT_FAST", "LONG_FAST", "MEDIUM_FAST", "MEDIUM_SLOW" }, fac.LoraModemPreset, win, v => { fac.LoraModemPreset = v; Current.LoraModemPreset = v; MarkDirty(); })));
+            meshRow2.Children.Add(FieldBox("Hop limit", IntCtrl(fac.HopLimit, v => { fac.HopLimit = v; MarkDirty(); })));
             meshStack.Children.Add(meshRow2);
 
             var flagsGrid = new UniformGrid { Columns = 4, Margin = new Thickness(0, 2, 0, 4) };
@@ -680,8 +965,8 @@ namespace FieldTakHub.Builder.Services
             meshStack.Children.Add(flagsGrid);
 
             var meshRow3 = new UniformGrid { Columns = 2 };
-            var chNameBox = (TextBox)TextCtrl(fac.ChannelName, v => { fac.ChannelName = v.Trim(); SyncActiveFactionToDefaultModel(); });
-            var chUrlBox = (TextBox)TextCtrl(fac.ChannelUrl, v => fac.ChannelUrl = v.Trim());
+            var chNameBox = (TextBox)TextCtrl(fac.ChannelName, v => { fac.ChannelName = v.Trim(); MarkDirty(); SyncActiveFactionToDefaultModel(); });
+            var chUrlBox = (TextBox)TextCtrl(fac.ChannelUrl, v => { fac.ChannelUrl = v.Trim(); MarkDirty(); });
             meshRow3.Children.Add(FieldBox("Nazwa kanału", chNameBox));
             meshRow3.Children.Add(FieldBox("Channel URL (opcjonalny)", chUrlBox));
             meshStack.Children.Add(meshRow3);
@@ -689,12 +974,12 @@ namespace FieldTakHub.Builder.Services
             var pskGrid = new Grid { Margin = new Thickness(0, 0, 0, 4) };
             pskGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
             pskGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(90) });
-            var pskBox = (TextBox)TextCtrl(fac.Psk, v => { fac.Psk = v.Trim(); SyncActiveFactionToDefaultModel(); });
+            var pskBox = (TextBox)TextCtrl(fac.Psk, v => { fac.Psk = v.Trim(); MarkDirty(); SyncActiveFactionToDefaultModel(); });
             pskBox.FontFamily = new FontFamily("Consolas");
             var fPsk = FieldBox("Klucz szyfrujący PSK (AES-256 Base64):", pskBox);
             Grid.SetColumn(fPsk, 0); pskGrid.Children.Add(fPsk);
             var btnRoll = new Button { Content = "🎲 Losuj PSK", Height = 26, Margin = new Thickness(0, 14, 0, 5), Background = BrushInputBg, Foreground = BrushAccent, BorderBrush = BrushAccent, BorderThickness = new Thickness(1), FontSize = 9.5, FontWeight = FontWeights.Bold, Cursor = Cursors.Hand };
-            btnRoll.Click += (_, __) => { fac.Psk = TacticalConfigModel.GenerateRandomBase64Psk(); pskBox.Text = fac.Psk; SyncActiveFactionToDefaultModel(); };
+            btnRoll.Click += (_, __) => { fac.Psk = TacticalConfigModel.GenerateRandomBase64Psk(); pskBox.Text = fac.Psk; MarkDirty(); SyncActiveFactionToDefaultModel(); };
             Grid.SetColumn(btnRoll, 1); pskGrid.Children.Add(btnRoll);
             meshStack.Children.Add(pskGrid);
 
@@ -708,7 +993,7 @@ namespace FieldTakHub.Builder.Services
                 return b;
             }
             var meshBtnBar = new UniformGrid { Columns = 4 };
-            meshBtnBar.Children.Add(SmallActBtn("Save", () => { WriteConfigsToDirectory(GetPrimarySourceDirectory(win), fac); meshStatusTxt.Text = $"✓ Zapisano konfigurację {fac.Name}."; meshStatusTxt.Foreground = BrushAccent; }));
+            meshBtnBar.Children.Add(SmallActBtn("Save", () => { WriteConfigsToDirectory(GetPrimarySourceDirectory(win), fac); SaveSessionStateAuto(win); meshStatusTxt.Text = $"✓ Zapisano konfigurację {fac.Name}."; meshStatusTxt.Foreground = BrushAccent; }));
             meshBtnBar.Children.Add(SmallActBtn("Open", () => TryOpenFolderInExplorer(GetPrimarySourceDirectory(win))));
             meshBtnBar.Children.Add(SmallActBtn("Copy", () => { try { Clipboard.SetText(!string.IsNullOrWhiteSpace(fac.ChannelUrl) ? fac.ChannelUrl : fac.Psk); meshStatusTxt.Text = "✓ Skopiowano do schowka."; } catch { } }));
             meshBtnBar.Children.Add(SmallActBtn("Clear", () => { chUrlBox.Text = ""; fac.ChannelUrl = ""; }));
@@ -724,17 +1009,17 @@ namespace FieldTakHub.Builder.Services
             gwStack.Children.Add(MakeChk("Gateway enabled", fac.GatewayEnabled, v => fac.GatewayEnabled = v));
 
             var gwRow1 = new UniformGrid { Columns = 2, Margin = new Thickness(0, 2, 0, 4) };
-            gwRow1.Children.Add(TextCtrl(fac.GatewayProfile, v => fac.GatewayProfile = v));
-            gwRow1.Children.Add(TextCtrl(fac.GatewayMode, v => fac.GatewayMode = v));
+            gwRow1.Children.Add(TextCtrl(fac.GatewayProfile, v => { fac.GatewayProfile = v; MarkDirty(); }));
+            gwRow1.Children.Add(TextCtrl(fac.GatewayMode, v => { fac.GatewayMode = v; MarkDirty(); }));
             gwStack.Children.Add(gwRow1);
 
             var gwRow2 = new Grid { Margin = new Thickness(0, 0, 0, 4) };
             gwRow2.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
             gwRow2.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(42) });
             gwRow2.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1.1, GridUnitType.Star) });
-            var gwProto = TextCtrl(fac.GatewayProtocol, v => fac.GatewayProtocol = v);
-            var gwPort = IntCtrl(fac.GatewayPort, v => fac.GatewayPort = v);
-            var gwTopic = TextCtrl(fac.GatewayTopic, v => fac.GatewayTopic = v);
+            var gwProto = TextCtrl(fac.GatewayProtocol, v => { fac.GatewayProtocol = v; MarkDirty(); });
+            var gwPort = IntCtrl(fac.GatewayPort, v => { fac.GatewayPort = v; MarkDirty(); });
+            var gwTopic = TextCtrl(fac.GatewayTopic, v => { fac.GatewayTopic = v; MarkDirty(); });
             Grid.SetColumn(gwProto, 0); Grid.SetColumn(gwPort, 1); Grid.SetColumn(gwTopic, 2);
             gwRow2.Children.Add(gwProto); gwRow2.Children.Add(gwPort); gwRow2.Children.Add(gwTopic);
             gwStack.Children.Add(gwRow2);
@@ -748,11 +1033,11 @@ namespace FieldTakHub.Builder.Services
             enrStack.Children.Add(new TextBlock { Text = "Wklej krótkotrwały URI enrollmentu OpenTAK.", Foreground = BrushMutedText, FontSize = 9, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 4) });
 
             var enrUriBox = new TextBox { Text = fac.EnrollmentUri, Height = 44, AcceptsReturn = true, TextWrapping = TextWrapping.Wrap, Background = BrushInputBg, Foreground = Brushes.White, BorderBrush = BrushInputBorder, BorderThickness = new Thickness(1), FontSize = 9.5, Padding = new Thickness(4), Margin = new Thickness(0, 0, 0, 6) };
-            enrUriBox.TextChanged += (_, __) => fac.EnrollmentUri = enrUriBox.Text.Trim();
+            enrUriBox.TextChanged += (_, __) => { fac.EnrollmentUri = enrUriBox.Text.Trim(); MarkDirty(); };
             enrStack.Children.Add(enrUriBox);
 
             var enrBtnBar = new UniformGrid { Columns = 2 };
-            enrBtnBar.Children.Add(SmallActBtn("Save enrollment", () => WriteConfigsToDirectory(GetPrimarySourceDirectory(win), fac)));
+            enrBtnBar.Children.Add(SmallActBtn("Save enrollment", () => { WriteConfigsToDirectory(GetPrimarySourceDirectory(win), fac); SaveSessionStateAuto(win); }));
             enrBtnBar.Children.Add(SmallActBtn("Clear", () => { enrUriBox.Text = ""; fac.EnrollmentUri = ""; }));
             enrStack.Children.Add(enrBtnBar);
             enrCard.Child = enrStack;
@@ -770,6 +1055,7 @@ namespace FieldTakHub.Builder.Services
                 var sides = _factions.Select(f => (SanitizeFileName(f.Name).ToLowerInvariant(), f.ColorHex)).ToList();
                 await Task.Run(() => { EnsureFactionFoldersInitialized(srcDir, sides); WriteConfigsToDirectory(srcDir, fac); });
                 await ForceSizeUpdateAsync(win);
+                SaveSessionStateAuto(win);
                 meshStatusTxt.Text = $"✓ Przygotowano pliki konfiguracyjne i podfoldery KML dla {_factions.Count} stron.";
                 meshStatusTxt.Foreground = BrushAccent;
             };
@@ -827,7 +1113,7 @@ namespace FieldTakHub.Builder.Services
                 rg.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(34) });
                 var lbl = new TextBlock { Text = label, Foreground = Brushes.White, FontSize = 11 };
                 var valTxt = new TextBlock { Text = initVal.ToString(), Foreground = BrushAccent, FontSize = 11, FontWeight = FontWeights.Bold, HorizontalAlignment = HorizontalAlignment.Right };
-                var sl = new Slider { Minimum = 0, Maximum = 255, Value = initVal };
+                var sl = new Slider { Minimum = 0, Maximum = 255, Value = initVal, IsMoveToPointEnabled = true };
                 sl.ValueChanged += (_, e) => { byte v = (byte)Math.Clamp((int)Math.Round(e.NewValue), 0, 255); valTxt.Text = v.ToString(); onVal(v); UpdateFromRgb(); };
                 slOut = sl; Grid.SetColumn(lbl, 0); Grid.SetColumn(sl, 1); Grid.SetColumn(valTxt, 2);
                 rg.Children.Add(lbl); rg.Children.Add(sl); rg.Children.Add(valTxt);
@@ -869,6 +1155,7 @@ namespace FieldTakHub.Builder.Services
             try
             {
                 EnsureDefaultFactions();
+                SaveSessionStateAuto(win);
                 string sourceDir = GetPrimarySourceDirectory(win);
                 string eventName = GetEventNameFromWindow(win);
                 string parentDir = Path.GetDirectoryName(Path.TrimEndingDirectorySeparator(sourceDir)) ?? AppDomain.CurrentDomain.BaseDirectory;
@@ -902,6 +1189,7 @@ namespace FieldTakHub.Builder.Services
         {
             try
             {
+                SaveSessionStateAuto(win);
                 string sourceDir = GetPrimarySourceDirectory(win);
                 string eventName = GetEventNameFromWindow(win);
                 string parentDir = Path.GetDirectoryName(Path.TrimEndingDirectorySeparator(sourceDir)) ?? AppDomain.CurrentDomain.BaseDirectory;
@@ -964,6 +1252,27 @@ namespace FieldTakHub.Builder.Services
             }
             catch { }
             return "Operacja_TAK";
+        }
+
+        private static void SetEventNameInWindow(Window win, string eventName)
+        {
+            if (win == null || string.IsNullOrWhiteSpace(eventName)) return;
+            try
+            {
+                var tbs = new List<TextBlock>(); FindVisualChildren(win, tbs);
+                foreach (var tb in tbs)
+                    if (tb.Text != null && (tb.Text.Contains("Nazwa wydarzenia") || tb.Text.Contains("Nazwa paczki")))
+                    {
+                        var parent = GetAnyParent(tb);
+                        if (parent != null)
+                        {
+                            var siblings = new List<TextBox>(); FindVisualChildren(parent, siblings);
+                            var targetBox = siblings.FirstOrDefault();
+                            if (targetBox != null) { targetBox.Text = eventName; break; }
+                        }
+                    }
+            }
+            catch { }
         }
 
         internal static string SanitizeFileName(string name)
@@ -1310,7 +1619,7 @@ namespace FieldTakHub.Builder.Services
         internal static UIElement TextCtrl(string init, Action<string> onChg)
         {
             var tb = new TextBox { Text = init, Height = 25, VerticalContentAlignment = VerticalAlignment.Center, Padding = new Thickness(5, 0, 5, 0), FontSize = 10.5, Background = BrushInputBg, Foreground = Brushes.White, BorderBrush = BrushInputBorder, BorderThickness = new Thickness(1) };
-            tb.TextChanged += (_, __) => onChg(tb.Text);
+            tb.TextChanged += (_, __) => { MarkDirty(); onChg(tb.Text); };
             return tb;
         }
 
@@ -1320,7 +1629,7 @@ namespace FieldTakHub.Builder.Services
         {
             var cb = new ComboBox { ItemsSource = items, SelectedItem = init, Height = 25, FontSize = 10.5, VerticalContentAlignment = VerticalAlignment.Center, Tag = "INJECTED" };
             ApplyUnifiedComboBoxTheme(cb, win);
-            cb.SelectionChanged += (_, __) => { if (cb.SelectedItem is string str) onChg(str); };
+            cb.SelectionChanged += (_, __) => { if (cb.SelectedItem is string str) { MarkDirty(); onChg(str); } };
             return cb;
         }
 

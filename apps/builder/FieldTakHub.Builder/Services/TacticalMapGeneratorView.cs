@@ -6,9 +6,6 @@ using System.Globalization;
 using System.IO;
 using System.IO.Compression;
 using System.Linq;
-using System.Net;
-using System.Net.Http;
-using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -27,424 +24,8 @@ using Microsoft.Win32;
 
 namespace FieldTakHub.Builder.Services
 {
-    public class TacticalMapLayerDef
+    public static partial class TacticalMapGeneratorView
     {
-        public string Id { get; set; }
-        public string Name { get; set; }
-        public bool IsWmsEpsg3857 { get; set; }
-        public string UrlTemplate { get; set; }
-        public string FallbackUrlTemplate { get; set; }
-        public override string ToString() => Name;
-    }
-
-    public class SheetFormatDef
-    {
-        public string Name { get; set; }
-        public double WidthMm { get; set; }
-        public double HeightMm { get; set; }
-        public override string ToString() => Name;
-    }
-
-    public class NatoSymbolOption
-    {
-        public string Code { get; set; }
-        public string ShortBadge { get; set; }
-        public string NatoMeaning { get; set; }
-        public string Label { get; set; }
-        public override string ToString() => Label;
-    }
-
-    public class TacticalMapObjectItem
-    {
-        public string Id { get; set; } = Guid.NewGuid().ToString("N");
-        public string Kind { get; set; } = "Marker"; // "Marker", "Dot", "AO", "Sector", "Route"
-        public string SymbolCode { get; set; } = "NATO_HQ";
-        public string Name { get; set; } = "HQ";
-        public string ColorHex { get; set; } = "#2684FF";
-        public bool ShowLabel { get; set; } = true;
-        public List<(double Lat, double Lon)> Points { get; set; } = new List<(double Lat, double Lon)>();
-    }
-
-    internal static class NativeSqliteWriter
-    {
-        private const string SqliteDll = "winsqlite3.dll";
-
-        [DllImport(SqliteDll, CallingConvention = CallingConvention.Cdecl)]
-        private static extern int sqlite3_open(byte[] filenameUtf8, out IntPtr db);
-
-        [DllImport(SqliteDll, CallingConvention = CallingConvention.Cdecl)]
-        private static extern int sqlite3_close(IntPtr db);
-
-        [DllImport(SqliteDll, CallingConvention = CallingConvention.Cdecl)]
-        private static extern int sqlite3_exec(IntPtr db, byte[] sqlUtf8, IntPtr callback, IntPtr arg, out IntPtr errMsg);
-
-        [DllImport(SqliteDll, CallingConvention = CallingConvention.Cdecl)]
-        private static extern int sqlite3_prepare_v2(IntPtr db, byte[] sqlUtf8, int nByte, out IntPtr stmt, IntPtr pzTail);
-
-        [DllImport(SqliteDll, CallingConvention = CallingConvention.Cdecl)]
-        private static extern int sqlite3_bind_int(IntPtr stmt, int index, int val);
-
-        [DllImport(SqliteDll, CallingConvention = CallingConvention.Cdecl)]
-        private static extern int sqlite3_bind_blob(IntPtr stmt, int index, byte[] data, int nData, IntPtr destructor);
-
-        [DllImport(SqliteDll, CallingConvention = CallingConvention.Cdecl)]
-        private static extern int sqlite3_step(IntPtr stmt);
-
-        [DllImport(SqliteDll, CallingConvention = CallingConvention.Cdecl)]
-        private static extern int sqlite3_reset(IntPtr stmt);
-
-        [DllImport(SqliteDll, CallingConvention = CallingConvention.Cdecl)]
-        private static extern int sqlite3_finalize(IntPtr stmt);
-
-        private static byte[] ToUtf8NullTerm(string s) => Encoding.UTF8.GetBytes((s ?? "") + "\0");
-
-        private static void ExecSql(IntPtr db, string sql)
-        {
-            sqlite3_exec(db, ToUtf8NullTerm(sql), IntPtr.Zero, IntPtr.Zero, out IntPtr _);
-        }
-
-        public static void WriteMbTilesDatabase(string filePath, string mapTitle, int minZoom, int maxZoom, double north, double south, double east, double west, List<(int Z, int X, int Y, byte[] Data)> tiles)
-        {
-            if (File.Exists(filePath)) File.Delete(filePath);
-            if (sqlite3_open(ToUtf8NullTerm(filePath), out IntPtr db) != 0) return;
-            try
-            {
-                ExecSql(db, "PRAGMA synchronous = OFF; PRAGMA journal_mode = MEMORY;");
-                ExecSql(db, "CREATE TABLE metadata (name text, value text);");
-                ExecSql(db, "CREATE TABLE tiles (zoom_level integer, tile_column integer, tile_row integer, tile_data blob);");
-                ExecSql(db, "CREATE UNIQUE INDEX tile_index on tiles (zoom_level, tile_column, tile_row);");
-
-                string bounds = string.Create(CultureInfo.InvariantCulture, $"{west:0.000000},{south:0.000000},{east:0.000000},{north:0.000000}");
-                string center = string.Create(CultureInfo.InvariantCulture, $"{(west + east) / 2.0:0.000000},{(south + north) / 2.0:0.000000},{minZoom}");
-                string safeTitle = (mapTitle ?? "FieldTakHub_Map").Replace("'", "");
-
-                ExecSql(db, "BEGIN TRANSACTION;");
-                ExecSql(db, $"INSERT INTO metadata VALUES ('name', '{safeTitle}');");
-                ExecSql(db, "INSERT INTO metadata VALUES ('type', 'baselayer');");
-                ExecSql(db, "INSERT INTO metadata VALUES ('version', '1.2');");
-                ExecSql(db, "INSERT INTO metadata VALUES ('description', 'Field TAK Hub 2.4 Offline Map');");
-                ExecSql(db, "INSERT INTO metadata VALUES ('format', 'jpg');");
-                ExecSql(db, $"INSERT INTO metadata VALUES ('bounds', '{bounds}');");
-                ExecSql(db, $"INSERT INTO metadata VALUES ('center', '{center}');");
-                ExecSql(db, $"INSERT INTO metadata VALUES ('minzoom', '{minZoom}');");
-                ExecSql(db, $"INSERT INTO metadata VALUES ('maxzoom', '{maxZoom}');");
-
-                byte[] insSql = ToUtf8NullTerm("INSERT OR REPLACE INTO tiles (zoom_level, tile_column, tile_row, tile_data) VALUES (?, ?, ?, ?);");
-                if (sqlite3_prepare_v2(db, insSql, insSql.Length, out IntPtr stmt, IntPtr.Zero) == 0)
-                {
-                    try
-                    {
-                        foreach (var t in tiles)
-                        {
-                            if (t.Data == null || t.Data.Length == 0) continue;
-                            int tmsY = (1 << t.Z) - 1 - t.Y;
-                            sqlite3_bind_int(stmt, 1, t.Z);
-                            sqlite3_bind_int(stmt, 2, t.X);
-                            sqlite3_bind_int(stmt, 3, tmsY);
-                            sqlite3_bind_blob(stmt, 4, t.Data, t.Data.Length, IntPtr.Zero);
-                            sqlite3_step(stmt);
-                            sqlite3_reset(stmt);
-                        }
-                    }
-                    finally { sqlite3_finalize(stmt); }
-                }
-                ExecSql(db, "COMMIT;");
-            }
-            finally { sqlite3_close(db); }
-        }
-
-        public static void WriteAtakMobacSqliteDatabase(string filePath, int minZoom, int maxZoom, List<(int Z, int X, int Y, byte[] Data)> tiles)
-        {
-            if (File.Exists(filePath)) File.Delete(filePath);
-            if (sqlite3_open(ToUtf8NullTerm(filePath), out IntPtr db) != 0) return;
-            try
-            {
-                ExecSql(db, "PRAGMA synchronous = OFF; PRAGMA journal_mode = MEMORY;");
-                ExecSql(db, "CREATE TABLE info (minzoom INTEGER, maxzoom INTEGER);");
-                ExecSql(db, "CREATE TABLE tiles (x int, y int, z int, s int, image blob, PRIMARY KEY (x,y,z,s));");
-                ExecSql(db, "CREATE INDEX IND on tiles (x,y,z,s);");
-
-                ExecSql(db, "BEGIN TRANSACTION;");
-                ExecSql(db, $"INSERT INTO info VALUES ({17 - maxZoom}, {17 - minZoom});");
-
-                byte[] insSql = ToUtf8NullTerm("INSERT OR REPLACE INTO tiles (x, y, z, s, image) VALUES (?, ?, ?, 0, ?);");
-                if (sqlite3_prepare_v2(db, insSql, insSql.Length, out IntPtr stmt, IntPtr.Zero) == 0)
-                {
-                    try
-                    {
-                        foreach (var t in tiles)
-                        {
-                            if (t.Data == null || t.Data.Length == 0) continue;
-                            int bigPlanetZ = 17 - t.Z;
-                            sqlite3_bind_int(stmt, 1, t.X);
-                            sqlite3_bind_int(stmt, 2, t.Y);
-                            sqlite3_bind_int(stmt, 3, bigPlanetZ);
-                            sqlite3_bind_blob(stmt, 4, t.Data, t.Data.Length, IntPtr.Zero);
-                            sqlite3_step(stmt);
-                            sqlite3_reset(stmt);
-                        }
-                    }
-                    finally { sqlite3_finalize(stmt); }
-                }
-                ExecSql(db, "COMMIT;");
-            }
-            finally { sqlite3_close(db); }
-        }
-    }
-
-    internal sealed class FastTacticalOverlayRenderer : FrameworkElement
-    {
-        private readonly Action<DrawingContext, double, double> _renderCallback;
-        public FastTacticalOverlayRenderer(Action<DrawingContext, double, double> renderCallback)
-        {
-            _renderCallback = renderCallback;
-            IsHitTestVisible = false;
-            SnapsToDevicePixels = true;
-        }
-
-        protected override void OnRender(DrawingContext dc)
-        {
-            base.OnRender(dc);
-            if (ActualWidth > 10 && ActualHeight > 10)
-                _renderCallback?.Invoke(dc, ActualWidth, ActualHeight);
-        }
-    }
-
-    public static class TacticalMapGeneratorView
-    {
-        public static readonly List<SheetFormatDef> SheetFormats = new List<SheetFormatDef>
-        {
-            new SheetFormatDef { Name = "A4 — Sztabowy (297 × 210 mm)", WidthMm = 297, HeightMm = 210 },
-            new SheetFormatDef { Name = "A3 — Plakat Sztabowy (420 × 297 mm)", WidthMm = 420, HeightMm = 297 },
-            new SheetFormatDef { Name = "A5 — Zeszytowy / Mapnik (210 × 148 mm)", WidthMm = 210, HeightMm = 148 },
-            new SheetFormatDef { Name = "B5 — Zeszytowy Taktyczny (250 × 176 mm)", WidthMm = 250, HeightMm = 176 },
-            new SheetFormatDef { Name = "A6 — Kieszonkowy / Admin Pouch (148 × 105 mm)", WidthMm = 148, HeightMm = 105 },
-            new SheetFormatDef { Name = "B6 — Kieszonkowy (176 × 125 mm)", WidthMm = 176, HeightMm = 125 },
-            new SheetFormatDef { Name = "Mapnik Naręczny Standard (150 × 100 mm)", WidthMm = 150, HeightMm = 100 },
-            new SheetFormatDef { Name = "Mapnik Naręczny Kompakt (130 × 85 mm)", WidthMm = 130, HeightMm = 85 }
-        };
-
-        public static readonly List<NatoSymbolOption> NatoSymbols = new List<NatoSymbolOption>
-        {
-            new NatoSymbolOption { Code = "NATO_HQ",     ShortBadge = "HQ",  NatoMeaning = "Sztab / Dowództwo (stopka masztu)", Label = "🚩 [HQ] NATO Sztab / Dowództwo (Flaga)" },
-            new NatoSymbolOption { Code = "NATO_INF",    ShortBadge = "X",   NatoMeaning = "Piechota / Drużyna szturmowa",      Label = "[X] NATO Piechota / Drużyna" },
-            new NatoSymbolOption { Code = "NATO_RECON",  ShortBadge = "/",   NatoMeaning = "Zwiad / Rozpoznanie (Recon)",       Label = "[/] NATO Zwiad / Recon" },
-            new NatoSymbolOption { Code = "NATO_MED",    ShortBadge = "+",   NatoMeaning = "Punkt Medyczny / MEDEVAC",          Label = "[+] NATO Punkt Medyczny / MEDEVAC" },
-            new NatoSymbolOption { Code = "NATO_COMMS",  ShortBadge = "⚡",  NatoMeaning = "Węzeł Łączności / Przekaźnik",      Label = "[⚡] NATO Węzeł Łączności / LoRa" },
-            new NatoSymbolOption { Code = "NATO_SUPPLY", ShortBadge = "SUP", NatoMeaning = "Punkt Amunicyjny / Logistyka",      Label = "[SUP] NATO Punkt Amunicyjny / Logistyka" },
-            new NatoSymbolOption { Code = "NATO_OP",     ShortBadge = "△",   NatoMeaning = "Punkt Obserwacyjny (OP)",           Label = "[△] NATO Punkt Obserwacyjny (OP)" },
-            new NatoSymbolOption { Code = "NATO_SNIPER", ShortBadge = "⊕",   NatoMeaning = "Snajper / Strzelec Wyborowy",       Label = "[⊕] NATO Snajper / Strzelec" },
-            new NatoSymbolOption { Code = "NATO_CP",     ShortBadge = "CP",  NatoMeaning = "Punkt Kontrolny / Respawn",         Label = "[CP] NATO Punkt Kontrolny / Respawn" },
-            new NatoSymbolOption { Code = "NATO_LZ",     ShortBadge = "LZ",  NatoMeaning = "Strefa Lądowania / Zrzutu",         Label = "[LZ] NATO Strefa Lądowania / Zrzutu" },
-            new NatoSymbolOption { Code = "NATO_OBJ",    ShortBadge = "OBJ", NatoMeaning = "Cel Operacji (Objective)",          Label = "[OBJ] NATO Cel Operacji (Objective)" },
-            new NatoSymbolOption { Code = "NATO_HAZARD", ShortBadge = "!",   NatoMeaning = "Zagrożenie / Strefa No-Go",         Label = "[!] NATO Zagrożenie / Strefa No-Go" }
-        };
-
-        public static readonly List<TacticalMapLayerDef> Layers = new List<TacticalMapLayerDef>
-        {
-            new TacticalMapLayerDef { Id = "google_hyb", Name = "Google Satelita + Opisy", IsWmsEpsg3857 = false, UrlTemplate = "https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}" },
-            new TacticalMapLayerDef { Id = "google_sat", Name = "Google Satelita (Czysta Ortofotomapa)", IsWmsEpsg3857 = false, UrlTemplate = "https://mt1.google.com/vt/lyrs=s&x={x}&y={y}&z={z}" },
-            new TacticalMapLayerDef { Id = "google_ter", Name = "Google Teren (Warstwice)", IsWmsEpsg3857 = false, UrlTemplate = "https://mt1.google.com/vt/lyrs=p&x={x}&y={y}&z={z}" },
-            new TacticalMapLayerDef
-            {
-                Id = "geoportal_hires",
-                Name = "Geoportal Ortofotomapa HIGH-RES (PZGIK)",
-                IsWmsEpsg3857 = true,
-                UrlTemplate = "https://mapy.geoportal.gov.pl/wss/service/PZGIK/ORTO/WMS/HighResolution?SERVICE=WMS&VERSION=1.1.1&REQUEST=GetMap&LAYERS=Raster&STYLES=&SRS=EPSG:3857&BBOX={bbox}&WIDTH={w}&HEIGHT={h}&FORMAT=image/jpeg",
-                FallbackUrlTemplate = "https://mapy.geoportal.gov.pl/wss/service/PZGIK/ORTO/WMS/StandardResolution?SERVICE=WMS&VERSION=1.1.1&REQUEST=GetMap&LAYERS=Raster&STYLES=&SRS=EPSG:3857&BBOX={bbox}&WIDTH={w}&HEIGHT={h}&FORMAT=image/jpeg"
-            },
-            new TacticalMapLayerDef
-            {
-                Id = "geoportal_std",
-                Name = "Geoportal Ortofotomapa Standard (PZGIK)",
-                IsWmsEpsg3857 = true,
-                UrlTemplate = "https://mapy.geoportal.gov.pl/wss/service/PZGIK/ORTO/WMS/StandardResolution?SERVICE=WMS&VERSION=1.1.1&REQUEST=GetMap&LAYERS=Raster&STYLES=&SRS=EPSG:3857&BBOX={bbox}&WIDTH={w}&HEIGHT={h}&FORMAT=image/jpeg"
-            },
-            new TacticalMapLayerDef
-            {
-                Id = "geoportal_lidar",
-                Name = "Geoportal LiDAR ISOK (Cieniowanie NMT)",
-                IsWmsEpsg3857 = true,
-                UrlTemplate = "https://mapy.geoportal.gov.pl/wss/service/PZGIK/NMT/GRID1/WMS/ShadedRelief?SERVICE=WMS&VERSION=1.1.1&REQUEST=GetMap&LAYERS=Raster&STYLES=&SRS=EPSG:3857&BBOX={bbox}&WIDTH={w}&HEIGHT={h}&FORMAT=image/jpeg"
-            },
-            new TacticalMapLayerDef
-            {
-                Id = "geoportal_topo",
-                Name = "Geoportal Mapa Topograficzna (TOPO / BDOT10k)",
-                IsWmsEpsg3857 = true,
-                UrlTemplate = "https://mapy.geoportal.gov.pl/wss/service/img/guest/TOPO/MapServer/WMSServer?SERVICE=WMS&VERSION=1.1.1&REQUEST=GetMap&LAYERS=Raster&STYLES=&SRS=EPSG:3857&BBOX={bbox}&WIDTH={w}&HEIGHT={h}&FORMAT=image/jpeg",
-                FallbackUrlTemplate = "https://mapy.geoportal.gov.pl/wss/ext/KrajowaIntegracjaMapTopograficznych?SERVICE=WMS&VERSION=1.1.1&REQUEST=GetMap&LAYERS=raster&STYLES=&SRS=EPSG:3857&BBOX={bbox}&WIDTH={w}&HEIGHT={h}&FORMAT=image/png"
-            },
-            new TacticalMapLayerDef { Id = "esri_sat", Name = "ESRI World Imagery (Ortofotomapa)", IsWmsEpsg3857 = false, UrlTemplate = "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}" },
-            new TacticalMapLayerDef { Id = "osm_std", Name = "OpenStreetMap Standard", IsWmsEpsg3857 = false, UrlTemplate = "https://tile.openstreetmap.org/{z}/{x}/{y}.png" },
-            new TacticalMapLayerDef { Id = "open_topomap", Name = "OpenTopoMap (Mapa Topograficzna)", IsWmsEpsg3857 = false, UrlTemplate = "https://a.tile.opentopomap.org/{z}/{x}/{y}.png" },
-            new TacticalMapLayerDef { Id = "open_fotomap", Name = "OpenFotoMap / CyclOSM (Siatka Szlaków)", IsWmsEpsg3857 = false, UrlTemplate = "https://a.tile-cyclosm.openstreetmap.fr/cyclosm/{z}/{x}/{y}.png" }
-        };
-
-        private static readonly HttpClient Http = CreateHttpClient();
-        private static readonly SemaphoreSlim TileThrottle = new SemaphoreSlim(6, 6);
-        private static readonly ConcurrentDictionary<string, byte[]> RawTileCache = new ConcurrentDictionary<string, byte[]>();
-        private static readonly ConcurrentDictionary<string, BitmapSource> DecodedImageCache = new ConcurrentDictionary<string, BitmapSource>();
-        private static readonly ConcurrentDictionary<string, FormattedText> GlyphCache = new ConcurrentDictionary<string, FormattedText>();
-        private static readonly Typeface BoldSegoeTypeface = new Typeface(new FontFamily("Segoe UI"), FontStyles.Normal, FontWeights.Bold, FontStretches.Normal);
-
-        private static Window _hostWindow;
-        private static UIElement _originalWindowContent;
-        private static Border _fullScreenOverlay, _sheetFrameBorder;
-        private static Grid _viewportHostGrid, _mapCompositeGrid;
-        private static Canvas _tileCanvas, _interactiveCanvas;
-        private static FastTacticalOverlayRenderer _fastOverlayRenderer;
-        private static Rectangle _dimmerRect;
-        private static Image _lidarOverlayImage;
-        private static Button _tabBuilderBtn, _tabMapBtn, _btnToolPan, _btnToolMarker, _btnToolDot, _btnToolAo, _btnToolSector, _btnToolRoute;
-        private static readonly List<Button> _scalePresetButtons = new List<Button>();
-        private static TextBlock _statusText, _coordsBadge, _sheetInfoBadge, _offlineEstimateLabel, _offlineProgressLabel;
-        private static ProgressBar _offlineProgressBar;
-        private static StackPanel _objectsListStack;
-        private static WrapPanel _factionsCheckboxesWrap;
-        private static readonly HashSet<string> _selectedMapFactions = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        private static CancellationTokenSource _renderCts, _offlineDownloadCts;
-
-        private static double _centerLat = 49.9135, _centerLon = 19.0238, _dragStartLat, _dragStartLon;
-        private static int _zoom = 16, _targetScaleDenominator = 5000;
-        private static SheetFormatDef _selectedSheet = SheetFormats[0];
-        private static string _sheetOrientation = "Poziomo";
-        private static bool _showLidarSingleWms;
-
-        private static int _offlineMinZoom = 13;
-        private static int _offlineMaxZoom = 17;
-        private static string _offlineBoundsMode = "Widoczny arkusz mapy";
-        private static string _offlineDbFormat = "MBTiles (.mbtiles — ATAK 5.x)";
-        private static bool _bakeLidarInOffline = true;
-        private static bool _includeVectorsWithOffline = true;
-
-        private static string _coordSystem = "MGRS / UTM (Siatka wojskowa w metrach)";
-        private static string _subGridDivision = "Co 33 m (Keypad 1-9)";
-        private static string _gridLabelsMode = "MGRS + Ćwiartki/Keypad";
-        private static string _labelBgStyle = "Kaseton (Czarne tło)";
-        private static double _gridThicknessMultiplier = 1.0;
-        private static double _fontScaleMultiplier = 1.0;
-        private static double _mainGridOpacity = 0.85;
-        private static double _subGridOpacity = 0.75;
-        private static double _mapDimmerOpacity = 0.0;
-        private static double _lidarOpacity = 0.45;
-        private static string _gridColorName = "Żółty";
-        private static string _gridHaloMode = "Pełny czarny obrys";
-
-        private static string _activeTool = "PAN";
-        private static string _selectedObjectColorHex = "#2684FF";
-        private static string _selectedNatoSymbolCode = "NATO_HQ";
-        private static bool _showAllObjectLabels = true;
-        private static bool _newObjectShowLabelDefault = true;
-        private static string _aoOutPattern = "Skośne linie (Hatch ///)";
-        private static double _aoOutMaskOpacity = 0.45;
-        private static readonly List<TacticalMapObjectItem> _mapObjects = new List<TacticalMapObjectItem>();
-        private static TacticalMapObjectItem _activeDraftPoly;
-        private static TextBox _objectNameInputBox, _scaleInputBox, _searchPlaceBox;
-
-        private static bool _showNorthArrow = true, _showScaleBar = true, _showLegend = true, _showNatoSymbolsInLegend = true;
-        private static string _northArrowPos = "Lewy górny róg", _scaleBarPos = "Lewy dolny róg", _legendPos = "Prawy górny róg";
-        private static double? _northNormX, _northNormY, _scaleNormX, _scaleNormY, _legendNormX, _legendNormY;
-        private static string _kmzGrgMode = "Przezroczysta siatka";
-
-        private static bool _isPanningMap;
-        private static Point _mouseDownPoint;
-        private static Point _currentHoverScreenPt;
-        private static bool _isHoveringCanvas;
-        private static TacticalMapObjectItem _draggedObject;
-        private static int _draggedVertexIndex = -1;
-        private static Point _markerDragScreenOffset;
-        private static (double Lat, double Lon) _wholeShapeDragStartLatLon;
-        private static List<(double Lat, double Lon)> _wholeShapeOriginalPoints;
-        private static string _draggedHudId;
-        private static FrameworkElement _draggedHudElement;
-        private static Point _hudStartOffset;
-        private static (double Lat, double Lon)? _rulerStart, _rulerEnd;
-        private static TacticalMapLayerDef _activeLayer = Layers[0];
-
-        private static HttpClient CreateHttpClient()
-        {
-            try
-            {
-                var handler = new HttpClientHandler
-                {
-                    AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate,
-                    ServerCertificateCustomValidationCallback = (_, __, ___, ____) => true,
-                    MaxConnectionsPerServer = 12
-                };
-                var c = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(16) };
-                c.DefaultRequestHeaders.UserAgent.ParseAdd("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36");
-                c.DefaultRequestHeaders.Referrer = new Uri("https://mapy.geoportal.gov.pl/");
-                c.DefaultRequestHeaders.Accept.ParseAdd("image/avif,image/webp,image/apng,image/*,*/*;q=0.8");
-                return c;
-            }
-            catch
-            {
-                return new HttpClient { Timeout = TimeSpan.FromSeconds(16) };
-            }
-        }
-
-        private static bool IsValidImagePayload(byte[] data)
-        {
-            if (data == null || data.Length < 128) return false;
-            if (data[0] == 0xFF && data[1] == 0xD8 && data[2] == 0xFF) return true;
-            if (data[0] == 0x89 && data[1] == 0x50 && data[2] == 0x4E && data[3] == 0x47) return true;
-            if (data[0] == 0x47 && data[1] == 0x49 && data[2] == 0x46) return true;
-            if (data[0] == 0x52 && data[1] == 0x49 && data[2] == 0x46 && data[3] == 0x46) return true;
-            return false;
-        }
-
-        private static (double W, double H) GetExactCanvasSize()
-        {
-            if (_interactiveCanvas != null && _interactiveCanvas.ActualWidth > 60 && _interactiveCanvas.ActualHeight > 60)
-                return (_interactiveCanvas.ActualWidth, _interactiveCanvas.ActualHeight);
-            if (_sheetFrameBorder != null && _sheetFrameBorder.Width > 60 && _sheetFrameBorder.Height > 60)
-                return (Math.Max(60, _sheetFrameBorder.Width - 3.0), Math.Max(60, _sheetFrameBorder.Height - 3.0));
-            return (820.0, 580.0);
-        }
-
-        private static (double WidthMm, double HeightMm) GetActiveSheetDimensionsMm()
-        {
-            var s = _selectedSheet ?? SheetFormats[0];
-            double w = Math.Max(s.WidthMm, s.HeightMm);
-            double h = Math.Min(s.WidthMm, s.HeightMm);
-            return _sheetOrientation == "Pionowo" ? (h, w) : (w, h);
-        }
-
-        private static double GetExactMetersPerPixel()
-        {
-            var (wMm, _) = GetActiveSheetDimensionsMm();
-            var (canvasW, _) = GetExactCanvasSize();
-            double realTerrainWidthMeters = (wMm / 1000.0) * _targetScaleDenominator;
-            return Math.Max(0.04, realTerrainWidthMeters / canvasW);
-        }
-
-        private static double GetScaledTileSizePx()
-        {
-            double nativeTileMetersPerPx = (156543.03392 * Math.Cos(_centerLat * Math.PI / 180.0)) / Math.Pow(2.0, _zoom);
-            double exactMetersPerPx = GetExactMetersPerPixel();
-            return Math.Clamp(256.0 * (nativeTileMetersPerPx / exactMetersPerPx), 110.0, 640.0);
-        }
-
-        private static Point ApplyShift45DegreeSnap(Point anchorPt, Point rawTargetPt, out bool isSnapped, out int snappedAngleDeg)
-        {
-            isSnapped = Keyboard.Modifiers.HasFlag(ModifierKeys.Shift);
-            snappedAngleDeg = 0;
-            if (!isSnapped) return rawTargetPt;
-
-            double dx = rawTargetPt.X - anchorPt.X;
-            double dy = rawTargetPt.Y - anchorPt.Y;
-            double dist = Math.Sqrt(dx * dx + dy * dy);
-            if (dist < 2.0) return rawTargetPt;
-
-            double angleRad = Math.Atan2(dy, dx);
-            double stepRad = Math.PI / 4.0;
-            double snappedRad = Math.Round(angleRad / stepRad) * stepRad;
-            snappedAngleDeg = ((int)Math.Round(snappedRad * 180.0 / Math.PI) % 360 + 360) % 360;
-
-            return new Point(anchorPt.X + dist * Math.Cos(snappedRad), anchorPt.Y + dist * Math.Sin(snappedRad));
-        }
-
         private static void UpdateSheetViewportSize()
         {
             if (_viewportHostGrid == null || _sheetFrameBorder == null) return;
@@ -542,8 +123,8 @@ namespace FieldTakHub.Builder.Services
                     VerticalContentAlignment = VerticalAlignment.Center,
                     Cursor = Cursors.Hand
                 };
-                chk.Checked += (s, e) => { _selectedMapFactions.Add(fName); RedrawVectorsOnly(); };
-                chk.Unchecked += (s, e) => { _selectedMapFactions.Remove(fName); RedrawVectorsOnly(); };
+                chk.Checked += (s, e) => { _selectedMapFactions.Add(fName); TacticalConfigPanel.MarkDirty(); RedrawVectorsOnly(); };
+                chk.Unchecked += (s, e) => { _selectedMapFactions.Remove(fName); TacticalConfigPanel.MarkDirty(); RedrawVectorsOnly(); };
                 _factionsCheckboxesWrap.Children.Add(chk);
             }
         }
@@ -559,6 +140,9 @@ namespace FieldTakHub.Builder.Services
         {
             if (Application.Current == null || win == null) return;
             _hostWindow = win;
+            TacticalConfigPanel.MapStateExportProvider = ExportMapStateToJson;
+            TacticalConfigPanel.MapStateImportConsumer = ImportMapStateFromJson;
+
             try
             {
                 if (win.Content is FrameworkElement existingFe && existingFe.Tag?.ToString() == "FTH_MASTER_SHELL") return;
@@ -577,9 +161,26 @@ namespace FieldTakHub.Builder.Services
 
                     var navBorder = new Border { Background = TacticalConfigPanel.BrushInputBg, BorderBrush = TacticalConfigPanel.BrushAccent, BorderThickness = new Thickness(0, 0, 0, 1.5), Padding = new Thickness(16, 0, 16, 0) };
                     var navDock = new DockPanel();
-                    var rightInfo = new TextBlock { Text = "Field TAK Hub 2.4  •  Silnik 60 FPS  •  Flaga HQ (Stopka Masztu)  •  Shift = Kąt co 45°", Foreground = TacticalConfigPanel.BrushMutedText, FontSize = 11, VerticalAlignment = VerticalAlignment.Center };
-                    DockPanel.SetDock(rightInfo, Dock.Right);
-                    navDock.Children.Add(rightInfo);
+
+                    // Przyciski zapisu i wczytywania wersji roboczej całego projektu (.fthproj) na górnym pasku
+                    var draftBtnsStack = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+                    var btnSaveDraft = MakeActionButton("💾 Zapisz projekt roboczy (.fthproj)", false, () =>
+                    {
+                        if (TacticalConfigPanel.SaveDraftProjectDialog(win) && _statusText != null)
+                            _statusText.Text = $"✓ Zapisano wersję roboczą całego projektu (paczka .ftak + mapa): {TacticalConfigPanel.CurrentDraftProjectPath}";
+                    });
+                    btnSaveDraft.Height = 28; btnSaveDraft.Padding = new Thickness(12, 0, 12, 0); btnSaveDraft.Margin = new Thickness(0, 0, 6, 0); btnSaveDraft.BorderBrush = TacticalConfigPanel.BrushAccent;
+
+                    var btnLoadDraft = MakeActionButton("📂 Wczytaj projekt (.fthproj)", false, () =>
+                    {
+                        if (TacticalConfigPanel.LoadDraftProjectDialog(win) && _statusText != null)
+                            _statusText.Text = $"✓ Wczytano wersję roboczą projektu: {TacticalConfigPanel.CurrentDraftProjectPath}";
+                    });
+                    btnLoadDraft.Height = 28; btnLoadDraft.Padding = new Thickness(12, 0, 12, 0);
+                    draftBtnsStack.Children.Add(btnSaveDraft);
+                    draftBtnsStack.Children.Add(btnLoadDraft);
+                    DockPanel.SetDock(draftBtnsStack, Dock.Right);
+                    navDock.Children.Add(draftBtnsStack);
 
                     var tabsStack = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
                     _tabBuilderBtn = new Button { Content = "📦 Konfigurator Paczek (.ftak)", Height = 32, Padding = new Thickness(18, 0, 18, 0), Margin = new Thickness(0, 0, 10, 0), Background = TacticalConfigPanel.BrushButtonAccent, Foreground = TacticalConfigPanel.BrushDarkFg, BorderBrush = TacticalConfigPanel.BrushAccent, BorderThickness = new Thickness(1), FontWeight = FontWeights.Bold, FontSize = 12, Cursor = Cursors.Hand };
@@ -632,6 +233,7 @@ namespace FieldTakHub.Builder.Services
                 if (_originalWindowContent != null) _originalWindowContent.Visibility = Visibility.Visible;
                 if (_tabBuilderBtn != null) { _tabBuilderBtn.Background = TacticalConfigPanel.BrushButtonAccent; _tabBuilderBtn.Foreground = TacticalConfigPanel.BrushDarkFg; }
                 if (_tabMapBtn != null) { _tabMapBtn.Background = TacticalConfigPanel.BrushItemBg; _tabMapBtn.Foreground = TacticalConfigPanel.BrushAccent; }
+                TacticalConfigPanel.SaveSessionStateAuto(_hostWindow);
             }
         }
 
@@ -707,24 +309,25 @@ namespace FieldTakHub.Builder.Services
             fmtGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1.65, GridUnitType.Star) });
             fmtGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
 
-            var fmtCombo = new ComboBox { ItemsSource = SheetFormats, SelectedIndex = 0, Height = 26, FontSize = 10, Tag = "INJECTED" };
-            TacticalConfigPanel.ApplyUnifiedComboBoxTheme(fmtCombo, win);
-            fmtCombo.SelectionChanged += (s, e) =>
+            _fmtComboBox = new ComboBox { ItemsSource = SheetFormats, SelectedIndex = 0, Height = 26, FontSize = 10, Tag = "INJECTED" };
+            TacticalConfigPanel.ApplyUnifiedComboBoxTheme(_fmtComboBox, win);
+            _fmtComboBox.SelectionChanged += (s, e) =>
             {
-                if (fmtCombo.SelectedItem is SheetFormatDef sf)
+                if (_fmtComboBox.SelectedItem is SheetFormatDef sf)
                 {
                     _selectedSheet = sf;
-                    UpdateSheetViewportSize();
-                    _ = RenderMapTilesAsync();
+                    TacticalConfigPanel.MarkDirty();
+                    ApplyScaleDenominator(_targetScaleDenominator);
                 }
             };
-            var fFmt = TacticalConfigPanel.FieldBox("Format arkusza / mapnika:", fmtCombo);
-            var fOri = TacticalConfigPanel.FieldBox("Orientacja:", TacticalConfigPanel.ComboCtrl(new[] { "Poziomo", "Pionowo" }, _sheetOrientation, win, v =>
+            var fFmt = TacticalConfigPanel.FieldBox("Format arkusza / mapnika:", _fmtComboBox);
+            _oriComboBox = (ComboBox)TacticalConfigPanel.ComboCtrl(new[] { "Poziomo", "Pionowo" }, _sheetOrientation, win, v =>
             {
                 _sheetOrientation = v;
-                UpdateSheetViewportSize();
-                _ = RenderMapTilesAsync();
-            }));
+                TacticalConfigPanel.MarkDirty();
+                ApplyScaleDenominator(_targetScaleDenominator);
+            });
+            var fOri = TacticalConfigPanel.FieldBox("Orientacja:", _oriComboBox);
             Grid.SetColumn(fFmt, 0); Grid.SetColumn(fOri, 1);
             fmtGrid.Children.Add(fFmt); fmtGrid.Children.Add(fOri);
             sec1.Children.Add(fmtGrid);
@@ -737,7 +340,7 @@ namespace FieldTakHub.Builder.Services
             scaleCustomGrid.Children.Add(new TextBlock { Text = "1 :", Foreground = TacticalConfigPanel.BrushAccent, FontWeight = FontWeights.Bold, FontSize = 12.5, VerticalAlignment = VerticalAlignment.Center });
             _scaleInputBox = (TextBox)TacticalConfigPanel.TextCtrl("5000", v => { });
             Grid.SetColumn(_scaleInputBox, 1); scaleCustomGrid.Children.Add(_scaleInputBox);
-            var btnSetScale = MakeActionButton("Ustaw skalę", true, () => { if (int.TryParse(_scaleInputBox.Text.Trim(), out int sc)) ApplyScaleDenominator(sc); });
+            var btnSetScale = MakeActionButton("Ustaw skalę", true, () => { if (int.TryParse(_scaleInputBox.Text.Trim(), out int sc)) { TacticalConfigPanel.MarkDirty(); ApplyScaleDenominator(sc); } });
             btnSetScale.Height = 25; btnSetScale.Margin = new Thickness(6, 0, 0, 0);
             Grid.SetColumn(btnSetScale, 2); scaleCustomGrid.Children.Add(btnSetScale);
             sec1.Children.Add(scaleCustomGrid);
@@ -747,44 +350,44 @@ namespace FieldTakHub.Builder.Services
             foreach (int p in new[] { 2500, 4000, 5000, 7500, 10000, 15000 })
             {
                 int cap = p;
-                var b = MakeActionButton($"1:{cap}", cap == 5000, () => ApplyScaleDenominator(cap));
+                var b = MakeActionButton($"1:{cap}", cap == 5000, () => { TacticalConfigPanel.MarkDirty(); ApplyScaleDenominator(cap); });
                 b.Height = 24; b.Margin = new Thickness(1); b.FontSize = 9.5;
                 _scalePresetButtons.Add(b);
                 scalePresetsRow.Children.Add(b);
             }
             sec1.Children.Add(scalePresetsRow);
-            var btnScale25k = MakeActionButton("1:25000", false, () => ApplyScaleDenominator(25000));
+            var btnScale25k = MakeActionButton("1:25000", false, () => { TacticalConfigPanel.MarkDirty(); ApplyScaleDenominator(25000); });
             btnScale25k.Height = 24; btnScale25k.Margin = new Thickness(1, 0, 1, 6); btnScale25k.FontSize = 10;
             _scalePresetButtons.Add(btnScale25k);
             sec1.Children.Add(btnScale25k);
 
-            var layerCombo = new ComboBox { ItemsSource = Layers, SelectedIndex = 0, Height = 26, FontSize = 10.5, Margin = new Thickness(0, 0, 0, 6), Tag = "INJECTED" };
-            TacticalConfigPanel.ApplyUnifiedComboBoxTheme(layerCombo, win);
-            layerCombo.SelectionChanged += (s, e) => { if (layerCombo.SelectedItem is TacticalMapLayerDef def) { _activeLayer = def; _ = RenderMapTilesAsync(); } };
-            sec1.Children.Add(TacticalConfigPanel.FieldBox("Podkład bazowy (Geoportal WMS / Google / ESRI / OSM):", layerCombo));
+            _layerComboBox = new ComboBox { ItemsSource = Layers, SelectedIndex = 0, Height = 26, FontSize = 10.5, Margin = new Thickness(0, 0, 0, 6), Tag = "INJECTED" };
+            TacticalConfigPanel.ApplyUnifiedComboBoxTheme(_layerComboBox, win);
+            _layerComboBox.SelectionChanged += (s, e) => { if (_layerComboBox.SelectedItem is TacticalMapLayerDef def) { _activeLayer = def; TacticalConfigPanel.MarkDirty(); _ = RenderMapTilesAsync(); } };
+            sec1.Children.Add(TacticalConfigPanel.FieldBox("Podkład bazowy (Geoportal WMS 512px / Google / ESRI / OSM):", _layerComboBox));
 
             var lidarBox = new Border { Background = TacticalConfigPanel.BrushInputBg, BorderBrush = TacticalConfigPanel.BrushAccent, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(6), Padding = new Thickness(8, 6, 8, 6) };
             var lidarStack = new StackPanel();
-            var chkLidar = new CheckBox { Content = "Nałóż rzeźbę LiDAR ISOK (1 zapytanie WMS - bez dziur)", IsChecked = false, Foreground = TacticalConfigPanel.BrushAccent, FontWeight = FontWeights.SemiBold, FontSize = 10 };
-            chkLidar.Checked += (s, e) => { _showLidarSingleWms = true; _ = RenderMapTilesAsync(); };
-            chkLidar.Unchecked += (s, e) => { _showLidarSingleWms = false; if (_lidarOverlayImage != null) _lidarOverlayImage.Source = null; };
+            var chkLidar = new CheckBox { Content = "Nałóż rzeźbę LiDAR ISOK (kafelki WMS 512px w pamięci RAM)", IsChecked = false, Foreground = TacticalConfigPanel.BrushAccent, FontWeight = FontWeights.SemiBold, FontSize = 10 };
+            chkLidar.Checked += (s, e) => { _showLidarSingleWms = true; TacticalConfigPanel.MarkDirty(); _ = RenderMapTilesAsync(); };
+            chkLidar.Unchecked += (s, e) => { _showLidarSingleWms = false; TacticalConfigPanel.MarkDirty(); _lidarTileCanvas?.Children.Clear(); };
             lidarStack.Children.Add(chkLidar);
             lidarStack.Children.Add(MakeSliderRow("Przezroczystość rzeźby LiDAR ISOK:", 0.10, 0.95, _lidarOpacity, v => $"{(int)Math.Round(v * 100)}%", v =>
             {
                 _lidarOpacity = v;
-                if (_lidarOverlayImage != null) _lidarOverlayImage.Opacity = _lidarOpacity;
+                if (_lidarTileCanvas != null) _lidarTileCanvas.Opacity = _lidarOpacity;
             }));
             lidarBox.Child = lidarStack;
             sec1.Children.Add(lidarBox);
             leftStack.Children.Add(WrapCard(sec1));
 
             // SEKCJA 2: SIATKA MGRS / KEYPAD & KONTROLA CZYTELNOŚCI MAPY
-            var sec2 = CreateSectionCard("2. SIATKA MGRS / KEYPAD & KONTROLA CZYTELNOŚCI MAPY");
-            sec2.Children.Add(TacticalConfigPanel.FieldBox("System współrzędnych i typ siatki na mapie:", TacticalConfigPanel.ComboCtrl(new[] { "MGRS / UTM (Siatka wojskowa w metrach)", "Siatka Sektorowa (A1, B2, C3...)", "WGS84 (Stopnie geograficzne Lat/Lon)", "Brak siatki" }, _coordSystem, win, v => { _coordSystem = v; _fastOverlayRenderer?.InvalidateVisual(); })));
+            var sec2 = CreateSectionCard("2. SIATKA MGRS / WGS84 (GEODEZYJNA 1:1) & CZYTELNOŚĆ MAPY");
+            sec2.Children.Add(TacticalConfigPanel.FieldBox("System współrzędnych i typ siatki na mapie:", TacticalConfigPanel.ComboCtrl(new[] { "MGRS / UTM (Siatka wojskowa w metrach)", "Siatka Sektorowa (A1, B2, C3...)", "WGS84 (Stopnie geograficzne Lat/Lon)", "Brak siatki" }, _coordSystem, win, v => { _coordSystem = v; RedrawVectorsOnly(); })));
 
             var subGridRow = new UniformGrid { Columns = 2 };
-            subGridRow.Children.Add(TacticalConfigPanel.FieldBox("Podział wewnątrz 100 m:", TacticalConfigPanel.ComboCtrl(new[] { "Co 33 m (Keypad 1-9)", "Co 50 m (Ćwiartki A,B,C,D)", "Brak podziału (Tylko 100 m)", "Siatka co 250 m", "Siatka co 500 m" }, _subGridDivision, win, v => { _subGridDivision = v; _fastOverlayRenderer?.InvalidateVisual(); })));
-            subGridRow.Children.Add(TacticalConfigPanel.FieldBox("Opisy kratek 100 m:", TacticalConfigPanel.ComboCtrl(new[] { "MGRS + Ćwiartki/Keypad", "Tylko główne linie MGRS", "Brak opisów wewnątrz" }, _gridLabelsMode, win, v => { _gridLabelsMode = v; _fastOverlayRenderer?.InvalidateVisual(); })));
+            subGridRow.Children.Add(TacticalConfigPanel.FieldBox("Podział wewnątrz oczek:", TacticalConfigPanel.ComboCtrl(new[] { "Co 33 m (Keypad 1-9)", "Co 50 m (Ćwiartki A,B,C,D)", "Brak podziału (Tylko 100 m)", "Siatka co 250 m", "Siatka co 500 m" }, _subGridDivision, win, v => { _subGridDivision = v; RedrawVectorsOnly(); })));
+            subGridRow.Children.Add(TacticalConfigPanel.FieldBox("Opisy kratek:", TacticalConfigPanel.ComboCtrl(new[] { "MGRS + Ćwiartki/Keypad", "Tylko główne linie MGRS", "Brak opisów wewnątrz" }, _gridLabelsMode, win, v => { _gridLabelsMode = v; RedrawVectorsOnly(); })));
             sec2.Children.Add(subGridRow);
 
             sec2.Children.Add(MakeSliderRow("Grubość linii siatki (głównej i pomocniczej):", 0.5, 3.0, _gridThicknessMultiplier, v => $"{v:0.1}x", v => { _gridThicknessMultiplier = Math.Round(v, 1); _fastOverlayRenderer?.InvalidateVisual(); }));
@@ -804,7 +407,7 @@ namespace FieldTakHub.Builder.Services
             sec2.Children.Add(colAndHaloRow);
             leftStack.Children.Add(WrapCard(sec2));
 
-            // SEKCJA 3: ZNACZNIKI (FLAGA HQ = DÓŁ MASZTU, INNE = ŚRODEK), PRZESUWANIE CAŁYCH STREF (✥), ETYKIETY & SHIFT CO 45°
+            // SEKCJA 3: ZNACZNIKI (FLAGA = DÓŁ MASZTU), STREFY (✥), ETYKIETY & SHIFT 45°
             var sec3 = CreateSectionCard("3. ZNACZNIKI (FLAGA = DÓŁ MASZTU), STREFY (✥), ETYKIETY & SHIFT 45°");
             void UpdateToolButtonsVisual()
             {
@@ -909,8 +512,7 @@ namespace FieldTakHub.Builder.Services
                 IsChecked = _showAllObjectLabels,
                 Foreground = TacticalConfigPanel.BrushAccent,
                 FontSize = 9.5,
-                FontWeight = FontWeights.Bold,
-                ToolTip = "Włącza lub wyłącza wyświetlanie etykiet tekstowych przy wszystkich obiektach (NATO, kropki, strefy, trasy)"
+                FontWeight = FontWeights.Bold
             };
             chkGlobalLabels.Checked += (s, e) => { _showAllObjectLabels = true; RedrawVectorsOnly(); };
             chkGlobalLabels.Unchecked += (s, e) => { _showAllObjectLabels = false; RedrawVectorsOnly(); };
@@ -920,8 +522,7 @@ namespace FieldTakHub.Builder.Services
                 Content = "Domyślnie etykieta dla nowych",
                 IsChecked = _newObjectShowLabelDefault,
                 Foreground = Brushes.White,
-                FontSize = 9.5,
-                ToolTip = "Określa, czy nowo stawiane obiekty mają mieć domyślnie włączoną etykietę"
+                FontSize = 9.5
             };
             chkNewObjLabel.Checked += (s, e) => _newObjectShowLabelDefault = true;
             chkNewObjLabel.Unchecked += (s, e) => _newObjectShowLabelDefault = false;
@@ -939,8 +540,8 @@ namespace FieldTakHub.Builder.Services
             RefreshObjectsListUI(win);
             leftStack.Children.Add(WrapCard(sec3));
 
-            // SEKCJA 4: ELEMENTY MAPY (SŁOWNIK NATO W LEGENDZIE + DRAG & DROP) & EKSPORT ARKUSZA
-            var sec4 = CreateSectionCard("4. ELEMENTY MAPY (SŁOWNIK NATO W LEGENDZIE + DRAG & DROP) & EKSPORT");
+            // SEKCJA 4: ELEMENTY MAPY & EKSPORT Z WYBOREM MIEJSCA I NAZWY PLIKU (SaveFileDialog)
+            var sec4 = CreateSectionCard("4. ELEMENTY MAPY (DRAG & DROP) & EKSPORT Z WYBOREM PLIKU");
             var hudChkGrid = new UniformGrid { Columns = 2, Margin = new Thickness(0, 0, 0, 6) };
             CheckBox MakeHudChk(string label, bool init, Action<bool> onChg)
             {
@@ -964,16 +565,16 @@ namespace FieldTakHub.Builder.Services
             sec4.Children.Add(posGrid);
 
             var expRow1 = new UniformGrid { Columns = 2, Margin = new Thickness(0, 0, 0, 6) };
-            var btnGpx = MakeActionButton("⌚ Pobierz .GPX (Garmin/ATAK)", false, async () => await ExportStandaloneFilesAsync(win, "gpx"));
-            var btnKmz = MakeActionButton("📦 Pobierz .KMZ (GRG ATAK)", false, async () => await ExportStandaloneFilesAsync(win, "kmz"));
+            var btnGpx = MakeActionButton("⌚ Zapisz .GPX jako...", false, async () => await ExportStandaloneFilesAsync(win, "gpx"));
+            var btnKmz = MakeActionButton("📦 Zapisz .KMZ jako...", false, async () => await ExportStandaloneFilesAsync(win, "kmz"));
             btnGpx.Height = 30; btnGpx.Margin = new Thickness(0, 0, 3, 0); btnGpx.BorderBrush = TacticalConfigPanel.BrushAccent;
             btnKmz.Height = 30; btnKmz.Margin = new Thickness(3, 0, 0, 0); btnKmz.BorderBrush = TacticalConfigPanel.BrushAccent;
             expRow1.Children.Add(btnGpx); expRow1.Children.Add(btnKmz);
             sec4.Children.Add(expRow1);
 
             var expRow2 = new UniformGrid { Columns = 3, Margin = new Thickness(0, 0, 0, 6) };
-            var btnPdf = MakeActionButton("🖨️ Drukuj / PDF", false, async () => await ExportTacticalMapPdfAsync(win));
-            var btnSaveJson = MakeActionButton("💾 Zapisz .json", false, () => SaveMapProjectJson());
+            var btnPdf = MakeActionButton("🖨️ Zapisz PDF jako...", false, async () => await ExportTacticalMapPdfAsync(win));
+            var btnSaveJson = MakeActionButton("💾 Zapisz projekt", false, () => SaveMapProjectJson(win));
             var btnLoadJson = MakeActionButton("📂 Wczytaj", false, () => LoadMapProjectJsonOrKml(win));
             btnPdf.Height = 28; btnPdf.Margin = new Thickness(0, 0, 3, 0); btnPdf.BorderBrush = TacticalConfigPanel.BrushAccent;
             btnSaveJson.Height = 28; btnSaveJson.Margin = new Thickness(2, 0, 2, 0);
@@ -1052,7 +653,7 @@ namespace FieldTakHub.Builder.Services
             offBtnsRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
             offBtnsRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(90) });
 
-            var btnDownloadStandaloneOffline = MakeActionButton("📥 Pobierz bazę Offline (do release_maps)", false, async () => await BuildMultiZoomOfflineDatabaseAsync(win, false));
+            var btnDownloadStandaloneOffline = MakeActionButton("📥 Zapisz bazę Offline jako...", false, async () => await BuildMultiZoomOfflineDatabaseAsync(win, false));
             btnDownloadStandaloneOffline.Height = 30; btnDownloadStandaloneOffline.Margin = new Thickness(0, 0, 4, 0); btnDownloadStandaloneOffline.BorderBrush = TacticalConfigPanel.BrushAccent;
 
             var btnCancelOffline = MakeActionButton("⏹ Przerwij", false, () => _offlineDownloadCts?.Cancel());
@@ -1069,7 +670,7 @@ namespace FieldTakHub.Builder.Services
             leftStack.Children.Add(WrapCard(sec5));
             leftScroll.Content = leftStack; Grid.SetColumn(leftScroll, 0); bodyGrid.Children.Add(leftScroll);
 
-            // PRAWA STRONA: SZYBKI SILNIK 60 FPS (_fastOverlayRenderer + _interactiveCanvas)
+            // PRAWA STRONA: SZYBKI SILNIK 60 FPS (_tileCanvas + _lidarTileCanvas + _fastOverlayRenderer + _interactiveCanvas)
             _viewportHostGrid = new Grid
             {
                 Background = TacticalConfigPanel.BrushInputBg,
@@ -1090,13 +691,13 @@ namespace FieldTakHub.Builder.Services
 
             _mapCompositeGrid = new Grid { ClipToBounds = true, Background = TacticalConfigPanel.BrushCardBg };
             _tileCanvas = new Canvas { ClipToBounds = true, IsHitTestVisible = false };
+            _lidarTileCanvas = new Canvas { ClipToBounds = true, Opacity = _lidarOpacity, IsHitTestVisible = false };
             _dimmerRect = new Rectangle { Fill = Brushes.Black, Opacity = _mapDimmerOpacity, IsHitTestVisible = false };
-            _lidarOverlayImage = new Image { Stretch = Stretch.Fill, Opacity = _lidarOpacity, IsHitTestVisible = false };
             _fastOverlayRenderer = new FastTacticalOverlayRenderer(RenderFastGridAndMasksOnContext);
             _interactiveCanvas = new Canvas { Background = Brushes.Transparent, ClipToBounds = true, Cursor = Cursors.Cross };
 
             _mapCompositeGrid.Children.Add(_tileCanvas);
-            _mapCompositeGrid.Children.Add(_lidarOverlayImage);
+            _mapCompositeGrid.Children.Add(_lidarTileCanvas);
             _mapCompositeGrid.Children.Add(_dimmerRect);
             _mapCompositeGrid.Children.Add(_fastOverlayRenderer);
             _mapCompositeGrid.Children.Add(_interactiveCanvas);
@@ -1153,7 +754,7 @@ namespace FieldTakHub.Builder.Services
                 _currentHoverScreenPt = p;
                 var (hoverLat, hoverLon) = ScreenToLatLon(p.X, p.Y, w, h);
                 if (_coordsBadge != null)
-                    _coordsBadge.Text = $"WGS84: {hoverLat:0.00000}, {hoverLon:0.00000}  |  Skala 1:{_targetScaleDenominator:N0} ({GetExactMetersPerPixel():0.00} m/px)  |  SHIFT = Kąt co 45°  |  ✥ = Przesuń strefę";
+                    _coordsBadge.Text = $"WGS84: {hoverLat:0.00000}, {hoverLon:0.00000}  |  Skala 1:{_targetScaleDenominator:N0} (Kratka MGRS: {_effectiveMgrsStepMeters} m)  |  SHIFT = Kąt co 45°  |  ✥ = Przesuń strefę";
 
                 if (_draggedHudId != null && _draggedHudElement != null)
                 {
@@ -1177,6 +778,7 @@ namespace FieldTakHub.Builder.Services
                             Math.Clamp(_wholeShapeOriginalPoints[i].Lat + dLat, -85.0, 85.0),
                             Math.Clamp(_wholeShapeOriginalPoints[i].Lon + dLon, -180.0, 180.0));
                     }
+                    TacticalConfigPanel.MarkDirty();
                     RedrawVectorsOnly();
                     return;
                 }
@@ -1193,6 +795,7 @@ namespace FieldTakHub.Builder.Services
                     }
 
                     _draggedObject.Points[_draggedVertexIndex] = ScreenToLatLon(targetScreenPt.X, targetScreenPt.Y, w, h);
+                    TacticalConfigPanel.MarkDirty();
                     RedrawVectorsOnly();
                     return;
                 }
@@ -1202,14 +805,21 @@ namespace FieldTakHub.Builder.Services
                     _fastOverlayRenderer?.InvalidateVisual();
                 }
 
+                // Płynne przewijanie mapy z doczytywaniem kafelków w locie (z pamięci RAM i w tle z sieci)
                 if (_isPanningMap && _activeTool == "PAN")
                 {
                     double dx = p.X - _mouseDownPoint.X, dy = p.Y - _mouseDownPoint.Y;
                     double scaledWorldSize = GetScaledTileSizePx() * Math.Pow(2, _zoom);
                     _centerLon = Math.Clamp(_dragStartLon - dx * (360.0 / scaledWorldSize), -180.0, 180.0);
                     _centerLat = Math.Clamp(_dragStartLat + dy * ((360.0 / scaledWorldSize) * Math.Cos(_dragStartLat * Math.PI / 180.0)), -85.0, 85.0);
-                    _tileCanvas.RenderTransform = new TranslateTransform(dx, dy);
+
                     _fastOverlayRenderer?.InvalidateVisual();
+                    if ((DateTime.UtcNow - _lastPanTileRefreshUtc).TotalMilliseconds >= 32)
+                    {
+                        _lastPanTileRefreshUtc = DateTime.UtcNow;
+                        RefreshTileCanvasesOnly();
+                        RedrawVectorsOnly();
+                    }
                 }
             };
 
@@ -1220,6 +830,7 @@ namespace FieldTakHub.Builder.Services
                     _draggedHudId = null;
                     _draggedHudElement = null;
                     _interactiveCanvas.ReleaseMouseCapture();
+                    TacticalConfigPanel.SaveSessionStateAuto(win);
                     return;
                 }
                 if (_draggedObject != null)
@@ -1230,17 +841,16 @@ namespace FieldTakHub.Builder.Services
                     _interactiveCanvas.ReleaseMouseCapture();
                     RedrawVectorsOnly();
                     UpdateOfflineTileEstimateUI();
+                    TacticalConfigPanel.SaveSessionStateAuto(win);
                     return;
                 }
                 if (!_isPanningMap) return;
                 _isPanningMap = false;
                 _interactiveCanvas.ReleaseMouseCapture();
-                _tileCanvas.RenderTransform = Transform.Identity;
 
                 Point endPt = e.GetPosition(_interactiveCanvas);
                 if ((endPt - _mouseDownPoint).Length < 5.0 && _activeTool != "PAN")
                 {
-                    // Używamy dokładnego punktu wciśnięcia przycisku myszy (_mouseDownPoint)
                     HandleMapClickToolAction(win, _mouseDownPoint);
                     RedrawVectorsOnly();
                     UpdateOfflineTileEstimateUI();
@@ -1251,12 +861,14 @@ namespace FieldTakHub.Builder.Services
                     UpdateOfflineTileEstimateUI();
                     _ = RenderMapTilesAsync();
                 }
+                TacticalConfigPanel.SaveSessionStateAuto(win);
             };
 
             _interactiveCanvas.MouseWheel += (s, e) =>
             {
                 double factor = e.Delta > 0 ? 0.8 : 1.25;
                 int newScale = (int)(Math.Round((_targetScaleDenominator * factor) / 100.0) * 100);
+                TacticalConfigPanel.MarkDirty();
                 ApplyScaleDenominator(Math.Clamp(newScale, 500, 100000));
             };
 
@@ -1272,7 +884,7 @@ namespace FieldTakHub.Builder.Services
             mainGrid.Children.Add(bodyGrid);
 
             var bottomBar = new Border { Background = TacticalConfigPanel.BrushInputBg, BorderBrush = TacticalConfigPanel.BrushCardBorder, BorderThickness = new Thickness(0, 1, 0, 0), Padding = new Thickness(16, 0, 16, 0) };
-            _statusText = new TextBlock { Text = "Gotowy. Flaga HQ zakotwiczona w dolnej części masztu, pozostałe ikony na środku 1:1, uchwyt stref ✥ oraz rysowanie co 45° z klawiszem SHIFT.", Foreground = TacticalConfigPanel.BrushAccent, FontSize = 11, VerticalAlignment = VerticalAlignment.Center };
+            _statusText = new TextBlock { Text = "Gotowy. Płynne przewijanie mapy z buforem RAM, geodezyjna siatka MGRS/WGS84 1:1 ze skalą, auto-pamięć sesji oraz wybór miejsca zapisu plików.", Foreground = TacticalConfigPanel.BrushAccent, FontSize = 11, VerticalAlignment = VerticalAlignment.Center };
             bottomBar.Child = _statusText; Grid.SetRow(bottomBar, 1); mainGrid.Children.Add(bottomBar);
 
             UpdateOfflineTileEstimateUI();
@@ -1371,7 +983,10 @@ namespace FieldTakHub.Builder.Services
 
         private static async Task<byte[]> FetchSingleOfflineTileBytesAsync(TacticalMapLayerDef layer, int tx, int ty, int zoom, CancellationToken ct)
         {
-            string url = BuildTileUrl(layer, tx, ty, zoom);
+            string url = layer.IsWmsEpsg3857
+                ? layer.UrlTemplate.Replace("{bbox}", GetEpsg3857BBox(tx, ty, zoom)).Replace("{w}", "256").Replace("{h}", "256")
+                : BuildTileUrl(layer, tx, ty, zoom);
+
             if (RawTileCache.TryGetValue(url, out var cached) && IsValidImagePayload(cached))
                 return cached;
 
@@ -1427,6 +1042,38 @@ namespace FieldTakHub.Builder.Services
                 var coords = CalculateOfflineTilePyramidCoords(_offlineMinZoom, _offlineMaxZoom, out double north, out double south, out double east, out double west);
                 if (coords.Count == 0) return;
 
+                string sourceDir = TacticalConfigPanel.GetPrimarySourceDirectory(win);
+                string eventName = TacticalConfigPanel.GetEventNameFromWindow(win);
+                var allConfigured = TacticalConfigPanel.GetConfiguredFactions();
+                var targetFacs = GetActiveMapFactions();
+                string facSuffix = string.Join("_", targetFacs.Select(f => TacticalConfigPanel.SanitizeFileName(f.Name)));
+                string baseFileName = $"Offline_{eventName}_{facSuffix}_Z{_offlineMinZoom}_{_offlineMaxZoom}";
+
+                bool writeMbtiles = _offlineDbFormat.Contains(".mbtiles") || _offlineDbFormat.StartsWith("Oba");
+                bool writeSqlite = _offlineDbFormat.Contains(".sqlite") || _offlineDbFormat.StartsWith("Oba");
+
+                string standaloneTargetFile = "";
+                if (!saveDirectlyToFtakSource)
+                {
+                    string initDir = !string.IsNullOrWhiteSpace(TacticalConfigPanel.LastExportDirectory) && Directory.Exists(TacticalConfigPanel.LastExportDirectory)
+                        ? TacticalConfigPanel.LastExportDirectory
+                        : (System.IO.Path.GetDirectoryName(System.IO.Path.TrimEndingDirectorySeparator(sourceDir)) ?? AppDomain.CurrentDomain.BaseDirectory);
+
+                    var dlg = new SaveFileDialog
+                    {
+                        Title = "Wybierz miejsce i nazwę zapisu bazy mapy Offline dla ATAK",
+                        Filter = writeMbtiles && !writeSqlite
+                            ? "Baza MBTiles (*.mbtiles)|*.mbtiles"
+                            : (!writeMbtiles && writeSqlite ? "Baza ATAK SQLite (*.sqlite)|*.sqlite" : "Baza mapy Offline (*.mbtiles;*.sqlite)|*.mbtiles;*.sqlite"),
+                        InitialDirectory = initDir,
+                        FileName = writeMbtiles ? $"{baseFileName}.mbtiles" : $"{baseFileName}.sqlite"
+                    };
+                    if (dlg.ShowDialog(win) != true) return;
+                    standaloneTargetFile = dlg.FileName;
+                    TacticalConfigPanel.LastExportDirectory = System.IO.Path.GetDirectoryName(standaloneTargetFile) ?? initDir;
+                    TacticalConfigPanel.SaveSessionStateAuto(win);
+                }
+
                 if (_offlineProgressBar != null) { _offlineProgressBar.Maximum = coords.Count; _offlineProgressBar.Value = 0; }
                 if (_offlineProgressLabel != null) _offlineProgressLabel.Text = $"Pobieranie {coords.Count} kafelków (Zoom {_offlineMinZoom}–{_offlineMaxZoom})...";
 
@@ -1472,19 +1119,7 @@ namespace FieldTakHub.Builder.Services
                 }
 
                 var finalTilesList = downloadedTiles.ToList();
-                string sourceDir = TacticalConfigPanel.GetPrimarySourceDirectory(win);
-                string eventName = TacticalConfigPanel.GetEventNameFromWindow(win);
-                var allConfigured = TacticalConfigPanel.GetConfiguredFactions();
-                var targetFacs = GetActiveMapFactions();
-                string facSuffix = string.Join("_", targetFacs.Select(f => TacticalConfigPanel.SanitizeFileName(f.Name)));
-                string baseFileName = $"Offline_{eventName}_{facSuffix}_Z{_offlineMinZoom}_{_offlineMaxZoom}";
-
                 if (_offlineProgressLabel != null) _offlineProgressLabel.Text = $"Zapisywanie {finalTilesList.Count} kafelków do bazy SQLite...";
-
-                bool writeMbtiles = _offlineDbFormat.Contains(".mbtiles") || _offlineDbFormat.StartsWith("Oba");
-                bool writeSqlite = _offlineDbFormat.Contains(".sqlite") || _offlineDbFormat.StartsWith("Oba");
-
-                string folderToOpen = "";
 
                 if (saveDirectlyToFtakSource)
                 {
@@ -1501,7 +1136,6 @@ namespace FieldTakHub.Builder.Services
                                     NativeSqliteWriter.WriteMbTilesDatabase(System.IO.Path.Combine(facDir, $"mapa_offline_{sl}.mbtiles"), $"{eventName}_{fac.Name}", _offlineMinZoom, _offlineMaxZoom, north, south, east, west, finalTilesList);
                                 if (writeSqlite)
                                     NativeSqliteWriter.WriteAtakMobacSqliteDatabase(System.IO.Path.Combine(facDir, $"mapa_offline_{sl}.sqlite"), _offlineMinZoom, _offlineMaxZoom, finalTilesList);
-                                folderToOpen = facDir;
                             }
                         }
                         else
@@ -1512,7 +1146,6 @@ namespace FieldTakHub.Builder.Services
                                 NativeSqliteWriter.WriteMbTilesDatabase(System.IO.Path.Combine(mapsDir, $"{baseFileName}.mbtiles"), eventName, _offlineMinZoom, _offlineMaxZoom, north, south, east, west, finalTilesList);
                             if (writeSqlite)
                                 NativeSqliteWriter.WriteAtakMobacSqliteDatabase(System.IO.Path.Combine(mapsDir, $"{baseFileName}.sqlite"), _offlineMinZoom, _offlineMaxZoom, finalTilesList);
-                            folderToOpen = mapsDir;
                         }
                     });
 
@@ -1526,26 +1159,20 @@ namespace FieldTakHub.Builder.Services
                 }
                 else
                 {
-                    string parentDir = System.IO.Path.GetDirectoryName(System.IO.Path.TrimEndingDirectorySeparator(sourceDir)) ?? AppDomain.CurrentDomain.BaseDirectory;
-                    string outDir = System.IO.Path.Combine(parentDir, "release_maps");
-                    Directory.CreateDirectory(outDir);
-                    folderToOpen = outDir;
+                    string outDir = System.IO.Path.GetDirectoryName(standaloneTargetFile) ?? AppDomain.CurrentDomain.BaseDirectory;
+                    string stem = System.IO.Path.Combine(outDir, System.IO.Path.GetFileNameWithoutExtension(standaloneTargetFile));
 
                     await Task.Run(() =>
                     {
                         if (writeMbtiles)
-                            NativeSqliteWriter.WriteMbTilesDatabase(System.IO.Path.Combine(outDir, $"{baseFileName}.mbtiles"), eventName, _offlineMinZoom, _offlineMaxZoom, north, south, east, west, finalTilesList);
+                            NativeSqliteWriter.WriteMbTilesDatabase($"{stem}.mbtiles", System.IO.Path.GetFileNameWithoutExtension(standaloneTargetFile), _offlineMinZoom, _offlineMaxZoom, north, south, east, west, finalTilesList);
                         if (writeSqlite)
-                            NativeSqliteWriter.WriteAtakMobacSqliteDatabase(System.IO.Path.Combine(outDir, $"{baseFileName}.sqlite"), _offlineMinZoom, _offlineMaxZoom, finalTilesList);
+                            NativeSqliteWriter.WriteAtakMobacSqliteDatabase($"{stem}.sqlite", _offlineMinZoom, _offlineMaxZoom, finalTilesList);
                     });
 
-                    if (_includeVectorsWithOffline)
-                        await ExportStandaloneFilesAsync(win, "kmz");
-                    else
-                        TacticalConfigPanel.TryOpenFolderInExplorer(folderToOpen);
-
-                    if (_offlineProgressLabel != null) _offlineProgressLabel.Text = $"✓ Wyeksportowano bazę offline ({finalTilesList.Count} kafelków) do release_maps!";
-                    if (_statusText != null) _statusText.Text = $"✓ Zapisano bazę offline ({baseFileName}) w folderze: {outDir}";
+                    TacticalConfigPanel.TryOpenFolderInExplorer(outDir);
+                    if (_offlineProgressLabel != null) _offlineProgressLabel.Text = $"✓ Zapisano bazę offline ({finalTilesList.Count} kafelków): {standaloneTargetFile}";
+                    if (_statusText != null) _statusText.Text = $"✓ Wyeksportowano bazę offline do: {standaloneTargetFile}";
                 }
             }
             catch (Exception ex)
@@ -1584,7 +1211,7 @@ namespace FieldTakHub.Builder.Services
 
             sl.PreviewMouseLeftButtonDown += (s, e) => SetSliderFromMouse(e);
             sl.PreviewMouseMove += (s, e) => { if (e.LeftButton == MouseButtonState.Pressed) SetSliderFromMouse(e); };
-            sl.ValueChanged += (s, e) => { valTxt.Text = fmt(e.NewValue); onVal(e.NewValue); };
+            sl.ValueChanged += (s, e) => { valTxt.Text = fmt(e.NewValue); TacticalConfigPanel.MarkDirty(); onVal(e.NewValue); };
             sp.Children.Add(sl);
             return sp;
         }
@@ -1652,6 +1279,7 @@ namespace FieldTakHub.Builder.Services
                 var (ptLat, ptLon) = ScreenToLatLon(effectivePt.X, effectivePt.Y, w, h);
                 _activeDraftPoly.Points.Add((ptLat, ptLon));
             }
+            TacticalConfigPanel.MarkDirty();
             RefreshObjectsListUI(win);
         }
 
@@ -1683,8 +1311,8 @@ namespace FieldTakHub.Builder.Services
                     Cursor = Cursors.Hand,
                     ToolTip = "Pokaż / ukryj etykietę tekstową tego obiektu na mapie"
                 };
-                chkShowLbl.Checked += (s, e) => { captured.ShowLabel = true; RedrawVectorsOnly(); };
-                chkShowLbl.Unchecked += (s, e) => { captured.ShowLabel = false; RedrawVectorsOnly(); };
+                chkShowLbl.Checked += (s, e) => { captured.ShowLabel = true; TacticalConfigPanel.MarkDirty(); RedrawVectorsOnly(); };
+                chkShowLbl.Unchecked += (s, e) => { captured.ShowLabel = false; TacticalConfigPanel.MarkDirty(); RedrawVectorsOnly(); };
                 Grid.SetColumn(chkShowLbl, 0);
                 row.Children.Add(chkShowLbl);
 
@@ -1705,6 +1333,7 @@ namespace FieldTakHub.Builder.Services
                     {
                         captured.ColorHex = picked;
                         btnCol.Background = TacticalConfigPanel.BrushFromHex(picked, Color.FromRgb(38, 132, 255));
+                        TacticalConfigPanel.MarkDirty();
                         RedrawVectorsOnly();
                     }
                 };
@@ -1731,6 +1360,7 @@ namespace FieldTakHub.Builder.Services
                 editNameBox.TextChanged += (s, e) =>
                 {
                     captured.Name = editNameBox.Text;
+                    TacticalConfigPanel.MarkDirty();
                     RedrawVectorsOnly();
                 };
                 Grid.SetColumn(editNameBox, 3);
@@ -1740,6 +1370,7 @@ namespace FieldTakHub.Builder.Services
                 {
                     _mapObjects.Remove(captured);
                     if (_activeDraftPoly == captured) _activeDraftPoly = null;
+                    TacticalConfigPanel.MarkDirty();
                     RefreshObjectsListUI(win);
                     RedrawVectorsOnly();
                     UpdateOfflineTileEstimateUI();
@@ -1773,387 +1404,13 @@ namespace FieldTakHub.Builder.Services
                     double.TryParse(first["lon"]?.ToString(), NumberStyles.Any, CultureInfo.InvariantCulture, out double lo))
                 {
                     _centerLat = la; _centerLon = lo;
+                    TacticalConfigPanel.MarkDirty();
                     if (_statusText != null) _statusText.Text = $"✓ Znaleziono: {first["display_name"]}";
                     UpdateOfflineTileEstimateUI();
                     await RenderMapTilesAsync();
                 }
             }
             catch { }
-        }
-
-        private static (double X, double Y) LatLonToTileXY(double lat, double lon, int zoom)
-        {
-            double latRad = Math.Clamp(lat, -85.0511, 85.0511) * Math.PI / 180.0;
-            double n = Math.Pow(2.0, zoom);
-            return ((lon + 180.0) / 360.0 * n, (1.0 - Math.Log(Math.Tan(latRad) + 1.0 / Math.Cos(latRad)) / Math.PI) / 2.0 * n);
-        }
-
-        private static (double Lat, double Lon) TileXYToLatLon(double x, double y, int zoom)
-        {
-            double n = Math.Pow(2.0, zoom);
-            return (Math.Atan(Math.Sinh(Math.PI * (1.0 - 2.0 * y / n))) * 180.0 / Math.PI, x / n * 360.0 - 180.0);
-        }
-
-        private static (double Lat, double Lon) ScreenToLatLon(double screenX, double screenY, double viewW, double viewH)
-        {
-            double tilePx = GetScaledTileSizePx();
-            var (cx, cy) = LatLonToTileXY(_centerLat, _centerLon, _zoom);
-            return TileXYToLatLon(cx + (screenX - viewW / 2.0) / tilePx, cy + (screenY - viewH / 2.0) / tilePx, _zoom);
-        }
-
-        private static Point LatLonToScreen(double lat, double lon, double viewW, double viewH)
-        {
-            double tilePx = GetScaledTileSizePx();
-            var (cx, cy) = LatLonToTileXY(_centerLat, _centerLon, _zoom);
-            var (px, py) = LatLonToTileXY(lat, lon, _zoom);
-            return new Point(viewW / 2.0 + (px - cx) * tilePx, viewH / 2.0 + (py - cy) * tilePx);
-        }
-
-        private static (double X, double Y) LatLonToEpsg3857(double lat, double lon) => (lon * 20037508.34 / 180.0, Math.Log(Math.Tan((90.0 + lat) * Math.PI / 360.0)) / (Math.PI / 180.0) * 20037508.34 / 180.0);
-
-        private static string GetEpsg3857BBox(int tx, int ty, int zoom)
-        {
-            var (latNorth, lonWest) = TileXYToLatLon(tx, ty, zoom);
-            var (latSouth, lonEast) = TileXYToLatLon(tx + 1, ty + 1, zoom);
-            var (minX, minY) = LatLonToEpsg3857(latSouth, lonWest);
-            var (maxX, maxY) = LatLonToEpsg3857(latNorth, lonEast);
-            return string.Create(CultureInfo.InvariantCulture, $"{minX:0.00},{minY:0.00},{maxX:0.00},{maxY:0.00}");
-        }
-
-        private static string BuildTileUrl(TacticalMapLayerDef layer, int tx, int ty, int zoom)
-        {
-            if (layer.IsWmsEpsg3857)
-                return layer.UrlTemplate.Replace("{bbox}", GetEpsg3857BBox(tx, ty, zoom)).Replace("{w}", "256").Replace("{h}", "256");
-            return layer.UrlTemplate.Replace("{z}", zoom.ToString()).Replace("{x}", tx.ToString()).Replace("{y}", ty.ToString());
-        }
-
-        private static string BuildFullViewportWmsUrl(string template, double w, double h)
-        {
-            var (nwLat, nwLon) = ScreenToLatLon(0, 0, w, h);
-            var (seLat, seLon) = ScreenToLatLon(w, h, w, h);
-            var (minX, minY) = LatLonToEpsg3857(seLat, nwLon);
-            var (maxX, maxY) = LatLonToEpsg3857(nwLat, seLon);
-            int reqW = Math.Clamp((int)Math.Round(w), 256, 1650);
-            int reqH = Math.Clamp((int)Math.Round(h), 256, 1650);
-            string bbox = string.Create(CultureInfo.InvariantCulture, $"{minX:0.00},{minY:0.00},{maxX:0.00},{maxY:0.00}");
-            return template.Replace("{bbox}", bbox).Replace("{w}", reqW.ToString()).Replace("{h}", reqH.ToString());
-        }
-
-        private static async Task<BitmapSource> FetchDecodedImageAsync(string url, string fallbackUrl, CancellationToken ct)
-        {
-            if (string.IsNullOrEmpty(url)) return null;
-            if (DecodedImageCache.TryGetValue(url, out var cachedBmp)) return cachedBmp;
-
-            byte[] validBytes = null;
-            if (RawTileCache.TryGetValue(url, out var raw) && IsValidImagePayload(raw))
-            {
-                validBytes = raw;
-            }
-            else
-            {
-                await TileThrottle.WaitAsync(ct);
-                try
-                {
-                    for (int attempt = 0; attempt < 2 && !ct.IsCancellationRequested; attempt++)
-                    {
-                        try
-                        {
-                            byte[] data = await Http.GetByteArrayAsync(url, ct);
-                            if (IsValidImagePayload(data)) { validBytes = data; RawTileCache[url] = data; break; }
-                        }
-                        catch { }
-                        if (attempt == 0) await Task.Delay(90, ct);
-                    }
-
-                    if (validBytes == null && !string.IsNullOrEmpty(fallbackUrl) && !ct.IsCancellationRequested)
-                    {
-                        try
-                        {
-                            byte[] fbData = await Http.GetByteArrayAsync(fallbackUrl, ct);
-                            if (IsValidImagePayload(fbData)) { validBytes = fbData; RawTileCache[url] = fbData; }
-                        }
-                        catch { }
-                    }
-                }
-                finally { TileThrottle.Release(); }
-            }
-
-            if (validBytes == null || ct.IsCancellationRequested) return null;
-
-            try
-            {
-                if (DecodedImageCache.Count > 260) DecodedImageCache.Clear();
-                if (RawTileCache.Count > 1200) RawTileCache.Clear();
-
-                var bmp = new BitmapImage();
-                using (var mem = new MemoryStream(validBytes))
-                {
-                    bmp.BeginInit();
-                    bmp.CacheOption = BitmapCacheOption.OnLoad;
-                    bmp.StreamSource = mem;
-                    bmp.EndInit();
-                    bmp.Freeze();
-                }
-                DecodedImageCache[url] = bmp;
-                return bmp;
-            }
-            catch { return null; }
-        }
-
-        private static FormattedText GetCachedGlyph(string text, double fontSize, Brush fg, string keyPrefix)
-        {
-            string key = $"{keyPrefix}_{text}_{fontSize:0.0}";
-            if (GlyphCache.TryGetValue(key, out var ft)) return ft;
-            if (GlyphCache.Count > 500) GlyphCache.Clear();
-            var created = new FormattedText(text ?? "", CultureInfo.InvariantCulture, FlowDirection.LeftToRight, BoldSegoeTypeface, fontSize, fg, 1.0);
-            GlyphCache[key] = created;
-            return created;
-        }
-
-        private static void DrawFastBadgeOnContext(DrawingContext dc, string text, double x, double y, Brush fg, double fontSize, double opacity, string cachePrefix)
-        {
-            if (string.IsNullOrEmpty(text) || opacity <= 0.02) return;
-            var ft = GetCachedGlyph(text, fontSize, fg, cachePrefix);
-            if (_labelBgStyle != "Czysty tekst")
-            {
-                byte bgAlpha = (byte)Math.Clamp((int)Math.Round((_labelBgStyle.StartsWith("Kaseton") ? 175 : 85) * opacity), 0, 230);
-                var bgBrush = new SolidColorBrush(Color.FromArgb(bgAlpha, 5, 12, 15)); bgBrush.Freeze();
-                Pen borderPen = null;
-                if (_labelBgStyle.StartsWith("Kaseton"))
-                {
-                    borderPen = new Pen(fg, 0.7); borderPen.Freeze();
-                }
-                dc.DrawRoundedRectangle(bgBrush, borderPen, new Rect(x - 3, y - 1, ft.Width + 6, ft.Height + 2), 2.5, 2.5);
-            }
-            dc.DrawText(ft, new Point(x, y));
-        }
-
-        private static Brush CreateOutOfBoundsPatternBrush(Color c, double opacity, string patternMode)
-        {
-            byte bgAlpha = (byte)Math.Clamp((int)Math.Round(opacity * 200), 0, 235);
-            byte lineAlpha = (byte)Math.Clamp((int)Math.Round(Math.Min(1.0, opacity + 0.25) * 255), 0, 255);
-            var bgBrush = new SolidColorBrush(Color.FromArgb(bgAlpha, c.R, c.G, c.B)); bgBrush.Freeze();
-
-            if (patternMode.StartsWith("Jednolite")) return bgBrush;
-            if (patternMode.StartsWith("Tylko linia")) return Brushes.Transparent;
-
-            var linePen = new Pen(new SolidColorBrush(Color.FromArgb(lineAlpha, c.R, c.G, c.B)), 1.6);
-            linePen.Freeze();
-
-            var dg = new DrawingGroup();
-            dg.Children.Add(new GeometryDrawing(bgBrush, null, new RectangleGeometry(new Rect(0, 0, 20, 20))));
-            dg.Children.Add(new GeometryDrawing(null, linePen, new LineGeometry(new Point(0, 20), new Point(20, 0))));
-            if (patternMode.Contains("Symbole X"))
-                dg.Children.Add(new GeometryDrawing(null, linePen, new LineGeometry(new Point(0, 0), new Point(20, 20))));
-
-            var db = new DrawingBrush(dg)
-            {
-                TileMode = TileMode.Tile,
-                Viewport = new Rect(0, 0, 20, 20),
-                ViewportUnits = BrushMappingMode.Absolute
-            };
-            db.Freeze();
-            return db;
-        }
-
-        private static void RenderFastGridAndMasksOnContext(DrawingContext dc, double w, double h)
-        {
-            foreach (var ao in _mapObjects.Where(o => o.Kind == "AO" && o.Points.Count >= 2))
-            {
-                Color c = Color.FromRgb(235, 64, 52);
-                try { c = (Color)ColorConverter.ConvertFromString(ao.ColorHex); } catch { }
-                var strokeBrush = TacticalConfigPanel.CreateFrozenBrush(c.R, c.G, c.B);
-                var screenPts = ao.Points.Select(pt => LatLonToScreen(pt.Lat, pt.Lon, w, h)).ToList();
-
-                var fig = new PathFigure { StartPoint = screenPts[0], IsClosed = screenPts.Count >= 3, IsFilled = true };
-                for (int i = 1; i < screenPts.Count; i++) fig.Segments.Add(new LineSegment(screenPts[i], true));
-                var aoPolyGeom = new PathGeometry(new[] { fig });
-
-                if (screenPts.Count >= 3)
-                {
-                    var fullRectGeom = new RectangleGeometry(new Rect(0, 0, w, h));
-                    var invertedOutsideGeom = new CombinedGeometry(GeometryCombineMode.Exclude, fullRectGeom, aoPolyGeom);
-                    dc.DrawGeometry(CreateOutOfBoundsPatternBrush(c, _aoOutMaskOpacity, _aoOutPattern), null, invertedOutsideGeom);
-                }
-
-                var borderPen = new Pen(strokeBrush, 2.8) { DashStyle = new DashStyle(new double[] { 5, 2.5 }, 0) };
-                borderPen.Freeze();
-                dc.DrawGeometry(null, borderPen, aoPolyGeom);
-
-                if (_showAllObjectLabels && ao.ShowLabel && !string.IsNullOrWhiteSpace(ao.Name))
-                    DrawFastBadgeOnContext(dc, $"🛡️ {ao.Name}", screenPts[0].X + 10, screenPts[0].Y + 6, strokeBrush, 10 * _fontScaleMultiplier, 1.0, $"AO_{ao.ColorHex}");
-            }
-
-            foreach (var sec in _mapObjects.Where(o => o.Kind == "Sector" && o.Points.Count >= 2))
-            {
-                Color c = Color.FromRgb(245, 184, 46);
-                try { c = (Color)ColorConverter.ConvertFromString(sec.ColorHex); } catch { }
-                var strokeBrush = TacticalConfigPanel.CreateFrozenBrush(c.R, c.G, c.B);
-                var fillBrush = new SolidColorBrush(Color.FromArgb(85, c.R, c.G, c.B)); fillBrush.Freeze();
-                var screenPts = sec.Points.Select(pt => LatLonToScreen(pt.Lat, pt.Lon, w, h)).ToList();
-
-                var fig = new PathFigure { StartPoint = screenPts[0], IsClosed = true, IsFilled = true };
-                for (int i = 1; i < screenPts.Count; i++) fig.Segments.Add(new LineSegment(screenPts[i], true));
-                var polyGeom = new PathGeometry(new[] { fig });
-                var secPen = new Pen(strokeBrush, 2.2); secPen.Freeze();
-                dc.DrawGeometry(fillBrush, secPen, polyGeom);
-
-                if (_showAllObjectLabels && sec.ShowLabel && !string.IsNullOrWhiteSpace(sec.Name))
-                {
-                    double cx = screenPts.Average(p => p.X), cy = screenPts.Average(p => p.Y);
-                    DrawFastBadgeOnContext(dc, sec.Name, cx + 14, cy - 8, strokeBrush, 10 * _fontScaleMultiplier, 1.0, $"SEC_{sec.ColorHex}");
-                }
-            }
-
-            foreach (var rt in _mapObjects.Where(o => o.Kind == "Route" && o.Points.Count >= 2))
-            {
-                var strokeBrush = TacticalConfigPanel.BrushFromHex(rt.ColorHex, Color.FromRgb(38, 132, 255));
-                var screenPts = rt.Points.Select(pt => LatLonToScreen(pt.Lat, pt.Lon, w, h)).ToList();
-                var rtPen = new Pen(strokeBrush, 2.8) { DashStyle = new DashStyle(new double[] { 4, 2 }, 0) };
-                rtPen.Freeze();
-                for (int i = 0; i < screenPts.Count - 1; i++)
-                    dc.DrawLine(rtPen, screenPts[i], screenPts[i + 1]);
-
-                if (_showAllObjectLabels && rt.ShowLabel && !string.IsNullOrWhiteSpace(rt.Name))
-                    DrawFastBadgeOnContext(dc, rt.Name, screenPts[0].X + 8, screenPts[0].Y - 14, strokeBrush, 9.5 * _fontScaleMultiplier, 1.0, $"RT_{rt.ColorHex}");
-            }
-
-            if (_isHoveringCanvas && _activeDraftPoly != null && _activeDraftPoly.Points.Count > 0 && (_activeTool == "ROUTE" || _activeTool == "AO" || _activeTool == "SECTOR"))
-            {
-                var lastPt = _activeDraftPoly.Points[_activeDraftPoly.Points.Count - 1];
-                Point pStart = LatLonToScreen(lastPt.Lat, lastPt.Lon, w, h);
-                Point pEnd = ApplyShift45DegreeSnap(pStart, _currentHoverScreenPt, out bool snapped, out int deg);
-
-                var previewBrush = snapped ? TacticalConfigPanel.BrushAccent : TacticalConfigPanel.BrushFromHex(_activeDraftPoly.ColorHex, Color.FromRgb(31, 224, 197));
-                var previewPen = new Pen(previewBrush, 2.2) { DashStyle = new DashStyle(new double[] { 3, 2 }, 0) };
-                previewPen.Freeze();
-                dc.DrawLine(previewPen, pStart, pEnd);
-                dc.DrawEllipse(previewBrush, null, pEnd, 4, 4);
-
-                if (snapped)
-                    DrawFastBadgeOnContext(dc, $"📐 SNAP {deg}° (SHIFT)", pEnd.X + 12, pEnd.Y - 18, TacticalConfigPanel.BrushAccent, 9.5, 1.0, "SNAP_DEG");
-            }
-
-            if (_coordSystem != "Brak siatki")
-            {
-                byte mainAlpha = (byte)Math.Clamp((int)Math.Round(_mainGridOpacity * 255), 0, 255);
-                byte subAlpha = (byte)Math.Clamp((int)Math.Round(_subGridOpacity * 255), 0, 255);
-                var mainBrush = GetGridColorBrush(mainAlpha);
-                var subBrush = GetGridColorBrush(subAlpha);
-
-                byte mainHaloAlpha = (byte)Math.Clamp((int)Math.Round((_gridHaloMode.StartsWith("Pełny") ? 220 : 130) * _mainGridOpacity), 0, 255);
-                byte subHaloAlpha = (byte)Math.Clamp((int)Math.Round((_gridHaloMode.StartsWith("Pełny") ? 180 : 100) * _subGridOpacity), 0, 255);
-                var haloBrush = new SolidColorBrush(Color.FromArgb(mainHaloAlpha, 0, 0, 0)); haloBrush.Freeze();
-                var subHaloBrush = new SolidColorBrush(Color.FromArgb(subHaloAlpha, 0, 0, 0)); subHaloBrush.Freeze();
-                bool useHalo = !_gridHaloMode.StartsWith("Brak");
-
-                double mainThick = Math.Max(0.8, 1.45 * _gridThicknessMultiplier);
-                double subThick = Math.Max(0.7, 0.95 * _gridThicknessMultiplier);
-                var mainPen = new Pen(mainBrush, mainThick); mainPen.Freeze();
-                var mainHaloPen = new Pen(haloBrush, mainThick + 1.8); mainHaloPen.Freeze();
-                var subPen = new Pen(subBrush, subThick) { DashStyle = new DashStyle(new double[] { 4, 2 }, 0) }; subPen.Freeze();
-                var subHaloPen = new Pen(subHaloBrush, subThick + 1.2); subHaloPen.Freeze();
-
-                if (_coordSystem.StartsWith("Sektorowa") && mainAlpha > 5)
-                {
-                    int cols = 8, rows = 8; double cw = w / cols, ch = h / rows;
-                    for (int c = 1; c < cols; c++) dc.DrawLine(mainPen, new Point(c * cw, 0), new Point(c * cw, h));
-                    for (int r = 1; r < rows; r++) dc.DrawLine(mainPen, new Point(0, r * ch), new Point(w, r * ch));
-                    for (int r = 0; r < rows; r++)
-                        for (int c = 0; c < cols; c++)
-                            DrawFastBadgeOnContext(dc, $"{(char)('A' + r)}{c + 1}", c * cw + 6, r * ch + 4, mainBrush, 10 * _fontScaleMultiplier, _mainGridOpacity, $"MAIN_{_gridColorName}_{mainAlpha}");
-                }
-                else
-                {
-                    double metersPerPixel = GetExactMetersPerPixel();
-                    int stepMeters = _subGridDivision.Contains("250") ? 250 : (_subGridDivision.Contains("500") ? 500 : 100);
-                    double stepPx = Math.Clamp(stepMeters / metersPerPixel, 64.0, 360.0);
-                    double startX = (w / 2.0) % stepPx, startY = (h / 2.0) % stepPx;
-
-                    if (_coordSystem.StartsWith("MGRS") && (_subGridDivision.Contains("50 m") || _subGridDivision.Contains("33 m")) && subAlpha > 4)
-                    {
-                        bool isQuarters = _subGridDivision.Contains("50 m");
-                        int div = isQuarters ? 2 : 3;
-                        double subStep = stepPx / div;
-
-                        for (double x = startX - stepPx; x < w; x += stepPx)
-                            for (int i = 1; i < div; i++)
-                            {
-                                double sx = x + i * subStep;
-                                if (sx < 0 || sx > w) continue;
-                                if (useHalo) dc.DrawLine(subHaloPen, new Point(sx, 0), new Point(sx, h));
-                                dc.DrawLine(subPen, new Point(sx, 0), new Point(sx, h));
-                            }
-
-                        for (double y = startY - stepPx; y < h; y += stepPx)
-                            for (int j = 1; j < div; j++)
-                            {
-                                double sy = y + j * subStep;
-                                if (sy < 0 || sy > h) continue;
-                                if (useHalo) dc.DrawLine(subHaloPen, new Point(0, sy), new Point(w, sy));
-                                dc.DrawLine(subPen, new Point(0, sy), new Point(w, sy));
-                            }
-
-                        if (_gridLabelsMode.Contains("Ćwiartki/Keypad") && stepPx >= 64)
-                        {
-                            string[,] keypad3x3 = { { "7", "8", "9" }, { "4", "5", "6" }, { "1", "2", "3" } };
-                            string[,] quarters2x2 = { { "A", "B" }, { "C", "D" } };
-                            string subCacheKey = $"SUB_{_gridColorName}_{subAlpha}";
-                            double subFontSz = 8.5 * _fontScaleMultiplier;
-
-                            for (double x = startX; x < w - stepPx * 0.6; x += stepPx)
-                                for (double y = startY; y < h - stepPx * 0.6; y += stepPx)
-                                    for (int r = 0; r < div; r++)
-                                        for (int c = 0; c < div; c++)
-                                        {
-                                            string subTxt = isQuarters ? quarters2x2[r, c] : keypad3x3[r, c];
-                                            DrawFastBadgeOnContext(dc, subTxt, x + (c + 0.5) * subStep - 4, y + (r + 0.5) * subStep - 6, subBrush, subFontSz, _subGridOpacity, subCacheKey);
-                                        }
-                        }
-                    }
-
-                    if (mainAlpha > 4)
-                    {
-                        bool isWgs84 = _coordSystem.StartsWith("WGS84");
-                        string mainCacheKey = $"MAIN_{_gridColorName}_{mainAlpha}";
-                        double mainFontSz = 9.5 * _fontScaleMultiplier;
-
-                        for (double x = startX; x < w; x += stepPx)
-                        {
-                            if (useHalo) dc.DrawLine(mainHaloPen, new Point(x, 0), new Point(x, h));
-                            dc.DrawLine(mainPen, new Point(x, 0), new Point(x, h));
-                            var (_, lon) = ScreenToLatLon(x, 20, w, h);
-                            string lblTxt = isWgs84
-                                ? $"{lon:0.0000}°E"
-                                : $"{(((int)Math.Round(((lon + 180.0) % 6.0) * 111320.0 * Math.Cos(_centerLat * Math.PI / 180.0)) / 100) % 1000):D3}";
-                            DrawFastBadgeOnContext(dc, lblTxt, x + 5, 6, mainBrush, mainFontSz, _mainGridOpacity, mainCacheKey);
-                        }
-                        for (double y = startY; y < h; y += stepPx)
-                        {
-                            if (useHalo) dc.DrawLine(mainHaloPen, new Point(0, y), new Point(w, y));
-                            dc.DrawLine(mainPen, new Point(0, y), new Point(w, y));
-                            var (lat, _) = ScreenToLatLon(20, y, w, h);
-                            string lblTxt = isWgs84
-                                ? $"{lat:0.0000}°N"
-                                : $"{(((int)Math.Round(lat * 110574.0) / 100) % 1000):D3}";
-                            DrawFastBadgeOnContext(dc, lblTxt, 6, y + 3, mainBrush, mainFontSz, _mainGridOpacity, mainCacheKey);
-                        }
-                    }
-                }
-            }
-
-            if (_rulerStart != null && _rulerEnd != null)
-            {
-                Point p1 = LatLonToScreen(_rulerStart.Value.Lat, _rulerStart.Value.Lon, w, h);
-                Point p2 = LatLonToScreen(_rulerEnd.Value.Lat, _rulerEnd.Value.Lon, w, h);
-                var rPen = new Pen(TacticalConfigPanel.BrushAccent, 2.2) { DashStyle = new DashStyle(new double[] { 4, 2 }, 0) };
-                rPen.Freeze();
-                dc.DrawLine(rPen, p1, p2);
-                double dLat = (_rulerEnd.Value.Lat - _rulerStart.Value.Lat) * Math.PI / 180.0, dLon = (_rulerEnd.Value.Lon - _rulerStart.Value.Lon) * Math.PI / 180.0;
-                double a = Math.Sin(dLat / 2) * Math.Sin(dLat / 2) + Math.Cos(_rulerStart.Value.Lat * Math.PI / 180.0) * Math.Cos(_rulerEnd.Value.Lat * Math.PI / 180.0) * Math.Sin(dLon / 2) * Math.Sin(dLon / 2);
-                double dist = 6371000.0 * 2.0 * Math.Atan2(Math.Sqrt(a), Math.Sqrt(1.0 - a));
-                DrawFastBadgeOnContext(dc, $"📏 {dist:0} m", (p1.X + p2.X) / 2, (p1.Y + p2.Y) / 2 - 14, TacticalConfigPanel.BrushAccent, 10.5 * _fontScaleMultiplier, 1.0, "RULER");
-            }
         }
 
         private static void RedrawVectorsOnly()
@@ -2173,100 +1430,6 @@ namespace FieldTakHub.Builder.Services
 
             DrawTacticalMarkersOverlay(w, h);
             DrawDraggableCornerElements(w, h);
-        }
-
-        private static async Task RenderMapTilesAsync(bool transparentGrgOnly = false)
-        {
-            if (_tileCanvas == null || _interactiveCanvas == null || _activeLayer == null || _fullScreenOverlay?.Visibility != Visibility.Visible) return;
-
-            _renderCts?.Cancel();
-            var cts = new CancellationTokenSource();
-            _renderCts = cts;
-            var ct = cts.Token;
-
-            UpdateSheetViewportSize();
-            var (w, h) = GetExactCanvasSize();
-            double tilePx = GetScaledTileSizePx();
-
-            RedrawVectorsOnly();
-
-            if (transparentGrgOnly)
-            {
-                _tileCanvas.Children.Clear();
-                _lidarOverlayImage.Source = null;
-                _dimmerRect.Visibility = Visibility.Collapsed;
-                _mapCompositeGrid.Background = Brushes.Transparent;
-                return;
-            }
-
-            _mapCompositeGrid.Background = TacticalConfigPanel.BrushCardBg;
-            _dimmerRect.Visibility = Visibility.Visible;
-            _dimmerRect.Opacity = _mapDimmerOpacity;
-
-            try
-            {
-                Task<BitmapSource> lidarTask = Task.FromResult<BitmapSource>(null);
-                if (_showLidarSingleWms && _activeLayer.Id != "geoportal_lidar")
-                {
-                    string lidarTemplate = Layers.First(l => l.Id == "geoportal_lidar").UrlTemplate;
-                    lidarTask = FetchDecodedImageAsync(BuildFullViewportWmsUrl(lidarTemplate, w, h), null, ct);
-                }
-
-                if (_activeLayer.IsWmsEpsg3857)
-                {
-                    string primaryWmsUrl = BuildFullViewportWmsUrl(_activeLayer.UrlTemplate, w, h);
-                    string fallbackWmsUrl = !string.IsNullOrEmpty(_activeLayer.FallbackUrlTemplate)
-                        ? BuildFullViewportWmsUrl(_activeLayer.FallbackUrlTemplate, w, h)
-                        : null;
-                    var baseWmsTask = FetchDecodedImageAsync(primaryWmsUrl, fallbackWmsUrl, ct);
-                    await Task.WhenAll(baseWmsTask, lidarTask);
-                    if (ct.IsCancellationRequested) return;
-
-                    _tileCanvas.Children.Clear();
-                    if (baseWmsTask.Result != null)
-                    {
-                        var img = new Image { Source = baseWmsTask.Result, Width = w, Height = h, Stretch = Stretch.Fill };
-                        Canvas.SetLeft(img, 0); Canvas.SetTop(img, 0);
-                        _tileCanvas.Children.Add(img);
-                    }
-                    _lidarOverlayImage.Source = lidarTask.Result;
-                    _lidarOverlayImage.Opacity = _lidarOpacity;
-                }
-                else
-                {
-                    var (centerTileX, centerTileY) = LatLonToTileXY(_centerLat, _centerLon, _zoom);
-                    int minTx = (int)Math.Floor(centerTileX - (w / 2.0) / tilePx) - 1, maxTx = (int)Math.Floor(centerTileX + (w / 2.0) / tilePx) + 1;
-                    int minTy = (int)Math.Floor(centerTileY - (h / 2.0) / tilePx) - 1, maxTy = (int)Math.Floor(centerTileY + (h / 2.0) / tilePx) + 1;
-                    int maxIndex = (1 << _zoom) - 1;
-
-                    var tileJobs = new List<(double ScreenX, double ScreenY, string Url)>();
-                    for (int tx = minTx; tx <= maxTx; tx++)
-                        for (int ty = minTy; ty <= maxTy; ty++)
-                        {
-                            if (ty < 0 || ty > maxIndex) continue;
-                            int wrappedTx = ((tx % (maxIndex + 1)) + (maxIndex + 1)) % (maxIndex + 1);
-                            tileJobs.Add(((w / 2.0) + (tx - centerTileX) * tilePx, (h / 2.0) + (ty - centerTileY) * tilePx, BuildTileUrl(_activeLayer, wrappedTx, ty, _zoom)));
-                        }
-
-                    var tilesTask = Task.WhenAll(tileJobs.Select(async job => (job.ScreenX, job.ScreenY, await FetchDecodedImageAsync(job.Url, null, ct))));
-                    await Task.WhenAll(tilesTask, lidarTask);
-                    if (ct.IsCancellationRequested) return;
-
-                    _tileCanvas.Children.Clear();
-                    foreach (var t in tilesTask.Result)
-                    {
-                        if (t.Item3 != null)
-                        {
-                            var img = new Image { Source = t.Item3, Width = tilePx + 0.7, Height = tilePx + 0.7, Stretch = Stretch.Fill };
-                            Canvas.SetLeft(img, t.ScreenX); Canvas.SetTop(img, t.ScreenY);
-                            _tileCanvas.Children.Add(img);
-                        }
-                    }
-                    _lidarOverlayImage.Source = lidarTask.Result;
-                    _lidarOverlayImage.Opacity = _lidarOpacity;
-                }
-            }
-            catch { }
         }
 
         private static void DrawDraggableVertexAndWholeZoneHandles(TacticalMapObjectItem obj, List<Point> screenPts, Brush strokeBrush, double viewW, double viewH)
@@ -2379,9 +1542,6 @@ namespace FieldTakHub.Builder.Services
             };
         }
 
-        // =========================================================================
-        // RYSOWANIE ZNAKÓW NATO: DLA FLAGI (NATO_HQ) PUNKT KLIKNIĘCIA TO DOLNA CZĘŚĆ MASZTU, DLA POZOSTAŁYCH ŚRODEK 1:1
-        // =========================================================================
         private static void DrawNatoVectorSymbolOnCanvas(Point pt, TacticalMapObjectItem obj)
         {
             string symbolCode = obj.SymbolCode ?? "NATO_HQ";
@@ -2395,50 +1555,36 @@ namespace FieldTakHub.Builder.Services
             var fillBrush = new SolidColorBrush(Color.FromArgb(185, c.R, c.G, c.B)); fillBrush.Freeze();
             var darkBgBrush = new SolidColorBrush(Color.FromArgb(225, 8, 16, 20)); darkBgBrush.Freeze();
 
-            // Specjalna obsługa dla znacznika w kształcie flagi (NATO_HQ): punkt kliknięcia (pt.X, pt.Y) to dolny koniec masztu!
             if (symbolCode == "NATO_HQ")
             {
                 const double flagBoxW = 36.0, flagBoxH = 36.0;
                 const double poleX = 4.0;
                 const double poleTopY = 2.0;
-                const double poleBottomY = 32.0; // Punkt kotwiczenia (dolna część masztu)
+                const double poleBottomY = 32.0;
                 const double flagW = 28.0, flagH = 17.0;
 
-                var flagCanvas = new Canvas
-                {
-                    Width = flagBoxW,
-                    Height = flagBoxH,
-                    Background = Brushes.Transparent
-                };
+                var flagCanvas = new Canvas { Width = flagBoxW, Height = flagBoxH, Background = Brushes.Transparent };
                 AttachCenteredMarkerDragHandler(flagCanvas, obj, pt, "dolna część masztu flagi");
 
-                // Maszt flagi (od góry chorągiewki do dolnego punktu kotwiczenia poleBottomY)
                 flagCanvas.Children.Add(new Line { X1 = poleX, Y1 = poleTopY, X2 = poleX, Y2 = poleBottomY, Stroke = Brushes.Black, StrokeThickness = 4.4 });
                 flagCanvas.Children.Add(new Line { X1 = poleX, Y1 = poleTopY, X2 = poleX, Y2 = poleBottomY, Stroke = strokeBrush, StrokeThickness = 2.4 });
 
-                // Wyraźna stopka u dołu masztu wskazująca dokładny punkt kliknięcia
                 var baseDot = new Ellipse { Width = 6, Height = 6, Fill = Brushes.White, Stroke = Brushes.Black, StrokeThickness = 1.2 };
-                Canvas.SetLeft(baseDot, poleX - 3.0);
-                Canvas.SetTop(baseDot, poleBottomY - 3.0);
+                Canvas.SetLeft(baseDot, poleX - 3.0); Canvas.SetTop(baseDot, poleBottomY - 3.0);
                 flagCanvas.Children.Add(baseDot);
 
-                // Prostokąt chorągiewki HQ na szczycie masztu (rozwinięty w prawo od masztu)
                 var hqHalo = new Rectangle { Width = flagW + 2, Height = flagH + 2, Stroke = Brushes.Black, StrokeThickness = 3.0, Fill = darkBgBrush };
-                Canvas.SetLeft(hqHalo, poleX - 1);
-                Canvas.SetTop(hqHalo, poleTopY - 1);
+                Canvas.SetLeft(hqHalo, poleX - 1); Canvas.SetTop(hqHalo, poleTopY - 1);
                 flagCanvas.Children.Add(hqHalo);
 
                 var hqRect = new Rectangle { Width = flagW, Height = flagH, Stroke = strokeBrush, StrokeThickness = 2.0, Fill = fillBrush };
-                Canvas.SetLeft(hqRect, poleX);
-                Canvas.SetTop(hqRect, poleTopY);
+                Canvas.SetLeft(hqRect, poleX); Canvas.SetTop(hqRect, poleTopY);
                 flagCanvas.Children.Add(hqRect);
 
                 var hqTxt = new TextBlock { Text = "HQ", Foreground = Brushes.White, FontSize = 9.5, FontWeight = FontWeights.Bold };
-                Canvas.SetLeft(hqTxt, poleX + 6);
-                Canvas.SetTop(hqTxt, poleTopY + 2);
+                Canvas.SetLeft(hqTxt, poleX + 6); Canvas.SetTop(hqTxt, poleTopY + 2);
                 flagCanvas.Children.Add(hqTxt);
 
-                // Osadzamy kontener tak, aby (poleX, poleBottomY) znalazł się dokładnie w miejscu kliknięcia (pt.X, pt.Y)
                 Canvas.SetLeft(flagCanvas, pt.X - poleX);
                 Canvas.SetTop(flagCanvas, pt.Y - poleBottomY);
                 _interactiveCanvas.Children.Add(flagCanvas);
@@ -2448,18 +1594,12 @@ namespace FieldTakHub.Builder.Services
                 return;
             }
 
-            // Wszystkie pozostałe znaki NATO: środek geometryczny (cx = 18, cy = 14) pokrywa się 1:1 z punktem kliknięcia (pt.X, pt.Y)
             const double boxW = 36.0, boxH = 28.0;
             const double cx = 18.0, cy = 14.0;
             const double fw = 28.0, fh = 18.0;
             double left = cx - fw / 2.0, top = cy - fh / 2.0;
 
-            var iconCanvas = new Canvas
-            {
-                Width = boxW,
-                Height = boxH,
-                Background = Brushes.Transparent
-            };
+            var iconCanvas = new Canvas { Width = boxW, Height = boxH, Background = Brushes.Transparent };
             AttachCenteredMarkerDragHandler(iconCanvas, obj, pt);
 
             void AddBoxToIconCanvas()
@@ -2477,29 +1617,24 @@ namespace FieldTakHub.Builder.Services
                     iconCanvas.Children.Add(new Line { X1 = left, Y1 = top, X2 = left + fw, Y2 = top + fh, Stroke = Brushes.White, StrokeThickness = 1.8 });
                     iconCanvas.Children.Add(new Line { X1 = left, Y1 = top + fh, X2 = left + fw, Y2 = top, Stroke = Brushes.White, StrokeThickness = 1.8 });
                     break;
-
                 case "NATO_RECON":
                     AddBoxToIconCanvas();
                     iconCanvas.Children.Add(new Line { X1 = left, Y1 = top + fh, X2 = left + fw, Y2 = top, Stroke = Brushes.White, StrokeThickness = 2.0 });
                     break;
-
                 case "NATO_MED":
                     AddBoxToIconCanvas();
                     iconCanvas.Children.Add(new Line { X1 = cx, Y1 = top, X2 = cx, Y2 = top + fh, Stroke = Brushes.White, StrokeThickness = 2.2 });
                     iconCanvas.Children.Add(new Line { X1 = left, Y1 = cy, X2 = left + fw, Y2 = cy, Stroke = Brushes.White, StrokeThickness = 2.2 });
                     break;
-
                 case "NATO_COMMS":
                     AddBoxToIconCanvas();
                     var bolt = new Polyline { Stroke = Brushes.White, StrokeThickness = 2.0, Points = new PointCollection { new Point(left + 5, top + fh - 3), new Point(cx - 1, top + 3), new Point(cx + 2, top + fh - 4), new Point(left + fw - 5, top + 3) } };
                     iconCanvas.Children.Add(bolt);
                     break;
-
                 case "NATO_SUPPLY":
                     AddBoxToIconCanvas();
                     iconCanvas.Children.Add(new Line { X1 = left, Y1 = top + fh - 4, X2 = left + fw, Y2 = top + fh - 4, Stroke = Brushes.White, StrokeThickness = 2.0 });
                     break;
-
                 case "NATO_OP":
                     var triPts = new PointCollection { new Point(cx, cy - 11), new Point(cx - 12, cy + 10), new Point(cx + 12, cy + 10) };
                     iconCanvas.Children.Add(new Polygon { Stroke = Brushes.Black, StrokeThickness = 3.2, Fill = darkBgBrush, Points = triPts });
@@ -2507,7 +1642,6 @@ namespace FieldTakHub.Builder.Services
                     var opDot = new Ellipse { Width = 4, Height = 4, Fill = Brushes.White };
                     Canvas.SetLeft(opDot, cx - 2); Canvas.SetTop(opDot, cy); iconCanvas.Children.Add(opDot);
                     break;
-
                 case "NATO_SNIPER":
                     var snHalo = new Ellipse { Width = 22, Height = 22, Stroke = Brushes.Black, StrokeThickness = 3.0, Fill = darkBgBrush };
                     Canvas.SetLeft(snHalo, cx - 11); Canvas.SetTop(snHalo, cy - 11); iconCanvas.Children.Add(snHalo);
@@ -2516,7 +1650,6 @@ namespace FieldTakHub.Builder.Services
                     iconCanvas.Children.Add(new Line { X1 = cx - 13, Y1 = cy, X2 = cx + 13, Y2 = cy, Stroke = Brushes.White, StrokeThickness = 1.5 });
                     iconCanvas.Children.Add(new Line { X1 = cx, Y1 = cy - 13, X2 = cx, Y2 = cy + 13, Stroke = Brushes.White, StrokeThickness = 1.5 });
                     break;
-
                 case "NATO_CP":
                     var shPts = new PointCollection { new Point(cx - 11, cy - 10), new Point(cx + 11, cy - 10), new Point(cx + 11, cy + 2), new Point(cx, cy + 11), new Point(cx - 11, cy + 2) };
                     iconCanvas.Children.Add(new Polygon { Stroke = Brushes.Black, StrokeThickness = 3.0, Fill = darkBgBrush, Points = shPts });
@@ -2524,7 +1657,6 @@ namespace FieldTakHub.Builder.Services
                     var cpTxt = new TextBlock { Text = "CP", Foreground = Brushes.White, FontSize = 8.5, FontWeight = FontWeights.Bold };
                     Canvas.SetLeft(cpTxt, cx - 6); Canvas.SetTop(cpTxt, cy - 6); iconCanvas.Children.Add(cpTxt);
                     break;
-
                 case "NATO_LZ":
                     var lzHalo = new Ellipse { Width = 24, Height = 24, Stroke = Brushes.Black, StrokeThickness = 3.0, Fill = darkBgBrush };
                     Canvas.SetLeft(lzHalo, cx - 12); Canvas.SetTop(lzHalo, cy - 12); iconCanvas.Children.Add(lzHalo);
@@ -2533,7 +1665,6 @@ namespace FieldTakHub.Builder.Services
                     var lzTxt = new TextBlock { Text = "LZ", Foreground = Brushes.White, FontSize = 8.5, FontWeight = FontWeights.Bold };
                     Canvas.SetLeft(lzTxt, cx - 5.5); Canvas.SetTop(lzTxt, cy - 5.5); iconCanvas.Children.Add(lzTxt);
                     break;
-
                 case "NATO_OBJ":
                     var dmPts = new PointCollection { new Point(cx, cy - 12), new Point(cx + 12, cy), new Point(cx, cy + 12), new Point(cx - 12, cy) };
                     iconCanvas.Children.Add(new Polygon { Stroke = Brushes.Black, StrokeThickness = 3.0, Fill = darkBgBrush, Points = dmPts });
@@ -2541,7 +1672,6 @@ namespace FieldTakHub.Builder.Services
                     iconCanvas.Children.Add(new Line { X1 = cx - 6, Y1 = cy, X2 = cx + 6, Y2 = cy, Stroke = Brushes.White, StrokeThickness = 1.6 });
                     iconCanvas.Children.Add(new Line { X1 = cx, Y1 = cy - 6, X2 = cx, Y2 = cy + 6, Stroke = Brushes.White, StrokeThickness = 1.6 });
                     break;
-
                 case "NATO_HAZARD":
                     var hzPts = new PointCollection { new Point(cx, cy - 11), new Point(cx - 12, cy + 10), new Point(cx + 12, cy + 10) };
                     iconCanvas.Children.Add(new Polygon { Stroke = Brushes.Black, StrokeThickness = 3.2, Fill = darkBgBrush, Points = hzPts });
@@ -2549,7 +1679,6 @@ namespace FieldTakHub.Builder.Services
                     var hzTxt = new TextBlock { Text = "!", Foreground = Brushes.White, FontSize = 10.5, FontWeight = FontWeights.Bold };
                     Canvas.SetLeft(hzTxt, cx - 2); Canvas.SetTop(hzTxt, cy - 4); iconCanvas.Children.Add(hzTxt);
                     break;
-
                 default:
                     var dot = new Ellipse { Width = 14, Height = 14, Fill = strokeBrush, Stroke = Brushes.White, StrokeThickness = 2 };
                     Canvas.SetLeft(dot, cx - 7); Canvas.SetTop(dot, cy - 7); iconCanvas.Children.Add(dot);
@@ -2633,13 +1762,16 @@ namespace FieldTakHub.Builder.Services
             if (_showScaleBar)
             {
                 double metersPerPixel = GetExactMetersPerPixel();
-                double chosen = 100;
-                foreach (var d in new[] { 20.0, 50.0, 100.0, 200.0, 500.0, 1000.0, 2000.0, 5000.0 })
+                double chosen = _coordSystem.StartsWith("MGRS") ? _effectiveMgrsStepMeters : 100;
+                if (chosen / metersPerPixel < 50 || chosen / metersPerPixel > 240)
                 {
-                    double px = d / metersPerPixel;
-                    if (px >= (isCompactWrist ? 55 : 75) && px <= (isCompactWrist ? 150 : 220)) { chosen = d; break; }
+                    foreach (var d in new[] { 20.0, 50.0, 100.0, 200.0, 500.0, 1000.0, 2000.0, 5000.0 })
+                    {
+                        double px = d / metersPerPixel;
+                        if (px >= (isCompactWrist ? 55 : 70) && px <= (isCompactWrist ? 150 : 220)) { chosen = d; break; }
+                    }
                 }
-                double barW = Math.Clamp(chosen / metersPerPixel, 55, 220);
+                double barW = Math.Clamp(chosen / metersPerPixel, 45, 230);
 
                 var sbBorder = new Border { Width = barW + 34, Height = 52, Background = new SolidColorBrush(Color.FromArgb(228, 8, 19, 22)), BorderBrush = TacticalConfigPanel.BrushAccent, BorderThickness = new Thickness(1.2), CornerRadius = new CornerRadius(6) };
                 var cnv = new Canvas();
@@ -2663,7 +1795,10 @@ namespace FieldTakHub.Builder.Services
                 double lw = isCompactWrist ? 215 : 275;
                 var ls = new StackPanel();
                 ls.Children.Add(new TextBlock { Text = $"MAPA TAKTYCZNA ({_selectedSheet.Name.Split('—')[0].Trim()} | 1:{_targetScaleDenominator:N0})", Foreground = TacticalConfigPanel.BrushAccent, FontWeight = FontWeights.Bold, FontSize = isCompactWrist ? 9 : 10 });
-                ls.Children.Add(new TextBlock { Text = $"Siatka: {_coordSystem.Split(' ')[0]} | {_subGridDivision}", Foreground = TacticalConfigPanel.BrushMutedText, FontSize = 8.5, Margin = new Thickness(0, 1, 0, 4) });
+                string gridSummary = _coordSystem.StartsWith("MGRS")
+                    ? $"Siatka: MGRS ({_effectiveMgrsStepMeters} m) | {_subGridDivision}"
+                    : $"Siatka: {_coordSystem.Split(' ')[0]}";
+                ls.Children.Add(new TextBlock { Text = gridSummary, Foreground = TacticalConfigPanel.BrushMutedText, FontSize = 8.5, Margin = new Thickness(0, 1, 0, 4) });
 
                 var activeFacs = GetActiveMapFactions();
                 if (activeFacs.Count > 0)
@@ -2762,37 +1897,12 @@ namespace FieldTakHub.Builder.Services
             using var ms = new MemoryStream(); enc.Save(ms); return ms.ToArray();
         }
 
-        private static void SaveMapProjectJson()
+        private static void SaveMapProjectJson(Window win)
         {
             try
             {
-                var dlg = new SaveFileDialog { Title = "Zapisz projekt mapy (.json)", Filter = "Projekt mapy JSON (*.json)|*.json", FileName = "mapa_taktyczna.json" };
-                if (dlg.ShowDialog() != true) return;
-                var root = new JsonObject
-                {
-                    ["centerLat"] = _centerLat,
-                    ["centerLon"] = _centerLon,
-                    ["zoom"] = _zoom,
-                    ["scale"] = _targetScaleDenominator,
-                    ["orientation"] = _sheetOrientation,
-                    ["sheetFormat"] = _selectedSheet?.Name ?? "",
-                    ["mainGridOpacity"] = _mainGridOpacity,
-                    ["subGridOpacity"] = _subGridOpacity,
-                    ["showAllObjectLabels"] = _showAllObjectLabels
-                };
-                var facArr = new JsonArray();
-                foreach (var fn in _selectedMapFactions) facArr.Add(fn);
-                root["selectedFactions"] = facArr;
-
-                var arr = new JsonArray();
-                foreach (var o in _mapObjects)
-                {
-                    var pts = new JsonArray();
-                    foreach (var p in o.Points) pts.Add(new JsonObject { ["lat"] = p.Lat, ["lon"] = p.Lon });
-                    arr.Add(new JsonObject { ["kind"] = o.Kind, ["symbol"] = o.SymbolCode, ["name"] = o.Name, ["color"] = o.ColorHex, ["showLabel"] = o.ShowLabel, ["points"] = pts });
-                }
-                root["objects"] = arr;
-                File.WriteAllText(dlg.FileName, root.ToJsonString(new JsonSerializerOptions { WriteIndented = true }), Encoding.UTF8);
+                if (TacticalConfigPanel.SaveDraftProjectDialog(win) && _statusText != null)
+                    _statusText.Text = $"✓ Zapisano wersję roboczą projektu: {TacticalConfigPanel.CurrentDraftProjectPath}";
             }
             catch { }
         }
@@ -2801,50 +1911,44 @@ namespace FieldTakHub.Builder.Services
         {
             try
             {
-                var dlg = new OpenFileDialog { Title = "Wczytaj projekt (.json / .kml / .gpx)", Filter = "Pliki mapy (*.json;*.kml;*.gpx)|*.json;*.kml;*.gpx" };
-                if (dlg.ShowDialog() != true) return;
-                string txt = File.ReadAllText(dlg.FileName, Encoding.UTF8);
-                if (dlg.FileName.EndsWith(".json", StringComparison.OrdinalIgnoreCase) && JsonNode.Parse(txt) is JsonObject root)
+                string initDir = !string.IsNullOrWhiteSpace(TacticalConfigPanel.LastExportDirectory) && Directory.Exists(TacticalConfigPanel.LastExportDirectory)
+                    ? TacticalConfigPanel.LastExportDirectory
+                    : Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
+
+                var dlg = new OpenFileDialog
                 {
-                    if (double.TryParse(root["centerLat"]?.ToString(), NumberStyles.Any, CultureInfo.InvariantCulture, out double la)) _centerLat = la;
-                    if (double.TryParse(root["centerLon"]?.ToString(), NumberStyles.Any, CultureInfo.InvariantCulture, out double lo)) _centerLon = lo;
-                    if (int.TryParse(root["scale"]?.ToString(), out int sc)) _targetScaleDenominator = sc;
-                    if (bool.TryParse(root["showAllObjectLabels"]?.ToString(), out bool sal)) _showAllObjectLabels = sal;
-                    if (root["selectedFactions"] is JsonArray fArr)
-                    {
-                        _selectedMapFactions.Clear();
-                        foreach (var item in fArr) if (item != null) _selectedMapFactions.Add(item.ToString());
-                        RebuildFactionCheckboxesUI();
-                    }
-                    _mapObjects.Clear();
-                    if (root["objects"] is JsonArray arr)
-                        foreach (var node in arr.OfType<JsonObject>())
-                        {
-                            bool shLbl = true;
-                            if (bool.TryParse(node["showLabel"]?.ToString(), out bool parsedLbl)) shLbl = parsedLbl;
-                            var item = new TacticalMapObjectItem
-                            {
-                                Kind = node["kind"]?.ToString() ?? "Marker",
-                                SymbolCode = node["symbol"]?.ToString() ?? "NATO_HQ",
-                                Name = node["name"]?.ToString() ?? "Punkt",
-                                ColorHex = node["color"]?.ToString() ?? "#2684FF",
-                                ShowLabel = shLbl
-                            };
-                            if (node["points"] is JsonArray pts)
-                                foreach (var p in pts.OfType<JsonObject>())
-                                    if (double.TryParse(p["lat"]?.ToString(), NumberStyles.Any, CultureInfo.InvariantCulture, out double pla) && double.TryParse(p["lon"]?.ToString(), NumberStyles.Any, CultureInfo.InvariantCulture, out double plo))
-                                        item.Points.Add((pla, plo));
-                            if (item.Points.Count > 0) _mapObjects.Add(item);
-                        }
+                    Title = "Wczytaj projekt roboczy (.fthproj / .json) lub punkty (.kml / .gpx)",
+                    Filter = "Pliki projektu i mapy (*.fthproj;*.json;*.kml;*.gpx)|*.fthproj;*.json;*.kml;*.gpx",
+                    InitialDirectory = initDir
+                };
+                if (dlg.ShowDialog(win) != true) return;
+                TacticalConfigPanel.LastExportDirectory = System.IO.Path.GetDirectoryName(dlg.FileName) ?? initDir;
+
+                string txt = File.ReadAllText(dlg.FileName, Encoding.UTF8);
+                if ((dlg.FileName.EndsWith(".json", StringComparison.OrdinalIgnoreCase) || dlg.FileName.EndsWith(".fthproj", StringComparison.OrdinalIgnoreCase)) &&
+                    JsonNode.Parse(txt) is JsonObject root)
+                {
+                    if (root["mapState"] is JsonObject)
+                        TacticalConfigPanel.ApplyFullWorkspaceStateJson(win, root);
+                    else
+                        ImportMapStateFromJson(root);
+
+                    TacticalConfigPanel.SaveSessionStateAuto(win);
+                    if (_statusText != null) _statusText.Text = $"✓ Wczytano projekt z pliku: {dlg.FileName}";
                 }
                 else
                 {
                     foreach (Match m in Regex.Matches(txt, @"<wpt[^>]*lat=""([0-9\.\-]+)""[^>]*lon=""([0-9\.\-]+)""", RegexOptions.IgnoreCase))
-                        if (double.TryParse(m.Groups[1].Value, NumberStyles.Any, CultureInfo.InvariantCulture, out double la) && double.TryParse(m.Groups[2].Value, NumberStyles.Any, CultureInfo.InvariantCulture, out double lo))
-                        { var it = new TacticalMapObjectItem { Kind = "Marker", SymbolCode = _selectedNatoSymbolCode, Name = $"GPX-{_mapObjects.Count + 1}", ColorHex = _selectedObjectColorHex, ShowLabel = _newObjectShowLabelDefault }; it.Points.Add((la, lo)); _mapObjects.Add(it); }
+                        if (double.TryParse(m.Groups[1].Value, NumberStyles.Any, CultureInfo.InvariantCulture, out double la) &&
+                            double.TryParse(m.Groups[2].Value, NumberStyles.Any, CultureInfo.InvariantCulture, out double lo))
+                        {
+                            var it = new TacticalMapObjectItem { Kind = "Marker", SymbolCode = _selectedNatoSymbolCode, Name = $"GPX-{_mapObjects.Count + 1}", ColorHex = _selectedObjectColorHex, ShowLabel = _newObjectShowLabelDefault };
+                            it.Points.Add((la, lo));
+                            _mapObjects.Add(it);
+                        }
+                    RefreshObjectsListUI(win);
+                    ApplyScaleDenominator(_targetScaleDenominator);
                 }
-                RefreshObjectsListUI(win);
-                ApplyScaleDenominator(_targetScaleDenominator);
             }
             catch { }
         }
@@ -2886,6 +1990,7 @@ namespace FieldTakHub.Builder.Services
                         WriteGpxFile(System.IO.Path.Combine(atakDir, "punkty_taktyczne.gpx"));
                     }
                 });
+                TacticalConfigPanel.SaveSessionStateAuto(win);
                 await TacticalConfigPanel.RefreshSourceSizeFromExternalAsync(win);
                 string targetNames = string.Join(", ", targetFacs.Select(f => f.Name));
                 if (_statusText != null) _statusText.Text = $"✓ Zapisano mapę .KMZ oraz punkty .GPX w folderze source dla stron: {targetNames}!";
@@ -2893,13 +1998,30 @@ namespace FieldTakHub.Builder.Services
             catch { }
         }
 
+        // Eksport samodzielnych plików .KMZ oraz .GPX z oknem wyboru miejsca i nazwy pliku (SaveFileDialog)
         private static async Task ExportStandaloneFilesAsync(Window win, string format)
         {
             try
             {
                 string sourceDir = TacticalConfigPanel.GetPrimarySourceDirectory(win);
-                string parentDir = System.IO.Path.GetDirectoryName(System.IO.Path.TrimEndingDirectorySeparator(sourceDir)) ?? AppDomain.CurrentDomain.BaseDirectory;
-                string outDir = System.IO.Path.Combine(parentDir, "release_maps"); Directory.CreateDirectory(outDir);
+                string defaultDir = !string.IsNullOrWhiteSpace(TacticalConfigPanel.LastExportDirectory) && Directory.Exists(TacticalConfigPanel.LastExportDirectory)
+                    ? TacticalConfigPanel.LastExportDirectory
+                    : (System.IO.Path.GetDirectoryName(System.IO.Path.TrimEndingDirectorySeparator(sourceDir)) ?? AppDomain.CurrentDomain.BaseDirectory);
+
+                string facSuffix = string.Join("_", GetActiveMapFactions().Select(f => TacticalConfigPanel.SanitizeFileName(f.Name)));
+                var dlg = new SaveFileDialog
+                {
+                    Title = format == "kmz" ? "Zapisz warstwę mapy .KMZ (GRG ATAK) jako..." : "Zapisz punkty i trasy .GPX (Garmin / ATAK) jako...",
+                    Filter = format == "kmz" ? "Archiwum mapy KMZ (*.kmz)|*.kmz" : "Plik nawigacyjny GPX (*.gpx)|*.gpx",
+                    InitialDirectory = defaultDir,
+                    FileName = format == "kmz" ? $"Mapa_Taktyczna_ATAK_{facSuffix}_1_{_targetScaleDenominator}.kmz" : $"Punkty_Taktyczne_Garmin_{facSuffix}.gpx"
+                };
+                if (dlg.ShowDialog(win) != true) return;
+
+                string chosenPath = dlg.FileName;
+                string chosenDir = System.IO.Path.GetDirectoryName(chosenPath) ?? defaultDir;
+                TacticalConfigPanel.LastExportDirectory = chosenDir;
+                TacticalConfigPanel.SaveSessionStateAuto(win);
 
                 bool grgTransparent = (format == "kmz" && _kmzGrgMode.StartsWith("Przezroczysta"));
                 if (grgTransparent) await RenderMapTilesAsync(true);
@@ -2908,14 +2030,14 @@ namespace FieldTakHub.Builder.Services
 
                 var (w, h) = GetExactCanvasSize();
                 var (north, west) = ScreenToLatLon(0, 0, w, h); var (south, east) = ScreenToLatLon(w, h, w, h);
-                string facSuffix = string.Join("_", GetActiveMapFactions().Select(f => TacticalConfigPanel.SanitizeFileName(f.Name)));
 
                 await Task.Run(() =>
                 {
-                    if (format == "kmz") WriteKmzGroundOverlayArchive(System.IO.Path.Combine(outDir, $"Mapa_Taktyczna_ATAK_{facSuffix}.kmz"), $"Mapa_{facSuffix}", pngBytes, north, south, east, west);
-                    else if (format == "gpx") WriteGpxFile(System.IO.Path.Combine(outDir, $"Mapa_Taktyczna_Garmin_{facSuffix}.gpx"));
+                    if (format == "kmz") WriteKmzGroundOverlayArchive(chosenPath, System.IO.Path.GetFileNameWithoutExtension(chosenPath), pngBytes, north, south, east, west);
+                    else if (format == "gpx") WriteGpxFile(chosenPath);
                 });
-                TacticalConfigPanel.TryOpenFolderInExplorer(outDir);
+                if (_statusText != null) _statusText.Text = $"✓ Zapisano plik: {chosenPath}";
+                TacticalConfigPanel.TryOpenFolderInExplorer(chosenDir);
             }
             catch { }
         }
@@ -2966,19 +2088,34 @@ namespace FieldTakHub.Builder.Services
             File.WriteAllText(gpxPath, sb.ToString(), Encoding.UTF8);
         }
 
+        // Eksport do pliku .PDF z oknem wyboru miejsca zapisu i nazwy pliku (SaveFileDialog)
         private static async Task ExportTacticalMapPdfAsync(Window win)
         {
             try
             {
                 string sourceDir = TacticalConfigPanel.GetPrimarySourceDirectory(win);
-                string parentDir = System.IO.Path.GetDirectoryName(System.IO.Path.TrimEndingDirectorySeparator(sourceDir)) ?? AppDomain.CurrentDomain.BaseDirectory;
-                string outDir = System.IO.Path.Combine(parentDir, "release_maps"); Directory.CreateDirectory(outDir);
+                string defaultDir = !string.IsNullOrWhiteSpace(TacticalConfigPanel.LastExportDirectory) && Directory.Exists(TacticalConfigPanel.LastExportDirectory)
+                    ? TacticalConfigPanel.LastExportDirectory
+                    : (System.IO.Path.GetDirectoryName(System.IO.Path.TrimEndingDirectorySeparator(sourceDir)) ?? AppDomain.CurrentDomain.BaseDirectory);
 
                 bool landscape = _sheetOrientation == "Poziomo";
                 var (wMm, hMm) = GetActiveSheetDimensionsMm();
                 string cleanFmt = TacticalConfigPanel.SanitizeFileName(_selectedSheet.Name.Split('—')[0].Trim());
                 string facSuffix = string.Join("_", GetActiveMapFactions().Select(f => TacticalConfigPanel.SanitizeFileName(f.Name)));
-                string pdfPath = System.IO.Path.Combine(outDir, $"Mapa_{cleanFmt}_{_sheetOrientation}_{facSuffix}_1_{_targetScaleDenominator}.pdf");
+
+                var dlg = new SaveFileDialog
+                {
+                    Title = "Wybierz miejsce i nazwę zapisu gotowej mapy do druku (.PDF)",
+                    Filter = "Dokument PDF do druku (*.pdf)|*.pdf",
+                    InitialDirectory = defaultDir,
+                    FileName = $"Mapa_{cleanFmt}_{_sheetOrientation}_{facSuffix}_1_{_targetScaleDenominator}.pdf"
+                };
+                if (dlg.ShowDialog(win) != true) return;
+
+                string pdfPath = dlg.FileName;
+                string outDir = System.IO.Path.GetDirectoryName(pdfPath) ?? defaultDir;
+                TacticalConfigPanel.LastExportDirectory = outDir;
+                TacticalConfigPanel.SaveSessionStateAuto(win);
 
                 int pageW = landscape ? 1754 : 1240;
                 int pageH = landscape ? 1240 : 1754;
@@ -3030,7 +2167,7 @@ namespace FieldTakHub.Builder.Services
                 byte[] jpegBytes = jpgMs.ToArray();
 
                 await Task.Run(() => WriteSingleImagePdf(pdfPath, jpegBytes, pageW, pageH, landscape));
-                if (_statusText != null) _statusText.Text = $"✓ Wygenerowano plik PDF ({cleanFmt} {_sheetOrientation} - {facSuffix}): {pdfPath}";
+                if (_statusText != null) _statusText.Text = $"✓ Zapisano plik PDF: {pdfPath}";
                 TacticalConfigPanel.TryOpenFolderInExplorer(outDir);
             }
             catch { }
