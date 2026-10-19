@@ -1505,6 +1505,7 @@ namespace FieldTakHub.Builder.Services
                     ["name"] = o.Name,
                     ["color"] = o.ColorHex,
                     ["showLabel"] = o.ShowLabel,
+                    ["sizeMultiplier"] = o.SizeMultiplier,
                     ["points"] = pts
                 });
             }
@@ -1577,7 +1578,8 @@ namespace FieldTakHub.Builder.Services
                             SymbolCode = node["symbol"]?.ToString() ?? "NATO_HQ",
                             Name = node["name"]?.ToString() ?? "Punkt",
                             ColorHex = node["color"]?.ToString() ?? "#2684FF",
-                            ShowLabel = shLbl
+                            ShowLabel = shLbl,
+                            SizeMultiplier = double.TryParse(node["sizeMultiplier"]?.ToString(), NumberStyles.Any, CultureInfo.InvariantCulture, out double sm) ? Math.Clamp(sm, 0.35, 3.0) : 1.0
                         };
                         if (node["points"] is JsonArray pts)
                             foreach (var p in pts.OfType<JsonObject>())

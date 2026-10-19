@@ -26,7 +26,7 @@ namespace FieldTakHub.Builder.Services
 {
     public static partial class TacticalMapGeneratorView
     {
-        // Parametry wielkości znaczników-kropek (w pikselach) oraz skali symboli NATO
+        // Domyślne wartości bazowe dla nowo stawianych znaczników
         private static double _dotMarkerSizePx = 14.0;
         private static double _natoMarkerScale = 1.0;
 
@@ -398,8 +398,8 @@ namespace FieldTakHub.Builder.Services
             // SEKCJA 2: SIATKA MGRS / WGS84 & KOLORY RGB
             leftStack.Children.Add(WrapCard(BuildSection2GridAndColorsUI(win)));
 
-            // SEKCJA 3: ZNACZNIKI (Z REGULACJĄ WIELKOŚCI KROPEK I SYMBOLI NATO), STREFY (✥), ETYKIETY & SHIFT 45°
-            var sec3 = CreateSectionCard("3. ZNACZNIKI (WIELKOŚĆ KROPEK I NATO), STREFY (✥) & SHIFT 45°");
+            // SEKCJA 3: ZNACZNIKI (Z INDYWIDUALNYM SUWAKIEM WIELKOŚCI DLA KAŻDEGO ZNACZNIKA), STREFY (✥) & SHIFT 45°
+            var sec3 = CreateSectionCard("3. ZNACZNIKI (SUWAK WIELKOŚCI DLA KAŻDEGO OBIEKTU), STREFY (✥) & SHIFT 45°");
             void UpdateToolButtonsVisual()
             {
                 void StyleTool(Button b, bool active)
@@ -468,22 +468,6 @@ namespace FieldTakHub.Builder.Services
             };
             sec3.Children.Add(TacticalConfigPanel.FieldBox("Kształt wektorowego znacznika taktycznego (Standard NATO APP-6):", natoCombo));
 
-            // Dwa niezależne suwaki wielkości: dla kropek (w px) oraz dla symboli wektorowych NATO (mnożnik skali)
-            var markerSizeSlidersGrid = new UniformGrid { Columns = 2, Margin = new Thickness(0, 0, 0, 4) };
-            var slDotSize = MakeSliderRow("Wielkość kropek (⚫):", 4.0, 32.0, _dotMarkerSizePx, v => $"{v:0} px", v =>
-            {
-                _dotMarkerSizePx = Math.Round(v);
-                RedrawVectorsOnly();
-            });
-            var slNatoSize = MakeSliderRow("Wielkość symboli NATO:", 0.5, 2.5, _natoMarkerScale, v => $"{v:0.1}x", v =>
-            {
-                _natoMarkerScale = Math.Round(v, 1);
-                RedrawVectorsOnly();
-            });
-            markerSizeSlidersGrid.Children.Add(slDotSize);
-            markerSizeSlidersGrid.Children.Add(slNatoSize);
-            sec3.Children.Add(markerSizeSlidersGrid);
-
             var objCfgRow = new Grid { Margin = new Thickness(0, 0, 0, 4) };
             objCfgRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
             objCfgRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(155) });
@@ -538,8 +522,8 @@ namespace FieldTakHub.Builder.Services
             lblTogglesGrid.Children.Add(chkNewObjLabel);
             sec3.Children.Add(lblTogglesGrid);
 
-            sec3.Children.Add(new TextBlock { Text = "Naniesione obiekty ([✓] = etykieta, kolor, [1.0x] = rozmiar punktu, nazwa, −):", Foreground = TacticalConfigPanel.BrushMutedText, FontSize = 9.5, Margin = new Thickness(0, 0, 0, 3) });
-            var objListBorder = new Border { Background = TacticalConfigPanel.BrushInputBg, BorderBrush = TacticalConfigPanel.BrushInputBorder, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(4), MinHeight = 52, MaxHeight = 140, Padding = new Thickness(6) };
+            sec3.Children.Add(new TextBlock { Text = "Naniesione obiekty (każdy obiekt posiada własny suwak wielkości, edycję nazwy i koloru):", Foreground = TacticalConfigPanel.BrushMutedText, FontSize = 9.5, Margin = new Thickness(0, 0, 0, 3) });
+            var objListBorder = new Border { Background = TacticalConfigPanel.BrushInputBg, BorderBrush = TacticalConfigPanel.BrushInputBorder, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(4), MinHeight = 64, MaxHeight = 225, Padding = new Thickness(6) };
             var objListScroll = new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
             _objectsListStack = new StackPanel();
             objListScroll.Content = _objectsListStack; objListBorder.Child = objListScroll;
@@ -890,7 +874,7 @@ namespace FieldTakHub.Builder.Services
             mainGrid.Children.Add(bodyGrid);
 
             var bottomBar = new Border { Background = TacticalConfigPanel.BrushInputBg, BorderBrush = TacticalConfigPanel.BrushCardBorder, BorderThickness = new Thickness(0, 1, 0, 0), Padding = new Thickness(16, 0, 16, 0) };
-            _statusText = new TextBlock { Text = "Gotowy. Regulacja wielkości kropek (px) i symboli NATO (x), Geoportal WMS EPSG:2180, RGB dla Keypad/Ćwiartek oraz pamięć sesji.", Foreground = TacticalConfigPanel.BrushAccent, FontSize = 11, VerticalAlignment = VerticalAlignment.Center };
+            _statusText = new TextBlock { Text = "Gotowy. Każdy znacznik na mapie ma własny płynny suwak wielkości, Geoportal WMS EPSG:2180, RGB dla Keypad/Ćwiartek oraz pamięć sesji.", Foreground = TacticalConfigPanel.BrushAccent, FontSize = 11, VerticalAlignment = VerticalAlignment.Center };
             bottomBar.Child = _statusText; Grid.SetRow(bottomBar, 1); mainGrid.Children.Add(bottomBar);
 
             UpdateOfflineTileEstimateUI();
@@ -1303,7 +1287,20 @@ namespace FieldTakHub.Builder.Services
             RefreshObjectsListUI(win);
         }
 
-        // Lista naniesionych obiektów z przyciskiem indywidualnego rozmiaru [1.0x] dla znaczników i kropek
+        // =========================================================================
+        // LISTA NANIESIONYCH OBIEKTÓW: KAŻDY ZNACZNIK POSIADA WŁASNY PŁYNNY SUWAK WIELKOŚCI
+        // =========================================================================
+        private static string FormatObjectSizeLabel(TacticalMapObjectItem obj)
+        {
+            double m = obj.SizeMultiplier > 0.1 ? obj.SizeMultiplier : 1.0;
+            if (obj.Kind == "Dot")
+            {
+                double px = Math.Round(_dotMarkerSizePx * m);
+                return $"{px:0} px ({m:0.1}x)";
+            }
+            return $"{m:0.2}x";
+        }
+
         private static void RefreshObjectsListUI(Window win)
         {
             if (_objectsListStack == null) return;
@@ -1314,20 +1311,30 @@ namespace FieldTakHub.Builder.Services
                 return;
             }
 
-            double[] sizePresets = { 0.6, 0.8, 1.0, 1.3, 1.6, 2.0 };
-
             foreach (var obj in _mapObjects.ToList())
             {
                 var captured = obj;
                 if (captured.SizeMultiplier <= 0.1) captured.SizeMultiplier = 1.0;
 
-                var row = new Grid { Margin = new Thickness(0, 0, 0, 4) };
-                row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(20) }); // Checkbox etykiety
-                row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(22) }); // Kolor RGB
-                row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(36) }); // Przycisk rozmiaru [1.0x]
-                row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(52) }); // Typ
-                row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) }); // Nazwa
-                row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(28) }); // Usuń (−)
+                var itemCard = new Border
+                {
+                    Background = TacticalConfigPanel.BrushItemBg,
+                    BorderBrush = TacticalConfigPanel.BrushTileBorder,
+                    BorderThickness = new Thickness(1),
+                    CornerRadius = new CornerRadius(5),
+                    Padding = new Thickness(6, 4, 6, 4),
+                    Margin = new Thickness(0, 0, 0, 5)
+                };
+
+                var itemStack = new StackPanel();
+
+                // Wiersz 1: Checkbox etykiety + Kolor RGB + Typ + Edycja nazwy + Czerwony minus (−)
+                var topRow = new Grid { Margin = new Thickness(0, 0, 0, 3) };
+                topRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(22) }); // Checkbox etykiety
+                topRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(22) }); // Kolor RGB
+                topRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(56) }); // Typ
+                topRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) }); // Nazwa
+                topRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(28) }); // Usuń (−)
 
                 var chkShowLbl = new CheckBox
                 {
@@ -1340,7 +1347,7 @@ namespace FieldTakHub.Builder.Services
                 chkShowLbl.Checked += (s, e) => { captured.ShowLabel = true; TacticalConfigPanel.MarkDirty(); RedrawVectorsOnly(); };
                 chkShowLbl.Unchecked += (s, e) => { captured.ShowLabel = false; TacticalConfigPanel.MarkDirty(); RedrawVectorsOnly(); };
                 Grid.SetColumn(chkShowLbl, 0);
-                row.Children.Add(chkShowLbl);
+                topRow.Children.Add(chkShowLbl);
 
                 var btnCol = new Button
                 {
@@ -1364,38 +1371,12 @@ namespace FieldTakHub.Builder.Services
                     }
                 };
                 Grid.SetColumn(btnCol, 1);
-                row.Children.Add(btnCol);
+                topRow.Children.Add(btnCol);
 
-                var btnSize = new Button
-                {
-                    Content = $"{captured.SizeMultiplier:0.1}x",
-                    Height = 20,
-                    Margin = new Thickness(2, 0, 2, 0),
-                    Background = TacticalConfigPanel.BrushItemBg,
-                    Foreground = TacticalConfigPanel.BrushAccent,
-                    BorderBrush = TacticalConfigPanel.BrushTileBorder,
-                    BorderThickness = new Thickness(1),
-                    FontSize = 8.5,
-                    FontWeight = FontWeights.Bold,
-                    Cursor = Cursors.Hand,
-                    ToolTip = "Kliknij, aby zmienić indywidualną wielkość tego znacznika / kropki (0.6x – 2.0x)"
-                };
-                btnSize.Click += (s, e) =>
-                {
-                    int curIdx = Array.FindIndex(sizePresets, p => Math.Abs(p - captured.SizeMultiplier) < 0.05);
-                    double nextMult = sizePresets[(curIdx + 1) % sizePresets.Length];
-                    captured.SizeMultiplier = nextMult;
-                    btnSize.Content = $"{nextMult:0.1}x";
-                    TacticalConfigPanel.MarkDirty();
-                    RedrawVectorsOnly();
-                };
-                Grid.SetColumn(btnSize, 2);
-                row.Children.Add(btnSize);
-
-                string badgeTxt = captured.Kind == "AO" ? "[AO]" : (captured.Kind == "Sector" ? "[SEK]" : $"[{captured.SymbolCode.Replace("NATO_", "")}]");
-                var kindLbl = new TextBlock { Text = badgeTxt, Foreground = TacticalConfigPanel.BrushAccent, FontSize = 8.5, FontWeight = FontWeights.Bold, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(2, 0, 3, 0) };
-                Grid.SetColumn(kindLbl, 3);
-                row.Children.Add(kindLbl);
+                string badgeTxt = captured.Kind == "AO" ? "[AO]" : (captured.Kind == "Sector" ? "[SEKTOR]" : $"[{captured.SymbolCode.Replace("NATO_", "")}]");
+                var kindLbl = new TextBlock { Text = badgeTxt, Foreground = TacticalConfigPanel.BrushAccent, FontSize = 8.5, FontWeight = FontWeights.Bold, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(2, 0, 4, 0) };
+                Grid.SetColumn(kindLbl, 2);
+                topRow.Children.Add(kindLbl);
 
                 var editNameBox = new TextBox
                 {
@@ -1404,7 +1385,7 @@ namespace FieldTakHub.Builder.Services
                     FontSize = 10,
                     Padding = new Thickness(4, 0, 4, 0),
                     VerticalContentAlignment = VerticalAlignment.Center,
-                    Background = TacticalConfigPanel.BrushItemBg,
+                    Background = TacticalConfigPanel.BrushInputBg,
                     Foreground = Brushes.White,
                     BorderBrush = TacticalConfigPanel.BrushInputBorder,
                     BorderThickness = new Thickness(1)
@@ -1415,8 +1396,8 @@ namespace FieldTakHub.Builder.Services
                     TacticalConfigPanel.MarkDirty();
                     RedrawVectorsOnly();
                 };
-                Grid.SetColumn(editNameBox, 4);
-                row.Children.Add(editNameBox);
+                Grid.SetColumn(editNameBox, 3);
+                topRow.Children.Add(editNameBox);
 
                 var btnMinusDel = CreateRedMinusDeleteButton($"Usuń obiekt: {captured.Name}", () =>
                 {
@@ -1427,10 +1408,74 @@ namespace FieldTakHub.Builder.Services
                     RedrawVectorsOnly();
                     UpdateOfflineTileEstimateUI();
                 });
-                Grid.SetColumn(btnMinusDel, 5);
-                row.Children.Add(btnMinusDel);
+                Grid.SetColumn(btnMinusDel, 4);
+                topRow.Children.Add(btnMinusDel);
+                itemStack.Children.Add(topRow);
 
-                _objectsListStack.Children.Add(row);
+                // Wiersz 2: Indywidualny płynny suwak wielkości dla tego konkretnego znacznika
+                var sliderRow = new Grid();
+                sliderRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(62) });
+                sliderRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+                sliderRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(68) });
+
+                var sizeTitle = new TextBlock
+                {
+                    Text = "Wielkość:",
+                    Foreground = TacticalConfigPanel.BrushMutedText,
+                    FontSize = 9,
+                    VerticalAlignment = VerticalAlignment.Center
+                };
+                Grid.SetColumn(sizeTitle, 0);
+                sliderRow.Children.Add(sizeTitle);
+
+                var sizeValTxt = new TextBlock
+                {
+                    Text = FormatObjectSizeLabel(captured),
+                    Foreground = TacticalConfigPanel.BrushAccent,
+                    FontSize = 9,
+                    FontWeight = FontWeights.Bold,
+                    HorizontalAlignment = HorizontalAlignment.Right,
+                    VerticalAlignment = VerticalAlignment.Center
+                };
+                Grid.SetColumn(sizeValTxt, 2);
+                sliderRow.Children.Add(sizeValTxt);
+
+                const double minMult = 0.35, maxMult = 2.60;
+                var sizeSlider = new Slider
+                {
+                    Minimum = minMult,
+                    Maximum = maxMult,
+                    Value = Math.Clamp(captured.SizeMultiplier, minMult, maxMult),
+                    IsMoveToPointEnabled = true,
+                    SmallChange = 0.05,
+                    LargeChange = 0.2,
+                    Cursor = Cursors.Hand,
+                    VerticalAlignment = VerticalAlignment.Center,
+                    ToolTip = "Przesuń suwak lub kliknij LPM, aby płynnie zmienić wielkość tego znacznika na mapie"
+                };
+
+                void SetItemSliderFromMouse(MouseEventArgs e)
+                {
+                    if (sizeSlider.ActualWidth <= 8) return;
+                    double ratio = Math.Clamp(e.GetPosition(sizeSlider).X / sizeSlider.ActualWidth, 0.0, 1.0);
+                    sizeSlider.Value = minMult + ratio * (maxMult - minMult);
+                }
+
+                sizeSlider.PreviewMouseLeftButtonDown += (s, e) => SetItemSliderFromMouse(e);
+                sizeSlider.PreviewMouseMove += (s, e) => { if (e.LeftButton == MouseButtonState.Pressed) SetItemSliderFromMouse(e); };
+                sizeSlider.ValueChanged += (s, e) =>
+                {
+                    captured.SizeMultiplier = Math.Round(e.NewValue, 2);
+                    sizeValTxt.Text = FormatObjectSizeLabel(captured);
+                    TacticalConfigPanel.MarkDirty();
+                    RedrawVectorsOnly();
+                };
+                Grid.SetColumn(sizeSlider, 1);
+                sliderRow.Children.Add(sizeSlider);
+
+                itemStack.Children.Add(sliderRow);
+                itemCard.Child = itemStack;
+                _objectsListStack.Children.Add(itemCard);
             }
         }
 
@@ -1588,14 +1633,13 @@ namespace FieldTakHub.Builder.Services
             };
         }
 
-        // Rysuje symbole wektorowe NATO ze skalowaniem wokół punktu kotwiczenia (dolna część masztu dla flagi HQ, środek 1:1 dla pozostałych)
         private static void DrawNatoVectorSymbolOnCanvas(Point pt, TacticalMapObjectItem obj)
         {
             string symbolCode = obj.SymbolCode ?? "NATO_HQ";
             string name = obj.Name;
             string colorHex = obj.ColorHex;
             double objMult = obj.SizeMultiplier > 0.1 ? obj.SizeMultiplier : 1.0;
-            double scale = Math.Clamp(_natoMarkerScale * objMult, 0.35, 3.5);
+            double scale = Math.Clamp(_natoMarkerScale * objMult, 0.30, 3.5);
 
             Color c = Color.FromRgb(38, 132, 255);
             try { c = (Color)ColorConverter.ConvertFromString(colorHex); } catch { }
@@ -1617,7 +1661,6 @@ namespace FieldTakHub.Builder.Services
                     Width = flagBoxW,
                     Height = flagBoxH,
                     Background = Brushes.Transparent,
-                    // Skalowanie wokół dolnej stopki masztu (poleX, poleBottomY) gwarantuje, że stopka zawsze wskazuje dokładny punkt kliknięcia!
                     RenderTransform = new ScaleTransform(scale, scale, poleX, poleBottomY)
                 };
                 AttachCenteredMarkerDragHandler(flagCanvas, obj, pt, "dolna część masztu flagi");
@@ -1660,7 +1703,6 @@ namespace FieldTakHub.Builder.Services
                 Width = boxW,
                 Height = boxH,
                 Background = Brushes.Transparent,
-                // Skalowanie symetryczne wokół środka ikony (cx, cy)
                 RenderTransform = new ScaleTransform(scale, scale, cx, cy)
             };
             AttachCenteredMarkerDragHandler(iconCanvas, obj, pt);
@@ -1756,7 +1798,6 @@ namespace FieldTakHub.Builder.Services
                 AddHaloLabel(name, pt.X + 16 * scale, pt.Y - 9, strokeBrush, 10 * _fontScaleMultiplier);
         }
 
-        // Rysuje znaczniki-kropki (Dot) z uwzględnieniem suwaka wielkości w pikselach oraz indywidualnego mnożnika obiektu
         private static void DrawTacticalMarkersOverlay(double w, double h)
         {
             foreach (var obj in _mapObjects.Where(o => o.Points.Count > 0 && (o.Kind == "Marker" || o.Kind == "Dot")))
