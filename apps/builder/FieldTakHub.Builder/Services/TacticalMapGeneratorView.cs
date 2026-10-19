@@ -198,6 +198,7 @@ namespace FieldTakHub.Builder.Services
                     var contentHostGrid = new Grid();
                     contentHostGrid.Children.Add(_originalWindowContent);
                     contentHostGrid.Children.Add(_fullScreenOverlay);
+                    MeshtasticUsbProvisionerView.AttachUsbTab(win, tabsStack, contentHostGrid, _tabBuilderBtn, _tabMapBtn, _originalWindowContent, _fullScreenOverlay);
 
                     Grid.SetRow(contentHostGrid, 1); masterGrid.Children.Add(contentHostGrid);
                     win.Content = masterGrid;
@@ -209,8 +210,8 @@ namespace FieldTakHub.Builder.Services
         public static void ShowFullScreenMapTab(Window win)
         {
             if (_fullScreenOverlay == null && win != null) AttachFullScreenTab(win);
-            if (_fullScreenOverlay != null)
-            {
+            if (_fullScreenOverlay != null) {
+                MeshtasticUsbProvisionerView.HideUsbTabOnly();
                 if (_originalWindowContent != null) _originalWindowContent.Visibility = Visibility.Collapsed;
                 _fullScreenOverlay.Visibility = Visibility.Visible;
                 if (_tabMapBtn != null) { _tabMapBtn.Background = TacticalConfigPanel.BrushButtonAccent; _tabMapBtn.Foreground = TacticalConfigPanel.BrushDarkFg; }
@@ -227,8 +228,8 @@ namespace FieldTakHub.Builder.Services
             }
         }
 
-        public static void HideFullScreenMapTab()
-        {
+        public static void HideFullScreenMapTab() {
+            MeshtasticUsbProvisionerView.HideUsbTabOnly();
             if (_fullScreenOverlay != null)
             {
                 _fullScreenOverlay.Visibility = Visibility.Collapsed;

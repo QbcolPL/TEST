@@ -197,6 +197,7 @@ namespace FieldTakHub.Builder.Services
             };
         }
 
+        internal static List<FactionProfileModel> GetInternalFactionsList() { EnsureDefaultFactions(); return _factions; }
         public static List<(string Name, string Channel, string ColorHex, string Psk)> GetConfiguredFactions()
         {
             EnsureDefaultFactions();
@@ -1217,11 +1218,12 @@ namespace FieldTakHub.Builder.Services
                 b.Click += (_, __) => act();
                 return b;
             }
-            var meshBtnBar = new UniformGrid { Columns = 4 };
+            var meshBtnBar = new UniformGrid { Columns = 5 };
             meshBtnBar.Children.Add(SmallActBtn("Save", () => { WriteConfigsToDirectory(GetPrimarySourceDirectory(win), fac); SaveSessionStateAuto(win); meshStatusTxt.Text = $"✓ Zapisano konfigurację {fac.Name}."; meshStatusTxt.Foreground = BrushAccent; }));
             meshBtnBar.Children.Add(SmallActBtn("Open", () => TryOpenFolderInExplorer(GetPrimarySourceDirectory(win))));
             meshBtnBar.Children.Add(SmallActBtn("Copy", () => { try { Clipboard.SetText(!string.IsNullOrWhiteSpace(fac.ChannelUrl) ? fac.ChannelUrl : fac.Psk); meshStatusTxt.Text = "✓ Skopiowano do schowka."; } catch { } }));
             meshBtnBar.Children.Add(SmallActBtn("Clear", () => { chUrlBox.Text = ""; fac.ChannelUrl = ""; }));
+            meshBtnBar.Children.Add(SmallActBtn(\x22🔌 USB\x22, () => MeshtasticUsbProvisionerView.ShowUsbProvisionerForFaction(win, fac.Name)));
             meshStack.Children.Add(meshBtnBar);
             meshCard.Child = meshStack;
             mainStack.Children.Add(meshCard);
