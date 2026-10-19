@@ -1223,7 +1223,7 @@ namespace FieldTakHub.Builder.Services
             meshBtnBar.Children.Add(SmallActBtn("Open", () => TryOpenFolderInExplorer(GetPrimarySourceDirectory(win))));
             meshBtnBar.Children.Add(SmallActBtn("Copy", () => { try { Clipboard.SetText(!string.IsNullOrWhiteSpace(fac.ChannelUrl) ? fac.ChannelUrl : fac.Psk); meshStatusTxt.Text = "✓ Skopiowano do schowka."; } catch { } }));
             meshBtnBar.Children.Add(SmallActBtn("Clear", () => { chUrlBox.Text = ""; fac.ChannelUrl = ""; }));
-            meshBtnBar.Children.Add(SmallActBtn(\x22🔌 USB\x22, () => MeshtasticUsbProvisionerView.ShowUsbProvisionerForFaction(win, fac.Name)));
+                        meshBtnBar.Children.Add(SmallActBtn("USB", () => MeshtasticUsbProvisionerView.ShowUsbProvisionerForFaction(win, fac.Name)));
             meshStack.Children.Add(meshBtnBar);
             meshCard.Child = meshStack;
             mainStack.Children.Add(meshCard);

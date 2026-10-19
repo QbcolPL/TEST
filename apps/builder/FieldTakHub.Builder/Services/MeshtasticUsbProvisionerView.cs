@@ -42,7 +42,6 @@ namespace FieldTakHub.Builder.Services
         public string Status { get; set; } = "";
     }
 
-    // Niskopoziomowy sterownik portu szeregowego Win32 (kernel32.dll) + koder ramek Protobuf Meshtastic (0x94 0xC3)
     internal static class NativeMeshtasticSerialEngine
     {
         private const uint GENERIC_READ = 0x80000000;
@@ -106,7 +105,6 @@ namespace FieldTakHub.Builder.Services
         [DllImport("kernel32.dll", SetLastError = true)]
         private static extern bool ReadFile(IntPtr hFile, byte[] lpBuffer, uint nNumberOfBytesToRead, out uint lpNumberOfBytesRead, IntPtr lpOverlapped);
 
-        // Skanuje aktywne porty COM bezpośrednio z rejestru Windows (HARDWARE\DEVICEMAP\SERIALCOMM)
         public static List<SerialPortInfoItem> EnumerateActiveComPorts()
         {
             var list = new List<SerialPortInfoItem>();
@@ -139,7 +137,6 @@ namespace FieldTakHub.Builder.Services
                 .ToList();
         }
 
-        // Pomocnicze funkcje kodowania Protobuf (Wire Format)
         private static void WriteVarint(MemoryStream ms, ulong value)
         {
             while (value >= 0x80)
@@ -179,7 +176,6 @@ namespace FieldTakHub.Builder.Services
             WriteBytesField(ms, fieldNumber, Encoding.UTF8.GetBytes(text));
         }
 
-        // Opakowuje pakiet ToRadio w ramkę strumieniową Meshtastic Serial (0x94, 0xC3, MSB, LSB)
         private static byte[] FrameToRadioPacket(byte[] toRadioPayload)
         {
             int len = toRadioPayload.Length;
@@ -195,53 +191,52 @@ namespace FieldTakHub.Builder.Services
         private static byte[] BuildWantConfigToRadioFrame(uint configNonce)
         {
             using var ms = new MemoryStream();
-            WriteVarintField(ms, 3, configNonce); // ToRadio.want_config_id = field 3
+            WriteVarintField(ms, 3, configNonce);
             return FrameToRadioPacket(ms.ToArray());
         }
 
-        // Buduje ramkę ToRadio -> MeshPacket (ADMIN_APP = 6) -> AdminMessage
         private static byte[] BuildAdminToRadioFrame(uint targetNodeNum, byte[] adminMessageBytes)
         {
             using var dataMs = new MemoryStream();
-            WriteVarintField(dataMs, 1, 6); // Data.portnum = ADMIN_APP (6)
-            WriteBytesField(dataMs, 2, adminMessageBytes); // Data.payload
-            WriteVarintField(dataMs, 3, 1); // Data.want_response = true
+            WriteVarintField(dataMs, 1, 6);
+            WriteBytesField(dataMs, 2, adminMessageBytes);
+            WriteVarintField(dataMs, 3, 1);
 
             using var pktMs = new MemoryStream();
             if (targetNodeNum != 0)
-                WriteFixed32Field(pktMs, 2, targetNodeNum); // MeshPacket.to = field 2 (fixed32)
-            WriteBytesField(pktMs, 4, dataMs.ToArray()); // MeshPacket.decoded = field 4
+                WriteFixed32Field(pktMs, 2, targetNodeNum);
+            WriteBytesField(pktMs, 4, dataMs.ToArray());
             uint randId = (uint)RandomNumberGenerator.GetInt32(100000, int.MaxValue);
-            WriteFixed32Field(pktMs, 6, randId); // MeshPacket.id = field 6 (fixed32)
-            WriteVarintField(pktMs, 10, 1); // MeshPacket.want_ack = true
+            WriteFixed32Field(pktMs, 6, randId);
+            WriteVarintField(pktMs, 10, 1);
 
             using var toRadioMs = new MemoryStream();
-            WriteBytesField(toRadioMs, 1, pktMs.ToArray()); // ToRadio.packet = field 1
+            WriteBytesField(toRadioMs, 1, pktMs.ToArray());
             return FrameToRadioPacket(toRadioMs.ToArray());
         }
 
         private static byte[] BuildBeginEditSettingsAdmin()
         {
             using var ms = new MemoryStream();
-            WriteVarintField(ms, 64, 1); // AdminMessage.begin_edit_settings = field 64
+            WriteVarintField(ms, 64, 1);
             return ms.ToArray();
         }
 
         private static byte[] BuildCommitEditSettingsAdmin()
         {
             using var ms = new MemoryStream();
-            WriteVarintField(ms, 65, 1); // AdminMessage.commit_edit_settings = field 65
+            WriteVarintField(ms, 65, 1);
             return ms.ToArray();
         }
 
         private static byte[] BuildSetOwnerAdmin(string longName, string shortName)
         {
             using var userMs = new MemoryStream();
-            WriteStringField(userMs, 2, longName);  // User.long_name = field 2
-            WriteStringField(userMs, 3, shortName); // User.short_name = field 3
+            WriteStringField(userMs, 2, longName);
+            WriteStringField(userMs, 3, shortName);
 
             using var adminMs = new MemoryStream();
-            WriteBytesField(adminMs, 32, userMs.ToArray()); // AdminMessage.set_owner = field 32
+            WriteBytesField(adminMs, 32, userMs.ToArray());
             return adminMs.ToArray();
         }
 
@@ -256,16 +251,16 @@ namespace FieldTakHub.Builder.Services
             }
 
             using var settingsMs = new MemoryStream();
-            WriteBytesField(settingsMs, 2, pskBytes);      // ChannelSettings.psk = field 2
-            WriteStringField(settingsMs, 3, channelName);  // ChannelSettings.name = field 3
+            WriteBytesField(settingsMs, 2, pskBytes);
+            WriteStringField(settingsMs, 3, channelName);
 
             using var chMs = new MemoryStream();
-            WriteVarintField(chMs, 1, 0); // Channel.index = 0
-            WriteBytesField(chMs, 2, settingsMs.ToArray()); // Channel.settings = field 2
-            WriteVarintField(chMs, 3, 1); // Channel.role = PRIMARY (1)
+            WriteVarintField(chMs, 1, 0);
+            WriteBytesField(chMs, 2, settingsMs.ToArray());
+            WriteVarintField(chMs, 3, 1);
 
             using var adminMs = new MemoryStream();
-            WriteBytesField(adminMs, 33, chMs.ToArray()); // AdminMessage.set_channel = field 33
+            WriteBytesField(adminMs, 33, chMs.ToArray());
             return adminMs.ToArray();
         }
 
@@ -277,7 +272,7 @@ namespace FieldTakHub.Builder.Services
                 "EU_433" => 2,
                 "EU_868" => 3,
                 "ANZ_915" => 7,
-                _ => 3 // Domyślnie EU_868
+                _ => 3
             };
 
             ulong presetEnum = presetStr switch
@@ -289,21 +284,21 @@ namespace FieldTakHub.Builder.Services
                 "SHORT_SLOW" => 5,
                 "SHORT_FAST" => 6,
                 "SHORT_TURBO" => 8,
-                _ => 6 // Domyślnie SHORT_FAST
+                _ => 6
             };
 
             using var loraMs = new MemoryStream();
-            WriteVarintField(loraMs, 1, 1); // use_preset = true
-            WriteVarintField(loraMs, 2, presetEnum); // modem_preset
-            WriteVarintField(loraMs, 7, regionEnum); // region
-            WriteVarintField(loraMs, 8, (ulong)Math.Clamp(hopLimit, 1, 7)); // hop_limit
-            WriteVarintField(loraMs, 9, 1); // tx_enabled = true
+            WriteVarintField(loraMs, 1, 1);
+            WriteVarintField(loraMs, 2, presetEnum);
+            WriteVarintField(loraMs, 7, regionEnum);
+            WriteVarintField(loraMs, 8, (ulong)Math.Clamp(hopLimit, 1, 7));
+            WriteVarintField(loraMs, 9, 1);
 
             using var cfgMs = new MemoryStream();
-            WriteBytesField(cfgMs, 6, loraMs.ToArray()); // Config.lora = field 6
+            WriteBytesField(cfgMs, 6, loraMs.ToArray());
 
             using var adminMs = new MemoryStream();
-            WriteBytesField(adminMs, 34, cfgMs.ToArray()); // AdminMessage.set_config = field 34
+            WriteBytesField(adminMs, 34, cfgMs.ToArray());
             return adminMs.ToArray();
         }
 
@@ -314,21 +309,20 @@ namespace FieldTakHub.Builder.Services
                 "Router" => 2,
                 "TAK" => 7,
                 "TAK_Tracker" => 10,
-                _ => 0 // CLIENT (0)
+                _ => 0
             };
 
             using var devMs = new MemoryStream();
-            WriteVarintField(devMs, 1, roleEnum); // DeviceConfig.role = field 1
+            WriteVarintField(devMs, 1, roleEnum);
 
             using var cfgMs = new MemoryStream();
-            WriteBytesField(cfgMs, 1, devMs.ToArray()); // Config.device = field 1
+            WriteBytesField(cfgMs, 1, devMs.ToArray());
 
             using var adminMs = new MemoryStream();
-            WriteBytesField(adminMs, 34, cfgMs.ToArray()); // AdminMessage.set_config = field 34
+            WriteBytesField(adminMs, 34, cfgMs.ToArray());
             return adminMs.ToArray();
         }
 
-        // Próbuje wyodrębnić my_node_num z odebranych ramek FromRadio (0x94 0xC3)
         private static uint TryParseMyNodeNumFromBuffer(byte[] buffer, int count)
         {
             for (int i = 0; i < count - 6; i++)
@@ -345,10 +339,10 @@ namespace FieldTakHub.Builder.Services
                             int tag = buffer[pos++];
                             int fieldNum = tag >> 3;
                             int wireType = tag & 0x07;
-                            if (fieldNum == 3 && wireType == 2 && pos < end) // FromRadio.my_info (field 3)
+                            if (fieldNum == 3 && wireType == 2 && pos < end)
                             {
                                 int subLen = buffer[pos++];
-                                if (pos < end && buffer[pos] == 0x08) // MyNodeInfo.my_node_num (field 1, varint)
+                                if (pos < end && buffer[pos] == 0x08)
                                 {
                                     pos++;
                                     ulong val = 0;
@@ -397,9 +391,9 @@ namespace FieldTakHub.Builder.Services
                     {
                         dcb.BaudRate = 115200;
                         dcb.ByteSize = 8;
-                        dcb.Parity = 0;   // NOPARITY
-                        dcb.StopBits = 0; // ONESTOPBIT
-                        dcb.Flags = 0x00000001; // fBinary = 1
+                        dcb.Parity = 0;
+                        dcb.StopBits = 0;
+                        dcb.Flags = 0x00000001;
                         SetCommState(hPort, ref dcb);
                     }
 
@@ -413,16 +407,14 @@ namespace FieldTakHub.Builder.Services
                     };
                     SetCommTimeouts(hPort, ref timeouts);
 
-                    // Ustawienie linii DTR (1) bez resetowania RTS, aby obudzić mostek USB-CDC/CP210x
-                    EscapeCommFunction(hPort, 5); // SETDTR
-                    PurgeComm(hPort, 0x000C);     // PURGE_RXCLEAR | PURGE_TXCLEAR
+                    EscapeCommFunction(hPort, 5);
+                    PurgeComm(hPort, 0x000C);
 
                     void SendRaw(byte[] bytes)
                     {
                         WriteFile(hPort, bytes, (uint)bytes.Length, out uint _, IntPtr.Zero);
                     }
 
-                    // Krok 1: Sekwencja budząca strumień binarny Meshtastic (32 bajty 0xC3) + żądanie konfiguracji (want_config_id)
                     onProgressLog?.Invoke($"[{DateTime.Now:HH:mm:ss}] Budzenie interfejsu Protobuf płytki Meshtastic (0x94 0xC3)...");
                     byte[] wakeBytes = Enumerable.Repeat((byte)0xC3, 32).ToArray();
                     SendRaw(wakeBytes);
@@ -437,32 +429,26 @@ namespace FieldTakHub.Builder.Services
                     string nodeHex = nodeNum != 0 ? $"!{nodeNum:x8}" : $"!usb_{cleanPort.ToLowerInvariant()}";
                     onProgressLog?.Invoke($"[{DateTime.Now:HH:mm:ss}] Połączono z płytką ({nodeHex}, odebrano {bytesRead} B telemetrii).");
 
-                    // Krok 2: Rozpoczęcie transakcji edycji ustawień (begin_edit_settings)
                     onProgressLog?.Invoke($"[{DateTime.Now:HH:mm:ss}] Otwieranie transakcji AdminMessage (begin_edit_settings)...");
                     SendRaw(BuildAdminToRadioFrame(nodeNum, BuildBeginEditSettingsAdmin()));
                     await Task.Delay(160);
 
-                    // Krok 3: Zapis Callsignu i ShortName (set_owner)
                     onProgressLog?.Invoke($"[{DateTime.Now:HH:mm:ss}] Zapisywanie Callsignu: LongName='{longName}', ShortName='{shortName}'...");
                     SendRaw(BuildAdminToRadioFrame(nodeNum, BuildSetOwnerAdmin(longName, shortName)));
                     await Task.Delay(200);
 
-                    // Krok 4: Zapis Kanału Primary oraz klucza AES-256 PSK (set_channel)
                     onProgressLog?.Invoke($"[{DateTime.Now:HH:mm:ss}] Wgrywanie kanału '{fac.ChannelName}' oraz klucza AES-256 PSK...");
                     SendRaw(BuildAdminToRadioFrame(nodeNum, BuildSetPrimaryChannelAdmin(fac.ChannelName, fac.Psk)));
                     await Task.Delay(220);
 
-                    // Krok 5: Zapis parametrów radia LoRa (Region, ModemPreset, HopLimit)
                     onProgressLog?.Invoke($"[{DateTime.Now:HH:mm:ss}] Konfiguracja radia LoRa: Region={fac.LoraRegion}, Preset={fac.LoraModemPreset}, Hop={fac.HopLimit}...");
                     SendRaw(BuildAdminToRadioFrame(nodeNum, BuildSetLoraConfigAdmin(fac.LoraRegion, fac.LoraModemPreset, fac.HopLimit)));
                     await Task.Delay(220);
 
-                    // Krok 6: Zapis roli urządzenia (TAK / TAK_Tracker / Client)
                     onProgressLog?.Invoke($"[{DateTime.Now:HH:mm:ss}] Ustawianie roli urządzenia: {fac.DeviceRole}...");
                     SendRaw(BuildAdminToRadioFrame(nodeNum, BuildSetDeviceRoleConfigAdmin(fac.DeviceRole)));
                     await Task.Delay(180);
 
-                    // Krok 7: Zatwierdzenie i zapis w pamięci NVS Flash płytki (commit_edit_settings)
                     onProgressLog?.Invoke($"[{DateTime.Now:HH:mm:ss}] Zapisywanie zmian w pamięci Flash NVS (commit_edit_settings)...");
                     SendRaw(BuildAdminToRadioFrame(nodeNum, BuildCommitEditSettingsAdmin()));
                     await Task.Delay(280);
@@ -652,7 +638,6 @@ namespace FieldTakHub.Builder.Services
             var currentPorts = NativeMeshtasticSerialEngine.EnumerateActiveComPorts();
             var currentNames = new HashSet<string>(currentPorts.Select(p => p.PortName), StringComparer.OrdinalIgnoreCase);
 
-            // Usuń odpięte porty z listy znanych, aby ponowne podpięcie kolejnej płytki na ten sam numer COM wywołało Auto-Flash!
             _knownConnectedPorts.RemoveWhere(p => !currentNames.Contains(p));
 
             var newlyPlugged = currentPorts.FirstOrDefault(p => !_knownConnectedPorts.Contains(p.PortName));
@@ -748,9 +733,6 @@ namespace FieldTakHub.Builder.Services
             mainGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(16) });
             mainGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
 
-            // =====================================================================
-            // LEWA KOLUMNA: WYBÓR STRONY, SZABLON NUMERACJI SERYJNEJ I STEROWANIE PORTEM COM
-            // =====================================================================
             var leftScroll = new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
             var leftStack = new StackPanel();
 
@@ -783,12 +765,11 @@ namespace FieldTakHub.Builder.Services
             {
                 if (_selectedFaction != null) { _selectedFaction.DeviceRole = v; UpdateFactionPreviewBanner(_selectedFaction); }
             });
-            s1Stack.Children.Add(TacticalConfigPanel.FieldBox("Docelowa rola wgrywanych płytek Meshtastic (TAK = integracja z ATAK по BLE/USB, TAK_Tracker = samodzielny lokalizator GPS):", _roleOverrideComboBox));
+            s1Stack.Children.Add(TacticalConfigPanel.FieldBox("Docelowa rola wgrywanych płytek Meshtastic (TAK = integracja z ATAK po BLE/USB, TAK_Tracker = samodzielny lokalizator GPS):", _roleOverrideComboBox));
 
             sec1.Child = s1Stack;
             leftStack.Children.Add(sec1);
 
-            // SEKCJA 2: AUTOMATYCZNA NUMERACJA SERYJNA (CALLSIGN + SHORTNAME)
             var sec2 = new Border { Background = TacticalConfigPanel.BrushItemBg, BorderBrush = TacticalConfigPanel.BrushTileBorder, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(8), Padding = new Thickness(12), Margin = new Thickness(0, 0, 0, 12) };
             var s2Stack = new StackPanel();
             s2Stack.Children.Add(new TextBlock { Text = "2. NUMERACJA SERYJNA PŁYTEK (CALLSIGN & 4-ZNAKOWY SHORTNAME)", Foreground = TacticalConfigPanel.BrushAccent, FontWeight = FontWeights.Bold, FontSize = 12, Margin = new Thickness(0, 0, 0, 6) });
@@ -816,7 +797,6 @@ namespace FieldTakHub.Builder.Services
             sec2.Child = s2Stack;
             leftStack.Children.Add(sec2);
 
-            // SEKCJA 3: PORT SZEREGOWY USB (COM) & TRYB TAŚMOWY (AUTO-BATCH)
             var sec3 = new Border { Background = TacticalConfigPanel.BrushItemBg, BorderBrush = TacticalConfigPanel.BrushAccent, BorderThickness = new Thickness(1.5), CornerRadius = new CornerRadius(8), Padding = new Thickness(12), Margin = new Thickness(0, 0, 0, 12) };
             var s3Stack = new StackPanel();
             s3Stack.Children.Add(new TextBlock { Text = "3. PORT USB (COM) & TRYB TAŚMOWY (AUTO-FLASH)", Foreground = TacticalConfigPanel.BrushAccent, FontWeight = FontWeights.Bold, FontSize = 12, Margin = new Thickness(0, 0, 0, 6) });
@@ -908,9 +888,6 @@ namespace FieldTakHub.Builder.Services
             Grid.SetColumn(leftScroll, 0);
             mainGrid.Children.Add(leftScroll);
 
-            // =====================================================================
-            // PRAWA KOLUMNA: BANER PODGLĄDU STRONY, DZIENNIK WYDANEGO SPRZĘTU I KONSOLA USB
-            // =====================================================================
             var rightGrid = new Grid();
             rightGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
             rightGrid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1.25, GridUnitType.Star) });
@@ -934,7 +911,6 @@ namespace FieldTakHub.Builder.Services
             Grid.SetRow(_previewBannerBorder, 0);
             rightGrid.Children.Add(_previewBannerBorder);
 
-            // Tabela zaprogramowanych płytek (Dziennik wydania sprzętu)
             var historyCard = new Border { Background = TacticalConfigPanel.BrushItemBg, BorderBrush = TacticalConfigPanel.BrushTileBorder, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(8), Padding = new Thickness(12), Margin = new Thickness(0, 0, 0, 12) };
             var histDock = new DockPanel();
             var histTitle = new TextBlock { Text = "📋 DZIENNIK ZAPROGRAMOWANYCH PŁYTEK (EWIDENCJA WYDANEGO SPRZĘTU LORA)", Foreground = TacticalConfigPanel.BrushAccent, FontWeight = FontWeights.Bold, FontSize = 11.5, Margin = new Thickness(0, 0, 0, 8) };
@@ -979,7 +955,6 @@ namespace FieldTakHub.Builder.Services
             Grid.SetRow(historyCard, 1);
             rightGrid.Children.Add(historyCard);
 
-            // Konsola diagnostyczna protokołu szeregowego
             var consoleCard = new Border { Background = TacticalConfigPanel.BrushItemBg, BorderBrush = TacticalConfigPanel.BrushTileBorder, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(8), Padding = new Thickness(12) };
             var conDock = new DockPanel();
             var conHdrDock = new DockPanel { Margin = new Thickness(0, 0, 0, 6) };
