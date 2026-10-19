@@ -25,6 +25,14 @@ using Microsoft.Win32;
 
 namespace FieldTakHub.Builder.Services
 {
+    public class VoiceChannelModel
+    {
+        public string RoleName { get; set; } = "Sztab HQ";
+        public string BandType { get; set; } = "PMR"; // "PMR", "VHF/UHF", "DMR"
+        public string FreqMhz { get; set; } = "CH 1 (446.00625)";
+        public string ToneOrCode { get; set; } = "CTCSS 67.0 Hz";
+    }
+
     public class FactionProfileModel
     {
         public string Name { get; set; } = "BLUFOR";
@@ -64,6 +72,14 @@ namespace FieldTakHub.Builder.Services
         public bool SecretsExternal { get; set; } = true;
         public string EnrollmentUri { get; set; } = "";
         public string OtsHost { get; set; } = "ggzstak.duckdns.org";
+
+        // Etap 2: Tabela kanałów głosowych (PMR / VHF / UHF / DMR), telefon alarmowy SOS oraz konfiguracja plakatu A4
+        public string EmergencyPhone { get; set; } = "+48 600 000 000";
+        public List<VoiceChannelModel> VoiceChannels { get; set; } = new List<VoiceChannelModel>();
+        public bool PosterShowQr { get; set; } = true;
+        public bool PosterShowRadioTable { get; set; } = true;
+        public bool PosterShowTechParams { get; set; } = true;
+        public bool PosterShowSteps { get; set; } = true;
     }
 
     public class TacticalConfigModel
@@ -110,7 +126,6 @@ namespace FieldTakHub.Builder.Services
         public static string CurrentDraftProjectPath { get; set; } = "";
         public static bool IsWorkspaceDirty { get; set; } = false;
 
-        // Delegaty pozwalające na wspólny zapis i odczyt stanu Generatora Map w jednym pliku projektu i auto-sesji
         public static Func<JsonObject> MapStateExportProvider { get; set; }
         public static Action<JsonObject> MapStateImportConsumer { get; set; }
 
@@ -164,6 +179,25 @@ namespace FieldTakHub.Builder.Services
             return Path.Combine(dir, "last_session_state_v24.json");
         }
 
+        private static List<VoiceChannelModel> CreateDefaultChannelsForSide(string sideName, int sideIdx)
+        {
+            if (sideName.Equals("OPFOR", StringComparison.OrdinalIgnoreCase) || sideIdx == 1)
+            {
+                return new List<VoiceChannelModel>
+                {
+                    new VoiceChannelModel { RoleName = "Dowodzenie HQ", BandType = "PMR", FreqMhz = "CH 4 (446.04375)", ToneOrCode = "CTCSS 100.0 Hz" },
+                    new VoiceChannelModel { RoleName = "Taktyczny Bravo", BandType = "DMR", FreqMhz = "433.450 MHz", ToneOrCode = "CC1 TS1 TG99" },
+                    new VoiceChannelModel { RoleName = "Ratunkowy ORGA", BandType = "PMR", FreqMhz = "CH 8 (446.09375)", ToneOrCode = "Brak tonu" }
+                };
+            }
+            return new List<VoiceChannelModel>
+            {
+                new VoiceChannelModel { RoleName = "Dowodzenie HQ", BandType = "PMR", FreqMhz = "CH 1 (446.00625)", ToneOrCode = "CTCSS 67.0 Hz" },
+                new VoiceChannelModel { RoleName = "Taktyczny Alfa", BandType = "VHF/UHF", FreqMhz = "145.500 MHz", ToneOrCode = "CTCSS 88.5 Hz" },
+                new VoiceChannelModel { RoleName = "Ratunkowy ORGA", BandType = "PMR", FreqMhz = "CH 8 (446.09375)", ToneOrCode = "Brak tonu" }
+            };
+        }
+
         public static List<(string Name, string Channel, string ColorHex, string Psk)> GetConfiguredFactions()
         {
             EnsureDefaultFactions();
@@ -172,12 +206,31 @@ namespace FieldTakHub.Builder.Services
 
         private static void EnsureDefaultFactions()
         {
-            if (_factions.Count > 0) return;
-            _factions.Add(new FactionProfileModel { Name = "BLUFOR", ColorHex = "#2684FF", ChannelName = "GGZS-TAK" });
-            _factions.Add(new FactionProfileModel { Name = "OPFOR", ColorHex = "#EB4034", ChannelName = "OPFOR-TAK" });
+            if (_factions.Count == 0)
+            {
+                _factions.Add(new FactionProfileModel
+                {
+                    Name = "BLUFOR",
+                    ColorHex = "#2684FF",
+                    ChannelName = "GGZS-TAK",
+                    VoiceChannels = CreateDefaultChannelsForSide("BLUFOR", 0)
+                });
+                _factions.Add(new FactionProfileModel
+                {
+                    Name = "OPFOR",
+                    ColorHex = "#EB4034",
+                    ChannelName = "OPFOR-TAK",
+                    VoiceChannels = CreateDefaultChannelsForSide("OPFOR", 1)
+                });
+            }
+            for (int i = 0; i < _factions.Count; i++)
+            {
+                _factions[i].VoiceChannels ??= new List<VoiceChannelModel>();
+                if (_factions[i].VoiceChannels.Count == 0)
+                    _factions[i].VoiceChannels = CreateDefaultChannelsForSide(_factions[i].Name, i);
+            }
         }
 
-        // Serializuje cały stan Buildera (strony konfliktu + nazwa wydarzenia + mapa taktyczna) do obiektu JSON
         public static JsonObject BuildFullWorkspaceStateJson(Window win)
         {
             EnsureDefaultFactions();
@@ -218,6 +271,7 @@ namespace FieldTakHub.Builder.Services
                     {
                         _factions.Clear();
                         _factions.AddRange(loaded);
+                        EnsureDefaultFactions();
                         if (win != null) RebuildWrappedFactionPanels(win);
                     }
                 }
@@ -324,14 +378,12 @@ namespace FieldTakHub.Builder.Services
             return false;
         }
 
-        // Okno ostrzeżenia przed zamknięciem programu z propozycją zapisu wersji roboczej
         private static void OnMainWindowClosing(Window win, CancelEventArgs e)
         {
             if (_closeConfirmed) return;
-            // Zawsze zapisz stan automatycznej sesji, aby przy kolejnym uruchomieniu ustawienia były pamiętane
             SaveSessionStateAuto(win);
 
-            int choice = 0; // 0 = Anuluj, 1 = Zapisz do pliku .fthproj i zamknij, 2 = Zamknij (zachowaj w auto-pamięci)
+            int choice = 0;
             var dlg = new Window
             {
                 Title = "Zamykanie Field TAK Hub Builder — Zapis stanu projektu",
@@ -356,7 +408,7 @@ namespace FieldTakHub.Builder.Services
             });
             root.Children.Add(new TextBlock
             {
-                Text = "Bieżące ustawienia stron konfliktu (.ftak) oraz stan Generatora Map zostały już automatycznie zapamiętane do kolejnego uruchomienia.\nMożesz dodatkowo zapisać kompletną kopię roboczą do pliku (.fthproj).",
+                Text = "Bieżące ustawienia stron konfliktu (.ftak), tabela kanałów głosowych oraz stan Generatora Map zostały już automatycznie zapamiętane do kolejnego uruchomienia.\nMożesz dodatkowo zapisać kompletną kopię roboczą do pliku (.fthproj).",
                 Foreground = Brushes.White,
                 FontSize = 11,
                 TextWrapping = TextWrapping.Wrap,
@@ -416,19 +468,8 @@ namespace FieldTakHub.Builder.Services
             dlg.Content = root;
             dlg.ShowDialog();
 
-            if (choice == 0)
-            {
-                e.Cancel = true;
-                return;
-            }
-            if (choice == 1)
-            {
-                if (!SaveDraftProjectDialog(win))
-                {
-                    e.Cancel = true;
-                    return;
-                }
-            }
+            if (choice == 0) { e.Cancel = true; return; }
+            if (choice == 1 && !SaveDraftProjectDialog(win)) { e.Cancel = true; return; }
             _closeConfirmed = true;
         }
 
@@ -752,8 +793,8 @@ namespace FieldTakHub.Builder.Services
         private static void AdjustFactionCardsWidth(double availableWidth)
         {
             if (_factionsWrapPanel == null || availableWidth <= 100) return;
-            int columnsPerRow = availableWidth >= 1140 ? 3 : (availableWidth >= 700 ? 2 : 1);
-            double cardWidth = Math.Clamp(Math.Floor((availableWidth - (columnsPerRow * 14.0)) / columnsPerRow), 320.0, 540.0);
+            int columnsPerRow = availableWidth >= 1200 ? 3 : (availableWidth >= 740 ? 2 : 1);
+            double cardWidth = Math.Clamp(Math.Floor((availableWidth - (columnsPerRow * 14.0)) / columnsPerRow), 350.0, 560.0);
             foreach (UIElement child in _factionsWrapPanel.Children)
                 if (child is FrameworkElement fe) fe.Width = cardWidth;
         }
@@ -797,11 +838,41 @@ namespace FieldTakHub.Builder.Services
             return border;
         }
 
+        private static Border CreateSmallRedMinusButton(string tooltip, Action onClick)
+        {
+            var border = new Border
+            {
+                Width = 22,
+                Height = 22,
+                CornerRadius = new CornerRadius(4),
+                Background = BrushRedMinus,
+                BorderBrush = Brushes.White,
+                BorderThickness = new Thickness(1),
+                Cursor = Cursors.Hand,
+                ToolTip = tooltip,
+                Margin = new Thickness(3, 0, 0, 0),
+                Child = new TextBlock
+                {
+                    Text = "−",
+                    Foreground = Brushes.White,
+                    FontSize = 14,
+                    FontWeight = FontWeights.Bold,
+                    HorizontalAlignment = HorizontalAlignment.Center,
+                    VerticalAlignment = VerticalAlignment.Center,
+                    Margin = new Thickness(0, -2, 0, 0)
+                }
+            };
+            border.MouseLeftButtonDown += (_, e) => { e.Handled = true; onClick(); };
+            return border;
+        }
+
         private static UIElement BuildSingleFactionCard(Window win, FactionProfileModel fac, int index)
         {
+            fac.VoiceChannels ??= CreateDefaultChannelsForSide(fac.Name, index);
+
             var outerCard = new Border
             {
-                Width = 385,
+                Width = 400,
                 Background = BrushCardBg,
                 BorderBrush = BrushAccent,
                 BorderThickness = new Thickness(1.5),
@@ -834,7 +905,9 @@ namespace FieldTakHub.Builder.Services
                     PliStrategy = fac.PliStrategy,
                     LoraRegion = fac.LoraRegion,
                     LoraModemPreset = fac.LoraModemPreset,
-                    OtsHost = fac.OtsHost
+                    OtsHost = fac.OtsHost,
+                    EmergencyPhone = fac.EmergencyPhone,
+                    VoiceChannels = CreateDefaultChannelsForSide(newName, nextNum)
                 });
                 MarkDirty();
                 RebuildWrappedFactionPanels(win);
@@ -909,10 +982,134 @@ namespace FieldTakHub.Builder.Services
             idCard.Child = idGrid;
             mainStack.Children.Add(idCard);
 
+            // =====================================================================
+            // UNIWERSALNA TABELA CZĘSTOTLIWOŚCI GŁOSOWYCH (PMR / VHF / UHF / DMR) + ALARM SOS MGRS
+            // =====================================================================
+            var radioCard = new Border { Background = BrushItemBg, BorderBrush = BrushAccent, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(8), Padding = new Thickness(9), Margin = new Thickness(0, 0, 0, 8) };
+            var radioStack = new StackPanel();
+
+            var radioHdrDock = new DockPanel { Margin = new Thickness(0, 0, 0, 4) };
+            var btnAddChan = new Button
+            {
+                Content = "+ Dodaj kanał",
+                Height = 22,
+                Padding = new Thickness(8, 0, 8, 0),
+                Background = BrushGreenPlus,
+                Foreground = Brushes.White,
+                BorderBrush = Brushes.White,
+                BorderThickness = new Thickness(1),
+                FontSize = 9.5,
+                FontWeight = FontWeights.Bold,
+                Cursor = Cursors.Hand
+            };
+            DockPanel.SetDock(btnAddChan, Dock.Right);
+            radioHdrDock.Children.Add(btnAddChan);
+            radioHdrDock.Children.Add(new TextBlock { Text = "📻 Tabela Kanałów Głosowych (PMR / VHF / DMR) & SOS", Foreground = BrushAccent, FontWeight = FontWeights.Bold, FontSize = 11, VerticalAlignment = VerticalAlignment.Center });
+            radioStack.Children.Add(radioHdrDock);
+
+            var sosRow = new Grid { Margin = new Thickness(0, 0, 0, 5) };
+            sosRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1.25, GridUnitType.Star) });
+            sosRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            sosRow.Children.Add(new TextBlock { Text = "☎️ Numer alarmowy SMS ORGA / Medyka (SOS MGRS):", Foreground = BrushMutedText, FontSize = 9.5, VerticalAlignment = VerticalAlignment.Center });
+            var sosPhoneBox = (TextBox)TextCtrl(fac.EmergencyPhone ?? "+48 600 000 000", v => { fac.EmergencyPhone = v.Trim(); MarkDirty(); });
+            sosPhoneBox.FontWeight = FontWeights.Bold;
+            Grid.SetColumn(sosPhoneBox, 1);
+            sosRow.Children.Add(sosPhoneBox);
+            radioStack.Children.Add(sosRow);
+
+            var tblHeader = new Grid { Margin = new Thickness(0, 0, 0, 2) };
+            tblHeader.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1.15, GridUnitType.Star) });
+            tblHeader.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(68) });
+            tblHeader.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1.15, GridUnitType.Star) });
+            tblHeader.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1.1, GridUnitType.Star) });
+            tblHeader.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(25) });
+
+            void AddHdrLbl(string txt, int col)
+            {
+                var t = new TextBlock { Text = txt, Foreground = BrushMutedText, FontSize = 8.5, FontWeight = FontWeights.SemiBold };
+                Grid.SetColumn(t, col);
+                tblHeader.Children.Add(t);
+            }
+            AddHdrLbl("Rola / Kanał", 0);
+            AddHdrLbl("Pasmo", 1);
+            AddHdrLbl("Częstotliwość / CH", 2);
+            AddHdrLbl("CTCSS / DCS / DMR TG", 3);
+            radioStack.Children.Add(tblHeader);
+
+            var channelsRowsStack = new StackPanel();
+            void RebuildVoiceChannelsRows()
+            {
+                channelsRowsStack.Children.Clear();
+                foreach (var ch in fac.VoiceChannels.ToList())
+                {
+                    var capturedCh = ch;
+                    var rGrid = new Grid { Margin = new Thickness(0, 0, 0, 3) };
+                    rGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1.15, GridUnitType.Star) });
+                    rGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(68) });
+                    rGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1.15, GridUnitType.Star) });
+                    rGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1.1, GridUnitType.Star) });
+                    rGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(25) });
+
+                    var roleBox = (TextBox)TextCtrl(capturedCh.RoleName, v => { capturedCh.RoleName = v; });
+                    roleBox.Height = 22; roleBox.FontSize = 9.5; roleBox.Margin = new Thickness(0, 0, 3, 0);
+
+                    var bandCombo = (ComboBox)ComboCtrl(new[] { "PMR", "VHF/UHF", "DMR" }, string.IsNullOrWhiteSpace(capturedCh.BandType) ? "PMR" : capturedCh.BandType, win, v => { capturedCh.BandType = v; });
+                    bandCombo.Height = 22; bandCombo.FontSize = 9; bandCombo.Margin = new Thickness(0, 0, 3, 0);
+
+                    var freqBox = (TextBox)TextCtrl(capturedCh.FreqMhz, v => { capturedCh.FreqMhz = v; });
+                    freqBox.Height = 22; freqBox.FontSize = 9.5; freqBox.Margin = new Thickness(0, 0, 3, 0);
+
+                    var toneBox = (TextBox)TextCtrl(capturedCh.ToneOrCode, v => { capturedCh.ToneOrCode = v; });
+                    toneBox.Height = 22; toneBox.FontSize = 9.5;
+
+                    var btnDelCh = CreateSmallRedMinusButton($"Usuń kanał: {capturedCh.RoleName}", () =>
+                    {
+                        fac.VoiceChannels.Remove(capturedCh);
+                        MarkDirty();
+                        RebuildVoiceChannelsRows();
+                    });
+
+                    Grid.SetColumn(roleBox, 0);
+                    Grid.SetColumn(bandCombo, 1);
+                    Grid.SetColumn(freqBox, 2);
+                    Grid.SetColumn(toneBox, 3);
+                    Grid.SetColumn(btnDelCh, 4);
+
+                    rGrid.Children.Add(roleBox);
+                    rGrid.Children.Add(bandCombo);
+                    rGrid.Children.Add(freqBox);
+                    rGrid.Children.Add(toneBox);
+                    rGrid.Children.Add(btnDelCh);
+                    channelsRowsStack.Children.Add(rGrid);
+                }
+            }
+
+            btnAddChan.Click += (_, __) =>
+            {
+                int nextIdx = fac.VoiceChannels.Count + 1;
+                fac.VoiceChannels.Add(new VoiceChannelModel
+                {
+                    RoleName = $"Kanał {nextIdx}",
+                    BandType = "PMR",
+                    FreqMhz = $"CH {Math.Clamp(nextIdx, 1, 16)}",
+                    ToneOrCode = "CTCSS 67.0 Hz"
+                });
+                MarkDirty();
+                RebuildVoiceChannelsRows();
+            };
+
+            RebuildVoiceChannelsRows();
+            radioStack.Children.Add(channelsRowsStack);
+            radioCard.Child = radioStack;
+            mainStack.Children.Add(radioCard);
+
+            // =====================================================================
+            // KONFIGURATOR ATAK-CIV (PLI, SIEĆ I WAŻNOŚĆ)
+            // =====================================================================
             var atakCard = new Border { Background = BrushItemBg, BorderBrush = BrushTileBorder, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(8), Padding = new Thickness(9), Margin = new Thickness(0, 0, 0, 8) };
             var atakStack = new StackPanel();
-            atakStack.Children.Add(new TextBlock { Text = "Konfiguracja raportowania ATAK-CIV (PLI, sieć i ważność)", Foreground = BrushAccent, FontWeight = FontWeights.Bold, FontSize = 11.5 });
-            atakStack.Children.Add(new TextBlock { Text = "Częstotliwości wysyłania pozycji GPS/PLI oraz ważność paczki/QR (0 = bezterminowo).", Foreground = BrushMutedText, FontSize = 9.5, Margin = new Thickness(0, 1, 0, 5) });
+            atakStack.Children.Add(new TextBlock { Text = "Konfiguracja raportowania ATAK-CIV (PLI, sieć i ważność)", Foreground = BrushAccent, FontWeight = FontWeights.Bold, FontSize = 11 });
+            atakStack.Children.Add(new TextBlock { Text = "Częstotliwości wysyłania pozycji GPS/PLI oraz ważność paczki/QR (0 = bezterminowo).", Foreground = BrushMutedText, FontSize = 9, Margin = new Thickness(0, 1, 0, 5) });
 
             var atakRow1 = new UniformGrid { Columns = 3 };
             atakRow1.Children.Add(FieldBox("Strategia PLI", ComboCtrl(new[] { "Constant", "Dynamic" }, fac.PliStrategy, win, v => { fac.PliStrategy = v; Current.LocationReportingStrategy = v; MarkDirty(); })));
@@ -940,10 +1137,13 @@ namespace FieldTakHub.Builder.Services
             atakCard.Child = atakStack;
             mainStack.Children.Add(atakCard);
 
+            // =====================================================================
+            // KONFIGURACJA MESHTASTIC (LORA / AES-256 PSK)
+            // =====================================================================
             var meshCard = new Border { Background = BrushItemBg, BorderBrush = BrushTileBorder, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(8), Padding = new Thickness(9), Margin = new Thickness(0, 0, 0, 8) };
             var meshStack = new StackPanel();
-            meshStack.Children.Add(new TextBlock { Text = "Konfiguracja Meshtastic", Foreground = Brushes.White, FontWeight = FontWeights.Bold, FontSize = 11.5 });
-            meshStack.Children.Add(new TextBlock { Text = "HYBRID · PLI · GeoChat · OTS Relay", Foreground = BrushMutedText, FontSize = 9.5, Margin = new Thickness(0, 1, 0, 5) });
+            meshStack.Children.Add(new TextBlock { Text = "Konfiguracja Meshtastic", Foreground = Brushes.White, FontWeight = FontWeights.Bold, FontSize = 11 });
+            meshStack.Children.Add(new TextBlock { Text = "HYBRID · PLI · GeoChat · OTS Relay", Foreground = BrushMutedText, FontSize = 9, Margin = new Thickness(0, 1, 0, 5) });
 
             var meshRow1 = new UniformGrid { Columns = 3 };
             meshRow1.Children.Add(FieldBox("Tryb", ComboCtrl(new[] { "HYBRID", "PLUGIN_ONLY", "NATIVE_TAK", "OFF" }, fac.MeshMode, win, v => { fac.MeshMode = v; MarkDirty(); })));
@@ -1043,6 +1243,21 @@ namespace FieldTakHub.Builder.Services
             enrCard.Child = enrStack;
             bottomSplitGrid.Children.Add(enrCard);
             mainStack.Children.Add(bottomSplitGrid);
+
+            // =====================================================================
+            // CHECKBOXY ZAWARTOŚCI PLAKATU A4 SAFEZONE
+            // =====================================================================
+            var posterCfgCard = new Border { Background = BrushItemBg, BorderBrush = BrushTileBorder, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(8), Padding = new Thickness(8), Margin = new Thickness(0, 0, 0, 8) };
+            var posterCfgStack = new StackPanel();
+            posterCfgStack.Children.Add(new TextBlock { Text = "🖨️ Konfigurator Plakatu A4 Safezone (Elementy widoczne na karcie):", Foreground = BrushAccent, FontWeight = FontWeights.Bold, FontSize = 10.5, Margin = new Thickness(0, 0, 0, 4) });
+            var posterChkGrid = new UniformGrid { Columns = 2 };
+            posterChkGrid.Children.Add(MakeChk("Kod QR wdrożenia (.ftak)", fac.PosterShowQr, v => fac.PosterShowQr = v));
+            posterChkGrid.Children.Add(MakeChk("Tabela kanałów głosowych", fac.PosterShowRadioTable, v => fac.PosterShowRadioTable = v));
+            posterChkGrid.Children.Add(MakeChk("Parametry OTS / LoRa", fac.PosterShowTechParams, v => fac.PosterShowTechParams = v));
+            posterChkGrid.Children.Add(MakeChk("Instrukcja 3 kroków + SOS", fac.PosterShowSteps, v => fac.PosterShowSteps = v));
+            posterCfgStack.Children.Add(posterChkGrid);
+            posterCfgCard.Child = posterCfgStack;
+            mainStack.Children.Add(posterCfgCard);
 
             var bottomBtnsGrid = new UniformGrid { Columns = 3 };
             var btnFolders = new Button { Content = "📁 Pliki stron", Height = 28, Margin = new Thickness(0, 0, 3, 0), Background = BrushItemBg, Foreground = Brushes.White, BorderBrush = BrushTileBorder, BorderThickness = new Thickness(1), FontSize = 10, FontWeight = FontWeights.SemiBold, Cursor = Cursors.Hand };
@@ -1193,9 +1408,26 @@ namespace FieldTakHub.Builder.Services
                 string sourceDir = GetPrimarySourceDirectory(win);
                 string eventName = GetEventNameFromWindow(win);
                 string parentDir = Path.GetDirectoryName(Path.TrimEndingDirectorySeparator(sourceDir)) ?? AppDomain.CurrentDomain.BaseDirectory;
-                string outDir = Path.Combine(parentDir, "release_factions"); Directory.CreateDirectory(outDir);
+                string defaultDir = !string.IsNullOrWhiteSpace(LastExportDirectory) && Directory.Exists(LastExportDirectory)
+                    ? LastExportDirectory
+                    : Path.Combine(parentDir, "release_factions");
+                Directory.CreateDirectory(defaultDir);
 
                 string cleanName = SanitizeFileName(fac.Name);
+                var dlg = new SaveFileDialog
+                {
+                    Title = $"Wybierz miejsce zapisu Plakatu A4 Safezone dla strony {fac.Name}",
+                    Filter = "Plakat PNG (*.png)|*.png",
+                    InitialDirectory = defaultDir,
+                    FileName = $"Plakat_Safezone_A4_{eventName}_{cleanName}.png"
+                };
+                if (dlg.ShowDialog(win) != true) return;
+
+                string posterOutPath = dlg.FileName;
+                string outDir = Path.GetDirectoryName(posterOutPath) ?? defaultDir;
+                LastExportDirectory = outDir;
+                SaveSessionStateAuto(win);
+
                 string ftakPath = Path.Combine(outDir, $"{eventName}_{cleanName}.ftak");
                 string sha256 = await Task.Run(() =>
                 {
@@ -1206,7 +1438,7 @@ namespace FieldTakHub.Builder.Services
                 });
                 string qrPayload = !string.IsNullOrWhiteSpace(fac.EnrollmentUri) ? fac.EnrollmentUri : $"ftak://provision?event={Uri.EscapeDataString(eventName)}&faction={Uri.EscapeDataString(cleanName)}&channel={Uri.EscapeDataString(fac.ChannelName)}&sha256={sha256.Substring(0, 16)}";
                 RenderStandaloneQrPng(Path.Combine(outDir, $"QR_{eventName}_{cleanName}.png"), qrPayload);
-                RenderSafezoneA4PosterPng(Path.Combine(outDir, $"Plakat_Safezone_A4_{eventName}_{cleanName}.png"), eventName, fac, qrPayload, sha256);
+                RenderSafezoneA4PosterPng(posterOutPath, eventName, fac, qrPayload, sha256);
                 TryOpenFolderInExplorer(outDir);
             }
             catch { }
@@ -1299,6 +1531,23 @@ namespace FieldTakHub.Builder.Services
             catch { }
         }
 
+        private static JsonArray SerializeVoiceChannelsToJsonArray(List<VoiceChannelModel> channels)
+        {
+            var arr = new JsonArray();
+            if (channels == null) return arr;
+            foreach (var ch in channels)
+            {
+                arr.Add(new JsonObject
+                {
+                    ["roleName"] = ch.RoleName ?? "",
+                    ["bandType"] = ch.BandType ?? "PMR",
+                    ["freqMhz"] = ch.FreqMhz ?? "",
+                    ["toneOrCode"] = ch.ToneOrCode ?? ""
+                });
+            }
+            return arr;
+        }
+
         private static void BuildFilteredFactionFtakArchive(string sourceDir, string destinationFtakPath, FactionProfileModel fac, string eventName)
         {
             if (File.Exists(destinationFtakPath)) File.Delete(destinationFtakPath);
@@ -1336,6 +1585,8 @@ namespace FieldTakHub.Builder.Services
                 ["pliStrategy"] = fac.PliStrategy,
                 ["loraRegion"] = fac.LoraRegion,
                 ["loraModemPreset"] = fac.LoraModemPreset,
+                ["emergencyPhone"] = fac.EmergencyPhone ?? "",
+                ["voiceChannels"] = SerializeVoiceChannelsToJsonArray(fac.VoiceChannels),
                 ["createdAt"] = DateTimeOffset.UtcNow.ToString("o"),
                 ["neverExpires"] = (fac.ValidityHours == 0),
                 ["expiresAt"] = (fac.ValidityHours == 0) ? DateTimeOffset.UtcNow.AddYears(100).ToString("o") : DateTimeOffset.UtcNow.AddHours(fac.ValidityHours).ToString("o")
@@ -1345,21 +1596,98 @@ namespace FieldTakHub.Builder.Services
             ms.Write(manifestObj.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
         }
 
+        // =========================================================================
+        // DYNAMICZNY GENERATOR PLAKATU A4 SAFEZONE Z TABELĄ RADIOWĄ (PMR/VHF/DMR) I CHECKBOXAMI
+        // =========================================================================
         private static void RenderSafezoneA4PosterPng(string outputPath, string eventName, FactionProfileModel fac, string qrPayload, string sha256Hex)
         {
             const int width = 1240, height = 1754;
+            var facBrush = BrushFromHex(fac.ColorHex, Color.FromRgb(38, 132, 255));
             var visual = new DrawingVisual();
             using (DrawingContext dc = visual.RenderOpen())
             {
                 dc.DrawRectangle(BrushCardBg, null, new Rect(0, 0, width, height));
-                dc.DrawRoundedRectangle(null, new Pen(BrushAccent, 4), new Rect(30, 30, width - 60, height - 60), 18, 18);
-                dc.DrawRoundedRectangle(BrushFromHex(fac.ColorHex, Color.FromRgb(38, 132, 255)), null, new Rect(70, 70, width - 140, 120), 12, 12);
-                DrawCenteredText(dc, "FIELD TAK HUB 2.4 — KARTA WDROŻENIOWA SAFEZONE", 24, Brushes.White, width / 2.0, 92, true);
-                DrawCenteredText(dc, $"OPERACJA: {eventName.ToUpperInvariant()}   |   STRONA: {fac.Name.ToUpperInvariant()}", 32, Brushes.White, width / 2.0, 130, true);
-                double qrBoxSize = 620, qrBoxX = (width - qrBoxSize) / 2.0, qrBoxY = 260;
-                dc.DrawRoundedRectangle(Brushes.White, new Pen(BrushAccent, 4), new Rect(qrBoxX, qrBoxY, qrBoxSize, qrBoxSize), 16, 16);
-                DrawDeterministicQrMatrix(dc, qrPayload, qrBoxX + 45, qrBoxY + 45, qrBoxSize - 90);
-                DrawCenteredText(dc, $"Kanał: {fac.ChannelName}  |  PLI: {fac.PliStrategy}  |  Region: {fac.LoraRegion} ({fac.LoraModemPreset})  |  SHA-256: {sha256Hex.Substring(0, Math.Min(20, sha256Hex.Length))}...", 19, BrushAccent, width / 2.0, 940, true);
+                dc.DrawRoundedRectangle(null, new Pen(BrushAccent, 4), new Rect(28, 28, width - 56, height - 56), 18, 18);
+
+                // Górny baner w kolorze strony konfliktu
+                dc.DrawRoundedRectangle(facBrush, null, new Rect(64, 60, width - 128, 118), 14, 14);
+                DrawCenteredText(dc, "FIELD TAK HUB 2.4 — KARTA WDROŻENIOWA I ŁĄCZNOŚCI SAFEZONE", 22, Brushes.White, width / 2.0, 78, true);
+                DrawCenteredText(dc, $"OPERACJA: {eventName.ToUpperInvariant()}   •   STRONA: {fac.Name.ToUpperInvariant()}", 32, Brushes.White, width / 2.0, 116, true);
+
+                double curY = 205;
+
+                // 1. Kod QR wdrożenia (.ftak)
+                if (fac.PosterShowQr)
+                {
+                    double qrBoxSize = (fac.PosterShowRadioTable && fac.PosterShowSteps) ? 450 : 540;
+                    double qrBoxX = (width - qrBoxSize) / 2.0;
+                    dc.DrawRoundedRectangle(Brushes.White, new Pen(BrushAccent, 4), new Rect(qrBoxX, curY, qrBoxSize, qrBoxSize), 16, 16);
+                    DrawDeterministicQrMatrix(dc, qrPayload, qrBoxX + 36, curY + 36, qrBoxSize - 72);
+                    curY += qrBoxSize + 22;
+                }
+
+                // 2. Parametry techniczne OTS / LoRa Meshtastic
+                if (fac.PosterShowTechParams)
+                {
+                    dc.DrawRoundedRectangle(BrushItemBg, new Pen(BrushTileBorder, 2), new Rect(64, curY, width - 128, 72), 10, 10);
+                    DrawCenteredText(dc, $"SZYFROWANA ŁĄCZNOŚĆ CYFROWA ATAK / MESHTASTIC — KANAŁ: {fac.ChannelName}", 18, BrushAccent, width / 2.0, curY + 12, true);
+                    DrawCenteredText(dc, $"Region LoRa: {fac.LoraRegion} ({fac.LoraModemPreset})   |   Tryb: {fac.MeshMode}   |   PLI: {fac.PliStrategy}   |   SHA-256: {sha256Hex.Substring(0, Math.Min(16, sha256Hex.Length))}...", 16, Brushes.White, width / 2.0, curY + 40, false);
+                    curY += 94;
+                }
+
+                // 3. Uniwersalna Tabela Kanałów Głosowych (PMR / VHF / UHF / DMR) + Numer Alarmowy SOS
+                if (fac.PosterShowRadioTable)
+                {
+                    var channels = (fac.VoiceChannels != null && fac.VoiceChannels.Count > 0)
+                        ? fac.VoiceChannels
+                        : CreateDefaultChannelsForSide(fac.Name, 0);
+
+                    int rowCount = Math.Min(channels.Count, 8);
+                    double rowH = 44;
+                    double tableH = 54 + 42 + (rowCount * rowH) + 54;
+
+                    dc.DrawRoundedRectangle(BrushItemBg, new Pen(BrushAccent, 2.5), new Rect(64, curY, width - 128, tableH), 12, 12);
+                    DrawCenteredText(dc, $"📻 TABELA CZĘSTOTLIWOŚCI GŁOSOWYCH (PMR / VHF / UHF / DMR) — {fac.Name.ToUpperInvariant()}", 21, BrushAccent, width / 2.0, curY + 14, true);
+
+                    double hdrY = curY + 52;
+                    dc.DrawRectangle(BrushInputBg, null, new Rect(84, hdrY, width - 168, 38));
+                    DrawLeftText(dc, "ROLA / KANAŁ", 16, BrushMutedText, 104, hdrY + 8, true);
+                    DrawLeftText(dc, "PASMO", 16, BrushMutedText, 430, hdrY + 8, true);
+                    DrawLeftText(dc, "CZĘSTOTLIWOŚĆ / KANAŁ", 16, BrushMutedText, 575, hdrY + 8, true);
+                    DrawLeftText(dc, "TON CTCSS / DCS / DMR TG", 16, BrushMutedText, 880, hdrY + 8, true);
+
+                    double rY = hdrY + 40;
+                    for (int i = 0; i < rowCount; i++)
+                    {
+                        var ch = channels[i];
+                        if (i % 2 == 1)
+                            dc.DrawRectangle(new SolidColorBrush(Color.FromArgb(90, 8, 19, 22)), null, new Rect(84, rY, width - 168, rowH));
+
+                        DrawLeftText(dc, ch.RoleName, 18, Brushes.White, 104, rY + 10, true);
+                        DrawLeftText(dc, ch.BandType, 17, BrushAccent, 430, rY + 10, true);
+                        DrawLeftText(dc, ch.FreqMhz, 18, Brushes.White, 575, rY + 10, true);
+                        DrawLeftText(dc, ch.ToneOrCode, 17, Brushes.White, 880, rY + 10, false);
+                        rY += rowH;
+                    }
+
+                    // Dolny pasek alarmowy SOS wewnątrz karty radiowej
+                    string sosPhone = string.IsNullOrWhiteSpace(fac.EmergencyPhone) ? "Kanał Ratunkowy ORGA" : fac.EmergencyPhone;
+                    dc.DrawRoundedRectangle(BrushRedMinus, null, new Rect(84, rY + 6, width - 168, 40), 6, 6);
+                    DrawCenteredText(dc, $"🚨 NUMER ALARMOWY SOS MGRS (ORGA / MEDYK):  {sosPhone}", 19, Brushes.White, width / 2.0, rY + 14, true);
+
+                    curY += tableH + 22;
+                }
+
+                // 4. Instrukcja 3 kroków wdrożenia dla graczy
+                if (fac.PosterShowSteps && curY < height - 160)
+                {
+                    double stepsH = Math.Min(210, height - curY - 54);
+                    dc.DrawRoundedRectangle(BrushInputBg, new Pen(BrushTileBorder, 2), new Rect(64, curY, width - 128, stepsH), 12, 12);
+                    DrawCenteredText(dc, "⚡ SZYBKIE WDROŻENIE W 3 KROKACH (FIELD TAK HUB ANDROID)", 20, BrushAccent, width / 2.0, curY + 14, true);
+                    DrawLeftText(dc, "1. Otwórz aplikację Field TAK Hub na telefonie i zeskanuj powyższy kod QR swojej strony konfliktu.", 17, Brushes.White, 96, curY + 56, false);
+                    DrawLeftText(dc, "2. Wpisz swój Callsign i zatwierdź automatyczną konfigurację ATAK-CIV, map offline oraz radia Meshtastic.", 17, Brushes.White, 96, curY + 94, false);
+                    DrawLeftText(dc, "3. Ustaw radio głosowe wg tabeli powyżej. W razie wypadku użyj przycisku SOS MGRS w aplikacji.", 17, Brushes.White, 96, curY + 132, false);
+                }
             }
             var rtb = new RenderTargetBitmap(width, height, 96, 96, PixelFormats.Pbgra32); rtb.Render(visual);
             var encoder = new PngBitmapEncoder(); encoder.Frames.Add(BitmapFrame.Create(rtb));
@@ -1656,6 +1984,8 @@ namespace FieldTakHub.Builder.Services
 
                 root["faction"] = fac.Name;
                 root["factionColor"] = fac.ColorHex;
+                root["emergencyPhone"] = fac.EmergencyPhone ?? "";
+                root["voiceChannels"] = SerializeVoiceChannelsToJsonArray(fac.VoiceChannels);
                 root["packageValidityHours"] = fac.ValidityHours;
                 root["qrValidityHours"] = fac.ValidityHours;
                 root["neverExpires"] = (fac.ValidityHours == 0);
@@ -1681,7 +2011,7 @@ namespace FieldTakHub.Builder.Services
                 mesh["region"] = fac.LoraRegion; mesh["modemPreset"] = fac.LoraModemPreset; mesh["hopLimit"] = fac.HopLimit;
                 mesh["channelName"] = fac.ChannelName; mesh["channelUrl"] = fac.ChannelUrl; mesh["psk"] = fac.Psk;
 
-                JsonObject lora = (mesh.TryGetPropertyValue("lora", out var ln) && ln is JsonObject el) ? el : (JsonObject)(mesh["lora"] = new JsonObject());
+                JsonObject lora = (mesh.TryGetPropertyValue("lora", out var ln) && ln is JsonObject el) ? ln : (JsonObject)(mesh["lora"] = new JsonObject());
                 lora["region"] = fac.LoraRegion; lora["modemPreset"] = fac.LoraModemPreset; lora["channelName"] = fac.ChannelName; lora["psk"] = fac.Psk;
 
                 File.WriteAllText(jsonPath, root.ToJsonString(new JsonSerializerOptions { WriteIndented = true }), Encoding.UTF8);
