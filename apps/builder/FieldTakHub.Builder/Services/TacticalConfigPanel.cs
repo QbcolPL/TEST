@@ -27,7 +27,7 @@ namespace FieldTakHub.Builder.Services
 {
     public class VoiceChannelModel
     {
-        public string RoleName { get; set; } = "Sztab HQ";
+        public string RoleName { get; set; } = "Dowodzenie HQ";
         public string BandType { get; set; } = "PMR"; // "PMR", "VHF/UHF", "DMR"
         public string FreqMhz { get; set; } = "CH 1 (446.00625)";
         public string ToneOrCode { get; set; } = "CTCSS 67.0 Hz";
@@ -474,15 +474,15 @@ namespace FieldTakHub.Builder.Services
 
         private const string DarkComboBoxXaml = @"
 <Style xmlns=""http://schemas.microsoft.com/winfx/2006/xaml/presentation"" xmlns:x=""http://schemas.microsoft.com/winfx/2006/xaml"" TargetType=""ComboBox"">
-    <Setter Property=""Foreground"" Value=""#FFFFFF""/><Setter Property=""Background"" Value=""#081316""/><Setter Property=""BorderBrush"" Value=""#1E424A""/><Setter Property=""BorderThickness"" Value=""1""/><Setter Property=""Padding"" Value=""6,0,6,0""/>
+    <Setter Property=""Foreground"" Value=""#FFFFFF""/><Setter Property=""Background"" Value=""#081316""/><Setter Property=""BorderBrush"" Value=""#1E424A""/><Setter Property=""BorderThickness"" Value=""1""/><Setter Property=""Padding"" Value=""4,0,4,0""/>
     <Setter Property=""Template""><Setter.Value><ControlTemplate TargetType=""ComboBox"">
         <Grid SnapsToDevicePixels=""True"">
             <Border x:Name=""MainBorder"" Background=""{TemplateBinding Background}"" BorderBrush=""{TemplateBinding BorderBrush}"" BorderThickness=""{TemplateBinding BorderThickness}"" CornerRadius=""4"" />
             <ToggleButton Focusable=""False"" IsChecked=""{Binding IsDropDownOpen, Mode=TwoWay, RelativeSource={RelativeSource TemplatedParent}}"" ClickMode=""Press"">
-                <ToggleButton.Template><ControlTemplate TargetType=""ToggleButton""><Border Background=""Transparent""><Grid><Grid.ColumnDefinitions><ColumnDefinition Width=""*""/><ColumnDefinition Width=""20""/></Grid.ColumnDefinitions><Path Grid.Column=""1"" HorizontalAlignment=""Center"" VerticalAlignment=""Center"" Data=""M 0 0 L 4 4 L 8 0"" Stroke=""#FFFFFF"" StrokeThickness=""1.5"" /></Grid></Border></ControlTemplate></ToggleButton.Template>
+                <ToggleButton.Template><ControlTemplate TargetType=""ToggleButton""><Border Background=""Transparent""><Grid><Grid.ColumnDefinitions><ColumnDefinition Width=""*""/><ColumnDefinition Width=""16""/></Grid.ColumnDefinitions><Path Grid.Column=""1"" HorizontalAlignment=""Center"" VerticalAlignment=""Center"" Data=""M 0 0 L 4 4 L 8 0"" Stroke=""#FFFFFF"" StrokeThickness=""1.5"" /></Grid></Border></ControlTemplate></ToggleButton.Template>
             </ToggleButton>
-            <ContentPresenter IsHitTestVisible=""False"" Content=""{TemplateBinding SelectionBoxItem}"" Margin=""6,0,20,0"" VerticalAlignment=""Center"" HorizontalAlignment=""Left"" TextElement.Foreground=""#FFFFFF"" />
-            <TextBlock x:Name=""FallbackText"" IsHitTestVisible=""False"" Text=""{Binding Text, RelativeSource={RelativeSource TemplatedParent}}"" Foreground=""#FFFFFF"" Margin=""6,0,20,0"" VerticalAlignment=""Center"" HorizontalAlignment=""Left"" Visibility=""Collapsed"" />
+            <ContentPresenter IsHitTestVisible=""False"" Content=""{TemplateBinding SelectionBoxItem}"" Margin=""5,0,16,0"" VerticalAlignment=""Center"" HorizontalAlignment=""Left"" TextElement.Foreground=""#FFFFFF"" />
+            <TextBlock x:Name=""FallbackText"" IsHitTestVisible=""False"" Text=""{Binding Text, RelativeSource={RelativeSource TemplatedParent}}"" Foreground=""#FFFFFF"" Margin=""5,0,16,0"" VerticalAlignment=""Center"" HorizontalAlignment=""Left"" Visibility=""Collapsed"" />
             <Popup Placement=""Bottom"" IsOpen=""{TemplateBinding IsDropDownOpen}"" AllowsTransparency=""True"" Focusable=""False"" PopupAnimation=""Slide"">
                 <Grid SnapsToDevicePixels=""True"" MinWidth=""{TemplateBinding ActualWidth}"" MaxHeight=""{TemplateBinding MaxDropDownHeight}"">
                     <Border Background=""#0F2025"" BorderBrush=""#1FE0C5"" BorderThickness=""1"" CornerRadius=""4"" Margin=""0,2,0,0""><ScrollViewer Margin=""2""><StackPanel IsItemsHost=""True"" /></ScrollViewer></Border>
@@ -789,11 +789,12 @@ namespace FieldTakHub.Builder.Services
             return wrapperStack;
         }
 
+        // Szersze kafelki stron konfliktu, aby cała Tabela Kanałów Głosowych mieściła długie nazwy i częstotliwości bez ucinania
         private static void AdjustFactionCardsWidth(double availableWidth)
         {
             if (_factionsWrapPanel == null || availableWidth <= 100) return;
-            int columnsPerRow = availableWidth >= 1200 ? 3 : (availableWidth >= 740 ? 2 : 1);
-            double cardWidth = Math.Clamp(Math.Floor((availableWidth - (columnsPerRow * 14.0)) / columnsPerRow), 350.0, 560.0);
+            int columnsPerRow = availableWidth >= 1580 ? 3 : (availableWidth >= 880 ? 2 : 1);
+            double cardWidth = Math.Clamp(Math.Floor((availableWidth - (columnsPerRow * 14.0)) / columnsPerRow), 440.0, 680.0);
             foreach (UIElement child in _factionsWrapPanel.Children)
                 if (child is FrameworkElement fe) fe.Width = cardWidth;
         }
@@ -842,7 +843,7 @@ namespace FieldTakHub.Builder.Services
             var border = new Border
             {
                 Width = 22,
-                Height = 22,
+                Height = 23,
                 CornerRadius = new CornerRadius(4),
                 Background = BrushRedMinus,
                 BorderBrush = Brushes.White,
@@ -871,7 +872,7 @@ namespace FieldTakHub.Builder.Services
 
             var outerCard = new Border
             {
-                Width = 400,
+                Width = 480,
                 Background = BrushCardBg,
                 BorderBrush = BrushAccent,
                 BorderThickness = new Thickness(1.5),
@@ -981,16 +982,33 @@ namespace FieldTakHub.Builder.Services
             idCard.Child = idGrid;
             mainStack.Children.Add(idCard);
 
-            // UNIWERSALNA TABELA CZĘSTOTLIWOŚCI GŁOSOWYCH (PMR / VHF / UHF / DMR) + ALARM SOS MGRS
-            var radioCard = new Border { Background = BrushItemBg, BorderBrush = BrushAccent, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(8), Padding = new Thickness(9), Margin = new Thickness(0, 0, 0, 8) };
+            // =====================================================================
+            // UNIWERSALNA TABELA CZĘSTOTLIWOŚCI GŁOSOWYCH (POPRAWIONE PROPORCJE BEZ UCINANIA TEKSTU)
+            // =====================================================================
+            var radioCard = new Border { Background = BrushItemBg, BorderBrush = BrushAccent, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(8), Padding = new Thickness(10, 8, 10, 8), Margin = new Thickness(0, 0, 0, 8) };
             var radioStack = new StackPanel();
 
-            var radioHdrDock = new DockPanel { Margin = new Thickness(0, 0, 0, 4) };
+            var radioHdrGrid = new Grid { Margin = new Thickness(0, 0, 0, 6) };
+            radioHdrGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            radioHdrGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+            var radioTitleTxt = new TextBlock
+            {
+                Text = "📻 Kanały Głosowe (PMR / VHF / DMR) & SOS",
+                Foreground = BrushAccent,
+                FontWeight = FontWeights.Bold,
+                FontSize = 10.5,
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            Grid.SetColumn(radioTitleTxt, 0);
+            radioHdrGrid.Children.Add(radioTitleTxt);
+
             var btnAddChan = new Button
             {
                 Content = "+ Dodaj kanał",
-                Height = 22,
-                Padding = new Thickness(8, 0, 8, 0),
+                Height = 23,
+                Padding = new Thickness(10, 0, 10, 0),
+                Margin = new Thickness(8, 0, 0, 0),
                 Background = BrushGreenPlus,
                 Foreground = Brushes.White,
                 BorderBrush = Brushes.White,
@@ -999,38 +1017,49 @@ namespace FieldTakHub.Builder.Services
                 FontWeight = FontWeights.Bold,
                 Cursor = Cursors.Hand
             };
-            DockPanel.SetDock(btnAddChan, Dock.Right);
-            radioHdrDock.Children.Add(btnAddChan);
-            radioHdrDock.Children.Add(new TextBlock { Text = "📻 Tabela Kanałów Głosowych (PMR / VHF / DMR) & SOS", Foreground = BrushAccent, FontWeight = FontWeights.Bold, FontSize = 11, VerticalAlignment = VerticalAlignment.Center });
-            radioStack.Children.Add(radioHdrDock);
+            Grid.SetColumn(btnAddChan, 1);
+            radioHdrGrid.Children.Add(btnAddChan);
+            radioStack.Children.Add(radioHdrGrid);
 
-            var sosRow = new Grid { Margin = new Thickness(0, 0, 0, 5) };
-            sosRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1.25, GridUnitType.Star) });
+            var sosRow = new Grid { Margin = new Thickness(0, 0, 0, 6) };
+            sosRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
             sosRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-            sosRow.Children.Add(new TextBlock { Text = "☎️ Numer alarmowy SMS ORGA / Medyka (SOS MGRS):", Foreground = BrushMutedText, FontSize = 9.5, VerticalAlignment = VerticalAlignment.Center });
+
+            var sosLabel = new TextBlock
+            {
+                Text = "☎️ Telefon alarmowy SMS (ORGA / Medyk):",
+                Foreground = BrushMutedText,
+                FontSize = 9.5,
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(0, 0, 8, 0)
+            };
+            Grid.SetColumn(sosLabel, 0);
+            sosRow.Children.Add(sosLabel);
+
             var sosPhoneBox = (TextBox)TextCtrl(fac.EmergencyPhone ?? "+48 600 000 000", v => { fac.EmergencyPhone = v.Trim(); MarkDirty(); });
             sosPhoneBox.FontWeight = FontWeights.Bold;
+            sosPhoneBox.Height = 24;
             Grid.SetColumn(sosPhoneBox, 1);
             sosRow.Children.Add(sosPhoneBox);
             radioStack.Children.Add(sosRow);
 
-            var tblHeader = new Grid { Margin = new Thickness(0, 0, 0, 2) };
+            var tblHeader = new Grid { Margin = new Thickness(0, 0, 0, 3) };
+            tblHeader.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1.25, GridUnitType.Star) });
+            tblHeader.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(76) });
+            tblHeader.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1.35, GridUnitType.Star) });
             tblHeader.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1.15, GridUnitType.Star) });
-            tblHeader.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(68) });
-            tblHeader.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1.15, GridUnitType.Star) });
-            tblHeader.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1.1, GridUnitType.Star) });
             tblHeader.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(25) });
 
             void AddHdrLbl(string txt, int col)
             {
-                var t = new TextBlock { Text = txt, Foreground = BrushMutedText, FontSize = 8.5, FontWeight = FontWeights.SemiBold };
+                var t = new TextBlock { Text = txt, Foreground = BrushMutedText, FontSize = 8.5, FontWeight = FontWeights.SemiBold, Margin = new Thickness(2, 0, 2, 0) };
                 Grid.SetColumn(t, col);
                 tblHeader.Children.Add(t);
             }
             AddHdrLbl("Rola / Kanał", 0);
             AddHdrLbl("Pasmo", 1);
             AddHdrLbl("Częstotliwość / CH", 2);
-            AddHdrLbl("CTCSS / DCS / DMR TG", 3);
+            AddHdrLbl("CTCSS / DCS / TG", 3);
             radioStack.Children.Add(tblHeader);
 
             var channelsRowsStack = new StackPanel();
@@ -1041,23 +1070,26 @@ namespace FieldTakHub.Builder.Services
                 {
                     var capturedCh = ch;
                     var rGrid = new Grid { Margin = new Thickness(0, 0, 0, 3) };
+                    rGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1.25, GridUnitType.Star) });
+                    rGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(76) });
+                    rGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1.35, GridUnitType.Star) });
                     rGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1.15, GridUnitType.Star) });
-                    rGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(68) });
-                    rGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1.15, GridUnitType.Star) });
-                    rGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1.1, GridUnitType.Star) });
                     rGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(25) });
 
                     var roleBox = (TextBox)TextCtrl(capturedCh.RoleName, v => { capturedCh.RoleName = v; });
-                    roleBox.Height = 22; roleBox.FontSize = 9.5; roleBox.Margin = new Thickness(0, 0, 3, 0);
+                    roleBox.Height = 23; roleBox.FontSize = 9.5; roleBox.Padding = new Thickness(3, 0, 3, 0); roleBox.Margin = new Thickness(0, 0, 3, 0);
+                    roleBox.ToolTip = capturedCh.RoleName;
 
                     var bandCombo = (ComboBox)ComboCtrl(new[] { "PMR", "VHF/UHF", "DMR" }, string.IsNullOrWhiteSpace(capturedCh.BandType) ? "PMR" : capturedCh.BandType, win, v => { capturedCh.BandType = v; });
-                    bandCombo.Height = 22; bandCombo.FontSize = 9; bandCombo.Margin = new Thickness(0, 0, 3, 0);
+                    bandCombo.Height = 23; bandCombo.FontSize = 9; bandCombo.Margin = new Thickness(0, 0, 3, 0);
 
                     var freqBox = (TextBox)TextCtrl(capturedCh.FreqMhz, v => { capturedCh.FreqMhz = v; });
-                    freqBox.Height = 22; freqBox.FontSize = 9.5; freqBox.Margin = new Thickness(0, 0, 3, 0);
+                    freqBox.Height = 23; freqBox.FontSize = 9.5; freqBox.Padding = new Thickness(3, 0, 3, 0); freqBox.Margin = new Thickness(0, 0, 3, 0);
+                    freqBox.ToolTip = capturedCh.FreqMhz;
 
                     var toneBox = (TextBox)TextCtrl(capturedCh.ToneOrCode, v => { capturedCh.ToneOrCode = v; });
-                    toneBox.Height = 22; toneBox.FontSize = 9.5;
+                    toneBox.Height = 23; toneBox.FontSize = 9.5; toneBox.Padding = new Thickness(3, 0, 3, 0);
+                    toneBox.ToolTip = capturedCh.ToneOrCode;
 
                     var btnDelCh = CreateSmallRedMinusButton($"Usuń kanał: {capturedCh.RoleName}", () =>
                     {
