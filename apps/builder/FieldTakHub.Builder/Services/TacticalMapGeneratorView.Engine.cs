@@ -234,6 +234,7 @@ namespace FieldTakHub.Builder.Services
             new NatoSymbolOption { Code = "NATO_HAZARD", ShortBadge = "!",   NatoMeaning = "Zagrożenie / Strefa No-Go",         Label = "[!] NATO Zagrożenie / Strefa No-Go" }
         };
 
+        // Warstwy Geoportalu używają natywnego układu polskiego EPSG:2180 ({bbox2180}) bez zniekształcenia skali Mercatora!
         public static readonly List<TacticalMapLayerDef> Layers = new List<TacticalMapLayerDef>
         {
             new TacticalMapLayerDef { Id = "google_hyb", Name = "Google Satelita + Opisy", IsWmsEpsg3857 = false, UrlTemplate = "https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}" },
@@ -242,34 +243,34 @@ namespace FieldTakHub.Builder.Services
             new TacticalMapLayerDef
             {
                 Id = "geoportal_hires",
-                Name = "Geoportal Ortofotomapa HIGH-RES (PZGIK + Auto-Fallback)",
+                Name = "Geoportal Ortofotomapa HIGH-RES (PZGIK + Auto-Standard)",
                 IsWmsEpsg3857 = true,
-                UrlTemplate = "https://mapy.geoportal.gov.pl/wss/service/PZGIK/ORTO/WMS/HighResolution?SERVICE=WMS&VERSION=1.1.1&REQUEST=GetMap&LAYERS=Raster&STYLES=&SRS=EPSG:3857&BBOX={bbox}&WIDTH={w}&HEIGHT={h}&FORMAT=image/jpeg",
-                FallbackUrlTemplate = "https://mapy.geoportal.gov.pl/wss/service/PZGIK/ORTO/WMS/StandardResolution?SERVICE=WMS&VERSION=1.1.1&REQUEST=GetMap&LAYERS=Raster&STYLES=&SRS=EPSG:3857&BBOX={bbox}&WIDTH={w}&HEIGHT={h}&FORMAT=image/jpeg"
+                UrlTemplate = "https://mapy.geoportal.gov.pl/wss/service/PZGIK/ORTO/WMS/HighResolution?SERVICE=WMS&VERSION=1.1.1&REQUEST=GetMap&LAYERS=Raster&STYLES=&SRS=EPSG:2180&BBOX={bbox2180}&WIDTH={w}&HEIGHT={h}&FORMAT=image/jpeg",
+                FallbackUrlTemplate = "https://mapy.geoportal.gov.pl/wss/service/PZGIK/ORTO/WMS/StandardResolution?SERVICE=WMS&VERSION=1.1.1&REQUEST=GetMap&LAYERS=Raster&STYLES=&SRS=EPSG:2180&BBOX={bbox2180}&WIDTH={w}&HEIGHT={h}&FORMAT=image/jpeg"
             },
             new TacticalMapLayerDef
             {
                 Id = "geoportal_std",
                 Name = "Geoportal Ortofotomapa Standard (PZGIK)",
                 IsWmsEpsg3857 = true,
-                UrlTemplate = "https://mapy.geoportal.gov.pl/wss/service/PZGIK/ORTO/WMS/StandardResolution?SERVICE=WMS&VERSION=1.1.1&REQUEST=GetMap&LAYERS=Raster&STYLES=&SRS=EPSG:3857&BBOX={bbox}&WIDTH={w}&HEIGHT={h}&FORMAT=image/jpeg",
-                FallbackUrlTemplate = "https://integracja.gugik.gov.pl/cgi-bin/KrajowaIntegracjaOrtofotomapy?SERVICE=WMS&VERSION=1.1.1&REQUEST=GetMap&LAYERS=orto&STYLES=&SRS=EPSG:3857&BBOX={bbox}&WIDTH={w}&HEIGHT={h}&FORMAT=image/jpeg"
+                UrlTemplate = "https://mapy.geoportal.gov.pl/wss/service/PZGIK/ORTO/WMS/StandardResolution?SERVICE=WMS&VERSION=1.1.1&REQUEST=GetMap&LAYERS=Raster&STYLES=&SRS=EPSG:2180&BBOX={bbox2180}&WIDTH={w}&HEIGHT={h}&FORMAT=image/jpeg",
+                FallbackUrlTemplate = "https://integracja.gugik.gov.pl/cgi-bin/KrajowaIntegracjaOrtofotomapy?SERVICE=WMS&VERSION=1.1.1&REQUEST=GetMap&LAYERS=orto&STYLES=&SRS=EPSG:2180&BBOX={bbox2180}&WIDTH={w}&HEIGHT={h}&FORMAT=image/jpeg"
             },
             new TacticalMapLayerDef
             {
                 Id = "geoportal_lidar",
-                Name = "Geoportal LiDAR ISOK (Cieniowanie NMT)",
+                Name = "Geoportal LiDAR ISOK (Cieniowanie NMT GRID1 / GRID5)",
                 IsWmsEpsg3857 = true,
-                UrlTemplate = "https://mapy.geoportal.gov.pl/wss/service/PZGIK/NMT/GRID1/WMS/ShadedRelief?SERVICE=WMS&VERSION=1.1.1&REQUEST=GetMap&LAYERS=Raster&STYLES=&SRS=EPSG:3857&BBOX={bbox}&WIDTH={w}&HEIGHT={h}&FORMAT=image/jpeg",
-                FallbackUrlTemplate = "https://mapy.geoportal.gov.pl/wss/service/PZGIK/NMT/GRID5/WMS/ShadedRelief?SERVICE=WMS&VERSION=1.1.1&REQUEST=GetMap&LAYERS=Raster&STYLES=&SRS=EPSG:3857&BBOX={bbox}&WIDTH={w}&HEIGHT={h}&FORMAT=image/jpeg"
+                UrlTemplate = "https://mapy.geoportal.gov.pl/wss/service/PZGIK/NMT/GRID1/WMS/ShadedRelief?SERVICE=WMS&VERSION=1.1.1&REQUEST=GetMap&LAYERS=Raster&STYLES=&SRS=EPSG:2180&BBOX={bbox2180}&WIDTH={w}&HEIGHT={h}&FORMAT=image/jpeg",
+                FallbackUrlTemplate = "https://mapy.geoportal.gov.pl/wss/service/PZGIK/NMT/GRID5/WMS/ShadedRelief?SERVICE=WMS&VERSION=1.1.1&REQUEST=GetMap&LAYERS=Raster&STYLES=&SRS=EPSG:2180&BBOX={bbox2180}&WIDTH={w}&HEIGHT={h}&FORMAT=image/jpeg"
             },
             new TacticalMapLayerDef
             {
                 Id = "geoportal_topo",
                 Name = "Geoportal Mapa Topograficzna (TOPO / BDOT10k)",
                 IsWmsEpsg3857 = true,
-                UrlTemplate = "https://mapy.geoportal.gov.pl/wss/service/img/guest/TOPO/MapServer/WMSServer?SERVICE=WMS&VERSION=1.1.1&REQUEST=GetMap&LAYERS=Raster&STYLES=&SRS=EPSG:3857&BBOX={bbox}&WIDTH={w}&HEIGHT={h}&FORMAT=image/jpeg",
-                FallbackUrlTemplate = "https://integracja.gugik.gov.pl/cgi-bin/KrajowaIntegracjaMapTopograficznych?SERVICE=WMS&VERSION=1.1.1&REQUEST=GetMap&LAYERS=raster&STYLES=&SRS=EPSG:3857&BBOX={bbox}&WIDTH={w}&HEIGHT={h}&FORMAT=image/jpeg"
+                UrlTemplate = "https://mapy.geoportal.gov.pl/wss/service/img/guest/TOPO/MapServer/WMSServer?SERVICE=WMS&VERSION=1.1.1&REQUEST=GetMap&LAYERS=Raster&STYLES=&SRS=EPSG:2180&BBOX={bbox2180}&WIDTH={w}&HEIGHT={h}&FORMAT=image/jpeg",
+                FallbackUrlTemplate = "https://integracja.gugik.gov.pl/cgi-bin/KrajowaIntegracjaMapTopograficznych?SERVICE=WMS&VERSION=1.1.1&REQUEST=GetMap&LAYERS=raster&STYLES=&SRS=EPSG:2180&BBOX={bbox2180}&WIDTH={w}&HEIGHT={h}&FORMAT=image/png"
             },
             new TacticalMapLayerDef { Id = "esri_sat", Name = "ESRI World Imagery (Ortofotomapa)", IsWmsEpsg3857 = false, UrlTemplate = "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}" },
             new TacticalMapLayerDef { Id = "osm_std", Name = "OpenStreetMap Standard", IsWmsEpsg3857 = false, UrlTemplate = "https://tile.openstreetmap.org/{z}/{x}/{y}.png" },
@@ -304,6 +305,7 @@ namespace FieldTakHub.Builder.Services
 
         private static double _centerLat = 49.9135, _centerLon = 19.0238, _dragStartLat, _dragStartLon;
         private static double _wmsLoadedCenterLat = 49.9135, _wmsLoadedCenterLon = 19.0238;
+        private static int _wmsLoadedScaleDenominator = 5000;
         private static int _zoom = 16, _targetScaleDenominator = 5000, _effectiveMgrsStepMeters = 100;
         private static SheetFormatDef _selectedSheet = SheetFormats[0];
         private static string _sheetOrientation = "Poziomo";
@@ -316,11 +318,10 @@ namespace FieldTakHub.Builder.Services
         private static bool _bakeLidarInOffline = true;
         private static bool _includeVectorsWithOffline = true;
 
-        // Ustawienia siatki oraz pełne kolory RGB dla głównych opisów oraz cyfr i tła podziałki wewnętrznej (Keypad / Ćwiartki)
         private static string _coordSystem = "MGRS / UTM (Siatka wojskowa w metrach)";
         private static string _subGridDivision = "Co 33 m (Keypad 1-9)";
         private static string _gridLabelsMode = "MGRS + Ćwiartki/Keypad";
-        private static string _labelBgStyle = "Kaseton (Czarne tło)";
+        private static string _labelBgStyle = "Kaseton (Kolor tła RGB)";
         private static double _gridThicknessMultiplier = 1.0;
         private static double _fontScaleMultiplier = 1.0;
         private static double _mainGridOpacity = 0.85;
@@ -377,7 +378,7 @@ namespace FieldTakHub.Builder.Services
                     ServerCertificateCustomValidationCallback = (s, c, ch, e) => true,
                     MaxConnectionsPerServer = 16
                 };
-                var c = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(16) };
+                var c = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(18) };
                 c.DefaultRequestHeaders.UserAgent.ParseAdd("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36");
                 c.DefaultRequestHeaders.Referrer = new Uri("https://mapy.geoportal.gov.pl/");
                 c.DefaultRequestHeaders.Accept.ParseAdd("image/avif,image/webp,image/apng,image/*,*/*;q=0.8");
@@ -385,7 +386,7 @@ namespace FieldTakHub.Builder.Services
             }
             catch
             {
-                return new HttpClient { Timeout = TimeSpan.FromSeconds(16) };
+                return new HttpClient { Timeout = TimeSpan.FromSeconds(18) };
             }
         }
 
@@ -399,10 +400,13 @@ namespace FieldTakHub.Builder.Services
             return false;
         }
 
-        // Wykrywa puste białe obrazy zwracane przez Geoportal HighResolution poza zasięgiem ortofotomapy 5cm, aby przełączyć na StandardResolution
-        private static bool IsMostlyBlankOrWhiteWmsBitmap(BitmapSource bmp)
+        // Precyzyjny detektor pustych białych odpowiedzi WMS (sprawdza rozmiar bufora oraz brak detali, nie blokując cieniowania LiDAR i map TOPO)
+        private static bool IsBlankWhiteWmsPayload(byte[] rawBytes, BitmapSource bmp)
         {
-            if (bmp == null || bmp.PixelWidth < 16 || bmp.PixelHeight < 16) return true;
+            if (rawBytes == null || rawBytes.Length < 256 || bmp == null) return true;
+            // Prawdziwa mapa pełnoekranowa JPEG/PNG ma zawsze > 9 KB; puste białe tło z Geoportalu ma zwykle 1.5 - 6.5 KB
+            if (rawBytes.Length > 14000) return false;
+
             try
             {
                 var converted = new FormatConvertedBitmap(bmp, PixelFormats.Bgra32, null, 0);
@@ -411,33 +415,28 @@ namespace FieldTakHub.Builder.Services
                 byte[] pixels = new byte[h * stride];
                 converted.CopyPixels(pixels, stride, 0);
 
-                int sampleCols = 12, sampleRows = 12;
-                int whiteOrTransparentCount = 0, totalSamples = 0;
-
-                for (int r = 1; r < sampleRows; r++)
+                int pureWhiteCount = 0, totalSamples = 0;
+                for (int r = 1; r < 10; r++)
                 {
-                    int py = (h * r) / sampleRows;
-                    for (int c = 1; c < sampleCols; c++)
+                    int py = (h * r) / 10;
+                    for (int c = 1; c < 10; c++)
                     {
-                        int px = (w * c) / sampleCols;
+                        int px = (w * c) / 10;
                         int idx = py * stride + px * 4;
                         if (idx + 3 < pixels.Length)
                         {
                             byte b = pixels[idx], g = pixels[idx + 1], red = pixels[idx + 2], a = pixels[idx + 3];
                             totalSamples++;
-                            if (a < 15 || (red >= 247 && g >= 247 && b >= 247))
-                                whiteOrTransparentCount++;
+                            if (a < 10 || (red >= 253 && g >= 253 && b >= 253))
+                                pureWhiteCount++;
                         }
                     }
                 }
-                return totalSamples > 0 && ((double)whiteOrTransparentCount / totalSamples) >= 0.96;
+                return totalSamples > 0 && pureWhiteCount == totalSamples;
             }
             catch { return false; }
         }
 
-        // =========================================================================
-        // ROZBUDOWANA SEKCJA 2 UI: WYBÓR KOLORÓW RGB DLA SIATKI GŁÓWNEJ ORAZ CYFR I TŁA KEYPAD / ĆWIARTEK
-        // =========================================================================
         private static StackPanel BuildSection2GridAndColorsUI(Window win)
         {
             var sec2 = CreateSectionCard("2. SIATKA MGRS / WGS84 & KOLORY RGB (KEYPAD / ĆWIARTKI / TŁO)");
@@ -448,7 +447,6 @@ namespace FieldTakHub.Builder.Services
             subGridRow.Children.Add(TacticalConfigPanel.FieldBox("Opisy kratek:", TacticalConfigPanel.ComboCtrl(new[] { "MGRS + Ćwiartki/Keypad", "Tylko główne linie MGRS", "Brak opisów wewnątrz" }, _gridLabelsMode, win, v => { _gridLabelsMode = v; RedrawVectorsOnly(); })));
             sec2.Children.Add(subGridRow);
 
-            // Przyciski wyboru kolorów RGB dla cyfr Keypad/Ćwiartek, tła kasetonu, linii wewnętrznych oraz siatki głównej
             UIElement MakeRgbPickerButton(string fieldTitle, string dialogTitle, Func<string> getter, Action<string> setter)
             {
                 string initHex = getter();
@@ -501,7 +499,7 @@ namespace FieldTakHub.Builder.Services
         }
 
         // =========================================================================
-        // MATEMATYKA GEODEZYJNA: DOKŁADNA SKALA 1:X, UKŁAD UTM / MGRS ORAZ WGS84
+        // MATEMATYKA GEODEZYJNA: UKŁAD POLSKI EPSG:2180 (PUWG 1992), UTM ORAZ SKALA 1:X
         // =========================================================================
         private static (double W, double H) GetExactCanvasSize()
         {
@@ -566,6 +564,37 @@ namespace FieldTakHub.Builder.Services
         private static (double X, double Y) LatLonToEpsg3857(double lat, double lon) =>
             (lon * 20037508.34 / 180.0, Math.Log(Math.Tan((90.0 + lat) * Math.PI / 360.0)) / (Math.PI / 180.0) * 20037508.34 / 180.0);
 
+        // Dokładna transformacja WGS84 -> polski układ państwowy PUWG 1992 (EPSG:2180) w metrach (południk 19°E, k0 = 0.9993)
+        private static (double Easting, double Northing) LatLonToEpsg2180(double lat, double lon)
+        {
+            const double a = 6378137.0;
+            const double eccSquared = 0.00669438002290;
+            const double k0 = 0.9993;
+            const double lonOriginRad = 19.0 * Math.PI / 180.0;
+
+            double latRad = lat * Math.PI / 180.0;
+            double lonRad = lon * Math.PI / 180.0;
+
+            double eccPrimeSquared = eccSquared / (1.0 - eccSquared);
+            double N = a / Math.Sqrt(1.0 - eccSquared * Math.Sin(latRad) * Math.Sin(latRad));
+            double T = Math.Tan(latRad) * Math.Tan(latRad);
+            double C = eccPrimeSquared * Math.Cos(latRad) * Math.Cos(latRad);
+            double A = Math.Cos(latRad) * (lonRad - lonOriginRad);
+
+            double M = a * ((1.0 - eccSquared / 4.0 - 3.0 * eccSquared * eccSquared / 64.0) * latRad
+                - (3.0 * eccSquared / 8.0 + 3.0 * eccSquared * eccSquared / 32.0) * Math.Sin(2.0 * latRad)
+                + (15.0 * eccSquared * eccSquared / 256.0) * Math.Sin(4.0 * latRad));
+
+            double easting = k0 * N * (A + (1.0 - T + C) * A * A * A / 6.0
+                + (5.0 - 18.0 * T + T * T + 72.0 * C - 58.0 * eccPrimeSquared) * Math.Pow(A, 5) / 120.0) + 500000.0;
+
+            double northing = k0 * (M + N * Math.Tan(latRad) * (A * A / 2.0
+                + (5.0 - T + 9.0 * C + 4.0 * C * C) * Math.Pow(A, 4) / 24.0
+                + (61.0 - 58.0 * T + T * T + 600.0 * C - 330.0 * eccPrimeSquared) * Math.Pow(A, 6) / 720.0)) - 5300000.0;
+
+            return (easting, northing);
+        }
+
         private static void LatLonToUtmMeters(double lat, double lon, int forcedZone, out double easting, out double northing)
         {
             const double a = 6378137.0;
@@ -604,26 +633,79 @@ namespace FieldTakHub.Builder.Services
             return string.Create(CultureInfo.InvariantCulture, $"{minX:0.00},{minY:0.00},{maxX:0.00},{maxY:0.00}");
         }
 
+        private static string GetEpsg2180TileBBox(int tx, int ty, int zoom)
+        {
+            var (latNorth, lonWest) = TileXYToLatLon(tx, ty, zoom);
+            var (latSouth, lonEast) = TileXYToLatLon(tx + 1, ty + 1, zoom);
+            var (minE, minN) = LatLonToEpsg2180(latSouth, lonWest);
+            var (maxE, maxN) = LatLonToEpsg2180(latNorth, lonEast);
+            return string.Create(CultureInfo.InvariantCulture, $"{minE:0.00},{minN:0.00},{maxE:0.00},{maxN:0.00}");
+        }
+
         private static string BuildTileUrl(TacticalMapLayerDef layer, int tx, int ty, int zoom)
         {
             if (layer.IsWmsEpsg3857)
-                return layer.UrlTemplate.Replace("{bbox}", GetEpsg3857BBox(tx, ty, zoom)).Replace("{w}", "256").Replace("{h}", "256");
+            {
+                return layer.UrlTemplate
+                    .Replace("{bbox2180}", GetEpsg2180TileBBox(tx, ty, zoom))
+                    .Replace("{bbox}", GetEpsg3857BBox(tx, ty, zoom))
+                    .Replace("{w}", "256")
+                    .Replace("{h}", "256");
+            }
             return layer.UrlTemplate.Replace("{z}", zoom.ToString()).Replace("{x}", tx.ToString()).Replace("{y}", ty.ToString());
         }
 
-        private static string BuildFullViewportWmsUrl(string template, double w, double h, double centerLat, double centerLon)
+        // Buduje zapytanie WMS w układzie EPSG:2180 i dobiera WIDTH/HEIGHT tak, aby serwer Geoportalu NIGDY nie wyłączył warstwy przy zmianie skali!
+        private static string BuildFullViewportWmsUrl(string layerId, string template, double w, double h, double centerLat, double centerLon)
         {
             double tilePx = GetScaledTileSizePx();
             var (cx, cy) = LatLonToTileXY(centerLat, centerLon, _zoom);
             var (nwLat, nwLon) = TileXYToLatLon(cx - (w / 2.0) / tilePx, cy - (h / 2.0) / tilePx, _zoom);
             var (seLat, seLon) = TileXYToLatLon(cx + (w / 2.0) / tilePx, cy + (h / 2.0) / tilePx, _zoom);
 
-            var (minX, minY) = LatLonToEpsg3857(seLat, nwLon);
-            var (maxX, maxY) = LatLonToEpsg3857(nwLat, seLon);
-            int reqW = Math.Clamp((int)Math.Round(w), 300, 1550);
-            int reqH = Math.Clamp((int)Math.Round(h), 300, 1550);
-            string bbox = string.Create(CultureInfo.InvariantCulture, $"{minX:0.00},{minY:0.00},{maxX:0.00},{maxY:0.00}");
-            return template.Replace("{bbox}", bbox).Replace("{w}", reqW.ToString()).Replace("{h}", reqH.ToString());
+            var (minE, minN) = LatLonToEpsg2180(seLat, nwLon);
+            var (maxE, maxN) = LatLonToEpsg2180(nwLat, seLon);
+            var (minX3857, minY3857) = LatLonToEpsg3857(seLat, nwLon);
+            var (maxX3857, maxY3857) = LatLonToEpsg3857(nwLat, seLon);
+
+            double bboxWidthMeters = Math.Max(50.0, Math.Abs(maxE - minE));
+            double aspect = Math.Max(0.25, w / Math.Max(1.0, h));
+
+            // Bazowa szerokość zapytania w pikselach (wyższa dla dużych skal, aby utrzymać ostrość i nie przekroczyć MaxScaleDenominator)
+            double desiredW = Math.Clamp(w * 1.35, 680.0, 1750.0);
+
+            // Dopasowanie parametru WIDTH pod wewnętrzne limity skali (ServerScale = bboxWidthMeters / (reqW * 0.00028)) na serwerach GUGiK:
+            if (layerId == "geoportal_topo")
+            {
+                // TOPO wyłącza się poniżej skali ~1:4500 oraz powyżej ~1:24000
+                double minWForMaxScale = bboxWidthMeters / (21000.0 * 0.00028);
+                double maxWForMinScale = bboxWidthMeters / (5200.0 * 0.00028);
+                desiredW = Math.Clamp(desiredW, minWForMaxScale, Math.Max(minWForMaxScale, maxWForMinScale));
+            }
+            else if (layerId == "geoportal_lidar")
+            {
+                // GRID1 LiDAR ma limit MaxScaleDenominator = 1:10000
+                double minWForLidar = bboxWidthMeters / (9200.0 * 0.00028);
+                desiredW = Math.Max(desiredW, minWForLidar);
+            }
+            else
+            {
+                // Ortofotomapa Standard / HighRes — utrzymuj wysoką rozdzielczość przy oddalaniu (1:10000 - 1:25000)
+                double minWForOrto = bboxWidthMeters / (14000.0 * 0.00028);
+                desiredW = Math.Max(desiredW, minWForOrto);
+            }
+
+            int reqW = Math.Clamp((int)Math.Round(desiredW), 320, 1950);
+            int reqH = Math.Clamp((int)Math.Round(reqW / aspect), 320, 1950);
+
+            string bbox2180 = string.Create(CultureInfo.InvariantCulture, $"{minE:0.00},{minN:0.00},{maxE:0.00},{maxN:0.00}");
+            string bbox3857 = string.Create(CultureInfo.InvariantCulture, $"{minX3857:0.00},{minY3857:0.00},{maxX3857:0.00},{maxY3857:0.00}");
+
+            return template
+                .Replace("{bbox2180}", bbox2180)
+                .Replace("{bbox}", bbox3857)
+                .Replace("{w}", reqW.ToString())
+                .Replace("{h}", reqH.ToString());
         }
 
         private static Point ApplyShift45DegreeSnap(Point anchorPt, Point rawTargetPt, out bool isSnapped, out int snappedAngleDeg)
@@ -645,9 +727,6 @@ namespace FieldTakHub.Builder.Services
             return new Point(anchorPt.X + dist * Math.Cos(snappedRad), anchorPt.Y + dist * Math.Sin(snappedRad));
         }
 
-        // =========================================================================
-        // NIEZAWODNE POBIERANIE GEOPORTAL WMS (Z DETEKCJĄ PUSTEGO HIGH-RES) + KAFELKOWANIE RAM
-        // =========================================================================
         private static BitmapSource DecodeBytesToFrozenBitmap(byte[] validBytes)
         {
             if (validBytes == null || validBytes.Length < 128) return null;
@@ -686,29 +765,33 @@ namespace FieldTakHub.Builder.Services
                         if (IsValidImagePayload(data)) { primaryBytes = data; break; }
                     }
                     catch { }
-                    if (attempt == 0) await Task.Delay(80, ct);
+                    if (attempt == 0) await Task.Delay(70, ct);
                 }
 
                 BitmapSource primaryBmp = DecodeBytesToFrozenBitmap(primaryBytes);
 
-                // Jeżeli Geoportal HighResolution zwrócił pusty biały arkusz (brak ortofotomapy 5cm w tym lesie), automatycznie pobierz StandardResolution!
-                if ((primaryBmp == null || (!string.IsNullOrEmpty(fallbackUrl) && IsMostlyBlankOrWhiteWmsBitmap(primaryBmp))) &&
+                if ((primaryBmp == null || (!string.IsNullOrEmpty(fallbackUrl) && IsBlankWhiteWmsPayload(primaryBytes, primaryBmp))) &&
                     !string.IsNullOrEmpty(fallbackUrl) && !ct.IsCancellationRequested)
                 {
-                    try
+                    for (int fbAttempt = 0; fbAttempt < 2 && !ct.IsCancellationRequested; fbAttempt++)
                     {
-                        byte[] fbData = await Http.GetByteArrayAsync(fallbackUrl, ct);
-                        if (IsValidImagePayload(fbData))
+                        try
                         {
-                            var fbBmp = DecodeBytesToFrozenBitmap(fbData);
-                            if (fbBmp != null)
+                            byte[] fbData = await Http.GetByteArrayAsync(fallbackUrl, ct);
+                            if (IsValidImagePayload(fbData))
                             {
-                                primaryBmp = fbBmp;
-                                primaryBytes = fbData;
+                                var fbBmp = DecodeBytesToFrozenBitmap(fbData);
+                                if (fbBmp != null && !IsBlankWhiteWmsPayload(fbData, fbBmp))
+                                {
+                                    primaryBmp = fbBmp;
+                                    primaryBytes = fbData;
+                                    break;
+                                }
                             }
                         }
+                        catch { }
+                        if (fbAttempt == 0) await Task.Delay(70, ct);
                     }
-                    catch { }
                 }
 
                 if (primaryBmp != null)
@@ -804,7 +887,20 @@ namespace FieldTakHub.Builder.Services
             }
         }
 
-        // Podczas przeciągania myszą przesuwa płynnie arkusz Geoportalu WMS (60 FPS bez zalewania serwera GUGiK zapytaniami)
+        // Natychmiastowo skaluje i przesuwa arkusz Geoportalu WMS (0 ms opóźnienia przy zmianie skali oraz przesuwaniu myszą!)
+        private static Transform BuildWmsInstantViewportTransform(double w, double h)
+        {
+            Point loadedCenterScreenPt = LatLonToScreen(_wmsLoadedCenterLat, _wmsLoadedCenterLon, w, h);
+            double dx = loadedCenterScreenPt.X - (w / 2.0);
+            double dy = loadedCenterScreenPt.Y - (h / 2.0);
+            double scaleRatio = (double)Math.Max(100, _wmsLoadedScaleDenominator) / Math.Max(100, _targetScaleDenominator);
+
+            var tg = new TransformGroup();
+            tg.Children.Add(new ScaleTransform(scaleRatio, scaleRatio, w / 2.0, h / 2.0));
+            tg.Children.Add(new TranslateTransform(dx, dy));
+            return tg;
+        }
+
         private static void RefreshTileCanvasesOnly()
         {
             if (_tileCanvas == null || _activeLayer == null || _fullScreenOverlay?.Visibility != Visibility.Visible) return;
@@ -813,21 +909,16 @@ namespace FieldTakHub.Builder.Services
 
             if (_activeLayer.IsWmsEpsg3857)
             {
-                Point loadedCenterScreenPt = LatLonToScreen(_wmsLoadedCenterLat, _wmsLoadedCenterLon, w, h);
-                double dx = loadedCenterScreenPt.X - (w / 2.0);
-                double dy = loadedCenterScreenPt.Y - (h / 2.0);
-                _tileCanvas.RenderTransform = new TranslateTransform(dx, dy);
+                var wmsTransform = BuildWmsInstantViewportTransform(w, h);
+                _tileCanvas.RenderTransform = wmsTransform;
                 if (_lidarTileCanvas != null)
-                    _lidarTileCanvas.RenderTransform = new TranslateTransform(dx, dy);
+                    _lidarTileCanvas.RenderTransform = wmsTransform;
             }
             else
             {
                 RenderLayerTilesSmoothly(_tileCanvas, _activeLayer, w, h, 1.0, ct);
                 if (_lidarTileCanvas != null && _showLidarSingleWms)
-                {
-                    Point loadedCenterScreenPt = LatLonToScreen(_wmsLoadedCenterLat, _wmsLoadedCenterLon, w, h);
-                    _lidarTileCanvas.RenderTransform = new TranslateTransform(loadedCenterScreenPt.X - (w / 2.0), loadedCenterScreenPt.Y - (h / 2.0));
-                }
+                    _lidarTileCanvas.RenderTransform = BuildWmsInstantViewportTransform(w, h);
             }
         }
 
@@ -855,13 +946,9 @@ namespace FieldTakHub.Builder.Services
             _dimmerRect.Visibility = Visibility.Visible;
             _dimmerRect.Opacity = _mapDimmerOpacity;
 
-            // Dla warstw kafelkowych (Google, ESRI, OSM) odśwież kafelki z pamięci RAM od razu
-            if (!_activeLayer.IsWmsEpsg3857)
-            {
-                RenderLayerTilesSmoothly(_tileCanvas, _activeLayer, w, h, 1.0, _renderCts.Token);
-            }
+            // Natychmiastowo zaktualizuj transformację skali/przesunięcia na ekranie (0 ms reakcji wizualnej!)
+            RefreshTileCanvasesOnly();
 
-            // Dla Geoportal WMS oraz nakładki LiDAR ISOK pobierz pojedynczy pełny arkusz WMS z podwójnym buforowaniem (stary arkusz zostaje na ekranie aż do pobrania nowego!)
             if (_activeLayer.IsWmsEpsg3857 || _showLidarSingleWms)
             {
                 _wmsSheetCts?.Cancel();
@@ -870,15 +957,34 @@ namespace FieldTakHub.Builder.Services
                 var ct = wmsCts.Token;
 
                 double reqLat = _centerLat, reqLon = _centerLon;
+                int reqScale = _targetScaleDenominator;
 
                 try
                 {
+                    // Krótki debounce (140 ms) chroniący serwer Geoportalu przed zalaniem zapytaniami podczas kręcenia rolką myszy
+                    await Task.Delay(140, ct);
+                    if (ct.IsCancellationRequested) return;
+
+                    if (_statusText != null && _activeLayer.IsWmsEpsg3857)
+                        _statusText.Text = $"⏳ Pobieranie arkusza Geoportal WMS ({_activeLayer.Name.Split('(')[0].Trim()} | Skala 1:{reqScale:N0})...";
+
                     Task<BitmapSource> baseWmsTask = Task.FromResult<BitmapSource>(null);
                     if (_activeLayer.IsWmsEpsg3857)
                     {
-                        string primaryUrl = BuildFullViewportWmsUrl(_activeLayer.UrlTemplate, w, h, reqLat, reqLon);
-                        string fallbackUrl = !string.IsNullOrEmpty(_activeLayer.FallbackUrlTemplate)
-                            ? BuildFullViewportWmsUrl(_activeLayer.FallbackUrlTemplate, w, h, reqLat, reqLon)
+                        // Przy skalach >= 1:7500 HighResolution nie jest renderowany przez GUGiK, więc od razu używamy StandardResolution
+                        string primaryTpl = (_activeLayer.Id == "geoportal_hires" && reqScale >= 7500)
+                            ? _activeLayer.FallbackUrlTemplate
+                            : (_activeLayer.Id == "geoportal_lidar" && reqScale > 6500
+                                ? _activeLayer.FallbackUrlTemplate
+                                : _activeLayer.UrlTemplate);
+
+                        string fallbackTpl = (_activeLayer.Id == "geoportal_hires" && reqScale >= 7500)
+                            ? Layers.First(l => l.Id == "geoportal_std").FallbackUrlTemplate
+                            : _activeLayer.FallbackUrlTemplate;
+
+                        string primaryUrl = BuildFullViewportWmsUrl(_activeLayer.Id, primaryTpl, w, h, reqLat, reqLon);
+                        string fallbackUrl = !string.IsNullOrEmpty(fallbackTpl)
+                            ? BuildFullViewportWmsUrl(_activeLayer.Id, fallbackTpl, w, h, reqLat, reqLon)
                             : null;
                         baseWmsTask = FetchDecodedImageAsync(primaryUrl, fallbackUrl, ct);
                     }
@@ -887,36 +993,52 @@ namespace FieldTakHub.Builder.Services
                     if (_showLidarSingleWms && _activeLayer.Id != "geoportal_lidar")
                     {
                         var lidarDef = Layers.First(l => l.Id == "geoportal_lidar");
-                        string lidarUrl = BuildFullViewportWmsUrl(lidarDef.UrlTemplate, w, h, reqLat, reqLon);
-                        string lidarFb = BuildFullViewportWmsUrl(lidarDef.FallbackUrlTemplate, w, h, reqLat, reqLon);
+                        string lTpl = reqScale > 6500 ? lidarDef.FallbackUrlTemplate : lidarDef.UrlTemplate;
+                        string lFbTpl = reqScale > 6500 ? lidarDef.UrlTemplate : lidarDef.FallbackUrlTemplate;
+                        string lidarUrl = BuildFullViewportWmsUrl("geoportal_lidar", lTpl, w, h, reqLat, reqLon);
+                        string lidarFb = BuildFullViewportWmsUrl("geoportal_lidar", lFbTpl, w, h, reqLat, reqLon);
                         lidarWmsTask = FetchDecodedImageAsync(lidarUrl, lidarFb, ct);
                     }
 
                     await Task.WhenAll(baseWmsTask, lidarWmsTask);
                     if (ct.IsCancellationRequested) return;
 
-                    _wmsLoadedCenterLat = reqLat;
-                    _wmsLoadedCenterLon = reqLon;
-
                     if (_activeLayer.IsWmsEpsg3857 && baseWmsTask.Result != null)
                     {
-                        _tileCanvas.RenderTransform = Transform.Identity;
+                        _wmsLoadedCenterLat = reqLat;
+                        _wmsLoadedCenterLon = reqLon;
+                        _wmsLoadedScaleDenominator = reqScale;
+
                         _tileCanvas.Children.Clear();
                         var img = new Image { Source = baseWmsTask.Result, Width = w, Height = h, Stretch = Stretch.Fill };
                         Canvas.SetLeft(img, 0); Canvas.SetTop(img, 0);
                         _tileCanvas.Children.Add(img);
+                        _tileCanvas.RenderTransform = BuildWmsInstantViewportTransform(w, h);
+
+                        if (_statusText != null)
+                            _statusText.Text = $"✓ Wczytano arkusz Geoportal WMS (Skala 1:{reqScale:N0}, układ EPSG:2180).";
+                    }
+                    else if (_activeLayer.IsWmsEpsg3857 && baseWmsTask.Result == null && _statusText != null)
+                    {
+                        _statusText.Text = $"⚠️ Serwer Geoportal WMS nie odpowiedział w skali 1:{reqScale:N0} — wyświetlono przeskalowany bufor.";
                     }
 
                     if (_lidarTileCanvas != null)
                     {
-                        _lidarTileCanvas.RenderTransform = Transform.Identity;
                         _lidarTileCanvas.Children.Clear();
                         if (_showLidarSingleWms && lidarWmsTask.Result != null)
                         {
+                            if (!_activeLayer.IsWmsEpsg3857)
+                            {
+                                _wmsLoadedCenterLat = reqLat;
+                                _wmsLoadedCenterLon = reqLon;
+                                _wmsLoadedScaleDenominator = reqScale;
+                            }
                             _lidarTileCanvas.Opacity = _lidarOpacity;
                             var lImg = new Image { Source = lidarWmsTask.Result, Width = w, Height = h, Stretch = Stretch.Fill };
                             Canvas.SetLeft(lImg, 0); Canvas.SetTop(lImg, 0);
                             _lidarTileCanvas.Children.Add(lImg);
+                            _lidarTileCanvas.RenderTransform = BuildWmsInstantViewportTransform(w, h);
                         }
                     }
                 }
@@ -929,7 +1051,7 @@ namespace FieldTakHub.Builder.Services
         }
 
         // =========================================================================
-        // RYSOWANIE SIATKI MGRS / WGS84 Z WYRAŹNYMI KASETONAMI RGB DLA KEYPAD I ĆWIARTEK
+        // RYSOWANIE SIATKI MGRS / WGS84 Z KASETONAMI RGB DLA KEYPAD I ĆWIARTEK
         // =========================================================================
         private static FormattedText GetCachedGlyph(string text, double fontSize, Brush fg, string keyPrefix)
         {
@@ -969,7 +1091,6 @@ namespace FieldTakHub.Builder.Services
             dc.DrawText(ft, new Point(x, y));
         }
 
-        // Dedykowane rysowanie cyfr Keypad (1-9) oraz Ćwiartek (A-D) z wybranym kolorem RGB tekstu, wybranym kolorem RGB tła i cieniem kontrastowym
         private static void DrawFastSubCellBadgeOnContext(DrawingContext dc, string text, double centerX, double centerY, Brush textBrush, Brush bgBrush, Pen boxBorderPen, Brush shadowBrush, double fontSize, string cachePrefix)
         {
             if (string.IsNullOrEmpty(text)) return;
@@ -983,7 +1104,6 @@ namespace FieldTakHub.Builder.Services
                 dc.DrawRoundedRectangle(bgBrush, boxBorderPen, new Rect(tx - padX, ty - padY, ft.Width + padX * 2, ft.Height + padY * 2), 3.0, 3.0);
             }
 
-            // Kontrastowy obrys (cień) pod samą cyfrą, gwarantujący czytelność nawet na jasnych mapach
             var shadowFt = GetCachedGlyph(text, fontSize, shadowBrush, cachePrefix + "_SH");
             dc.DrawText(shadowFt, new Point(tx + 0.9, ty + 0.9));
             dc.DrawText(ft, new Point(tx, ty));
@@ -1193,7 +1313,7 @@ namespace FieldTakHub.Builder.Services
                         {
                             double sy = LatLonToScreen(lat, _centerLon, w, h).Y;
                             if (sy < 0 || sy > h) continue;
-                            if (useHalo) dc.DrawLine(mainHaloPen, new Point(0, sy), new Point(w, y: sy));
+                            if (useHalo) dc.DrawLine(mainHaloPen, new Point(0, sy), new Point(w, sy));
                             dc.DrawLine(mainPen, new Point(0, sy), new Point(w, sy));
                             DrawFastBadgeOnContext(dc, $"{lat:0.0000}°N", 6, sy + 3, mainBrush, mainFontSz, _mainGridOpacity, mainCacheKey);
                         }
@@ -1331,9 +1451,6 @@ namespace FieldTakHub.Builder.Services
             }
         }
 
-        // =========================================================================
-        // SERIALIZACJA STANU MAPY (W TYM KOLORÓW RGB CYFR I TŁA KEYPAD / ĆWIARTEK)
-        // =========================================================================
         public static JsonObject ExportMapStateToJson()
         {
             var root = new JsonObject

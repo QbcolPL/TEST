@@ -162,7 +162,6 @@ namespace FieldTakHub.Builder.Services
                     var navBorder = new Border { Background = TacticalConfigPanel.BrushInputBg, BorderBrush = TacticalConfigPanel.BrushAccent, BorderThickness = new Thickness(0, 0, 0, 1.5), Padding = new Thickness(16, 0, 16, 0) };
                     var navDock = new DockPanel();
 
-                    // Przyciski zapisu i wczytywania wersji roboczej całego projektu (.fthproj) na górnym pasku
                     var draftBtnsStack = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
                     var btnSaveDraft = MakeActionButton("💾 Zapisz projekt roboczy (.fthproj)", false, () =>
                     {
@@ -256,6 +255,9 @@ namespace FieldTakHub.Builder.Services
                 b.BorderBrush = isCurrent ? TacticalConfigPanel.BrushAccent : TacticalConfigPanel.BrushInputBorder;
             }
 
+            // Natychmiast przeskaluj obecny podkład i siatkę, a w tle pobierz nowy arkusz WMS dla nowej skali
+            RefreshTileCanvasesOnly();
+            RedrawVectorsOnly();
             _ = RenderMapTilesAsync();
         }
 
@@ -363,12 +365,21 @@ namespace FieldTakHub.Builder.Services
 
             _layerComboBox = new ComboBox { ItemsSource = Layers, SelectedIndex = 0, Height = 26, FontSize = 10.5, Margin = new Thickness(0, 0, 0, 6), Tag = "INJECTED" };
             TacticalConfigPanel.ApplyUnifiedComboBoxTheme(_layerComboBox, win);
-            _layerComboBox.SelectionChanged += (s, e) => { if (_layerComboBox.SelectedItem is TacticalMapLayerDef def) { _activeLayer = def; TacticalConfigPanel.MarkDirty(); _ = RenderMapTilesAsync(); } };
-            sec1.Children.Add(TacticalConfigPanel.FieldBox("Podkład bazowy (Geoportal WMS 512px / Google / ESRI / OSM):", _layerComboBox));
+            _layerComboBox.SelectionChanged += (s, e) =>
+            {
+                if (_layerComboBox.SelectedItem is TacticalMapLayerDef def)
+                {
+                    _activeLayer = def;
+                    _tileCanvas?.Children.Clear();
+                    TacticalConfigPanel.MarkDirty();
+                    _ = RenderMapTilesAsync();
+                }
+            };
+            sec1.Children.Add(TacticalConfigPanel.FieldBox("Podkład bazowy (Geoportal WMS EPSG:2180 / Google / ESRI / OSM):", _layerComboBox));
 
             var lidarBox = new Border { Background = TacticalConfigPanel.BrushInputBg, BorderBrush = TacticalConfigPanel.BrushAccent, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(6), Padding = new Thickness(8, 6, 8, 6) };
             var lidarStack = new StackPanel();
-            var chkLidar = new CheckBox { Content = "Nałóż rzeźbę LiDAR ISOK (kafelki WMS 512px w pamięci RAM)", IsChecked = false, Foreground = TacticalConfigPanel.BrushAccent, FontWeight = FontWeights.SemiBold, FontSize = 10 };
+            var chkLidar = new CheckBox { Content = "Nałóż rzeźbę LiDAR ISOK (układ EPSG:2180 GRID1 / GRID5)", IsChecked = false, Foreground = TacticalConfigPanel.BrushAccent, FontWeight = FontWeights.SemiBold, FontSize = 10 };
             chkLidar.Checked += (s, e) => { _showLidarSingleWms = true; TacticalConfigPanel.MarkDirty(); _ = RenderMapTilesAsync(); };
             chkLidar.Unchecked += (s, e) => { _showLidarSingleWms = false; TacticalConfigPanel.MarkDirty(); _lidarTileCanvas?.Children.Clear(); };
             lidarStack.Children.Add(chkLidar);
@@ -381,6 +392,7 @@ namespace FieldTakHub.Builder.Services
             sec1.Children.Add(lidarBox);
             leftStack.Children.Add(WrapCard(sec1));
 
+            // SEKCJA 2: SIATKA MGRS / WGS84 & KOLORY RGB (ZDEFINIOWANA W ENGINE.CS)
             leftStack.Children.Add(WrapCard(BuildSection2GridAndColorsUI(win)));
 
             // SEKCJA 3: ZNACZNIKI (FLAGA = DÓŁ MASZTU), STREFY (✥), ETYKIETY & SHIFT 45°
@@ -781,7 +793,6 @@ namespace FieldTakHub.Builder.Services
                     _fastOverlayRenderer?.InvalidateVisual();
                 }
 
-                // Płynne przewijanie mapy z doczytywaniem kafelków w locie (z pamięci RAM i w tle z sieci)
                 if (_isPanningMap && _activeTool == "PAN")
                 {
                     double dx = p.X - _mouseDownPoint.X, dy = p.Y - _mouseDownPoint.Y;
@@ -790,10 +801,10 @@ namespace FieldTakHub.Builder.Services
                     _centerLat = Math.Clamp(_dragStartLat + dy * ((360.0 / scaledWorldSize) * Math.Cos(_dragStartLat * Math.PI / 180.0)), -85.0, 85.0);
 
                     _fastOverlayRenderer?.InvalidateVisual();
+                    RefreshTileCanvasesOnly();
                     if ((DateTime.UtcNow - _lastPanTileRefreshUtc).TotalMilliseconds >= 32)
                     {
                         _lastPanTileRefreshUtc = DateTime.UtcNow;
-                        RefreshTileCanvasesOnly();
                         RedrawVectorsOnly();
                     }
                 }
@@ -860,7 +871,7 @@ namespace FieldTakHub.Builder.Services
             mainGrid.Children.Add(bodyGrid);
 
             var bottomBar = new Border { Background = TacticalConfigPanel.BrushInputBg, BorderBrush = TacticalConfigPanel.BrushCardBorder, BorderThickness = new Thickness(0, 1, 0, 0), Padding = new Thickness(16, 0, 16, 0) };
-            _statusText = new TextBlock { Text = "Gotowy. Płynne przewijanie mapy z buforem RAM, geodezyjna siatka MGRS/WGS84 1:1 ze skalą, auto-pamięć sesji oraz wybór miejsca zapisu plików.", Foreground = TacticalConfigPanel.BrushAccent, FontSize = 11, VerticalAlignment = VerticalAlignment.Center };
+            _statusText = new TextBlock { Text = "Gotowy. Geoportal WMS w natywnym układzie EPSG:2180 (PUWG-92) dla każdej skali, RGB dla Keypad/Ćwiartek oraz pamięć sesji.", Foreground = TacticalConfigPanel.BrushAccent, FontSize = 11, VerticalAlignment = VerticalAlignment.Center };
             bottomBar.Child = _statusText; Grid.SetRow(bottomBar, 1); mainGrid.Children.Add(bottomBar);
 
             UpdateOfflineTileEstimateUI();
@@ -957,17 +968,27 @@ namespace FieldTakHub.Builder.Services
             catch { return baseBytes; }
         }
 
+        // Pobiera pojedynczy kafelek do bazy Offline (.mbtiles / .sqlite) z obsługą układu EPSG:2180 oraz automatycznym fallbackiem dla Geoportalu
         private static async Task<byte[]> FetchSingleOfflineTileBytesAsync(TacticalMapLayerDef layer, int tx, int ty, int zoom, CancellationToken ct)
         {
+            string bbox2180 = layer.IsWmsEpsg3857 ? GetEpsg2180TileBBox(tx, ty, zoom) : "";
+            string bbox3857 = layer.IsWmsEpsg3857 ? GetEpsg3857BBox(tx, ty, zoom) : "";
+            // Przy mniejszych zoomach (11-14) zamawiamy 512x512 px z WMS, aby serwer GUGiK nie wyłączył warstwy przez MaxScaleDenominator
+            string tileReqSz = (layer.IsWmsEpsg3857 && zoom <= 14) ? "512" : "256";
+
+            string primaryTpl = (layer.Id == "geoportal_hires" && zoom <= 15)
+                ? layer.FallbackUrlTemplate
+                : (layer.Id == "geoportal_lidar" && zoom <= 14 ? layer.FallbackUrlTemplate : layer.UrlTemplate);
+
             string url = layer.IsWmsEpsg3857
-                ? layer.UrlTemplate.Replace("{bbox}", GetEpsg3857BBox(tx, ty, zoom)).Replace("{w}", "256").Replace("{h}", "256")
+                ? primaryTpl.Replace("{bbox2180}", bbox2180).Replace("{bbox}", bbox3857).Replace("{w}", tileReqSz).Replace("{h}", tileReqSz)
                 : BuildTileUrl(layer, tx, ty, zoom);
 
             if (RawTileCache.TryGetValue(url, out var cached) && IsValidImagePayload(cached))
                 return cached;
 
             string fallbackUrl = (!string.IsNullOrEmpty(layer.FallbackUrlTemplate) && layer.IsWmsEpsg3857)
-                ? layer.FallbackUrlTemplate.Replace("{bbox}", GetEpsg3857BBox(tx, ty, zoom)).Replace("{w}", "256").Replace("{h}", "256")
+                ? layer.FallbackUrlTemplate.Replace("{bbox2180}", bbox2180).Replace("{bbox}", bbox3857).Replace("{w}", tileReqSz).Replace("{h}", tileReqSz)
                 : null;
 
             await TileThrottle.WaitAsync(ct);
@@ -980,12 +1001,16 @@ namespace FieldTakHub.Builder.Services
                         byte[] data = await Http.GetByteArrayAsync(url, ct);
                         if (IsValidImagePayload(data))
                         {
-                            if (RawTileCache.Count < 1500) RawTileCache[url] = data;
-                            return data;
+                            var bmp = DecodeBytesToFrozenBitmap(data);
+                            if (bmp != null && (!layer.IsWmsEpsg3857 || string.IsNullOrEmpty(fallbackUrl) || !IsBlankWhiteWmsPayload(data, bmp)))
+                            {
+                                if (RawTileCache.Count < 1500) RawTileCache[url] = data;
+                                return data;
+                            }
                         }
                     }
                     catch { }
-                    if (attempt == 0) await Task.Delay(80, ct);
+                    if (attempt == 0) await Task.Delay(75, ct);
                 }
 
                 if (!string.IsNullOrEmpty(fallbackUrl) && !ct.IsCancellationRequested)
@@ -1479,12 +1504,6 @@ namespace FieldTakHub.Builder.Services
             }
         }
 
-        private static Brush GetGridColorBrush(byte alpha = 230)
-        {
-            Color c = _gridColorName switch { "Turkusowy" => Color.FromArgb(alpha, 31, 224, 197), "Biały" => Color.FromArgb(alpha, 255, 255, 255), "Czerwony" => Color.FromArgb(alpha, 235, 64, 52), "Czarny" => Color.FromArgb(alpha, 15, 15, 15), _ => Color.FromArgb(alpha, 250, 208, 44) };
-            var b = new SolidColorBrush(c); b.Freeze(); return b;
-        }
-
         private static void AddHaloLabel(string text, double x, double y, Brush fg, double fontSize)
         {
             var b = new Border
@@ -1939,6 +1958,7 @@ namespace FieldTakHub.Builder.Services
 
                 bool grgTransparent = _kmzGrgMode.StartsWith("Przezroczysta");
                 if (grgTransparent) await RenderMapTilesAsync(true);
+                else await RenderMapTilesAsync(false);
                 byte[] pngBytes = CaptureMapCanvasPngBytes();
                 if (grgTransparent) await RenderMapTilesAsync(false);
 
@@ -1974,7 +1994,6 @@ namespace FieldTakHub.Builder.Services
             catch { }
         }
 
-        // Eksport samodzielnych plików .KMZ oraz .GPX z oknem wyboru miejsca i nazwy pliku (SaveFileDialog)
         private static async Task ExportStandaloneFilesAsync(Window win, string format)
         {
             try
@@ -2001,6 +2020,7 @@ namespace FieldTakHub.Builder.Services
 
                 bool grgTransparent = (format == "kmz" && _kmzGrgMode.StartsWith("Przezroczysta"));
                 if (grgTransparent) await RenderMapTilesAsync(true);
+                else await RenderMapTilesAsync(false);
                 byte[] pngBytes = CaptureMapCanvasPngBytes();
                 if (grgTransparent) await RenderMapTilesAsync(false);
 
@@ -2064,7 +2084,6 @@ namespace FieldTakHub.Builder.Services
             File.WriteAllText(gpxPath, sb.ToString(), Encoding.UTF8);
         }
 
-        // Eksport do pliku .PDF z oknem wyboru miejsca zapisu i nazwy pliku (SaveFileDialog)
         private static async Task ExportTacticalMapPdfAsync(Window win)
         {
             try
@@ -2092,6 +2111,9 @@ namespace FieldTakHub.Builder.Services
                 string outDir = System.IO.Path.GetDirectoryName(pdfPath) ?? defaultDir;
                 TacticalConfigPanel.LastExportDirectory = outDir;
                 TacticalConfigPanel.SaveSessionStateAuto(win);
+
+                // Upewnij się, że arkusz WMS dla wybranej skali został pobrany w pełnej ostrości 1:1 przed zrzutem do PDF
+                await RenderMapTilesAsync(false);
 
                 int pageW = landscape ? 1754 : 1240;
                 int pageH = landscape ? 1240 : 1754;
