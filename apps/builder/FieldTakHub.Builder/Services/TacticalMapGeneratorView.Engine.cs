@@ -1,5 +1,5 @@
 ﻿using System.Text.RegularExpressions;
-#pragma warning disable CS8600, CS8601, CS8602, CS8603, CS8604, CS8618, CS8625
+#pragma warning disable CS0414, CS8600, CS8601, CS8602, CS8603, CS8604, CS8618, CS8625
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
@@ -340,7 +340,7 @@ namespace FieldTakHub.Builder.Services
         private static double _subLabelBgOpacity = 0.82;
         private static double _mapDimmerOpacity = 0.0;
         private static double _lidarOpacity = 0.45;
-        private static string _gridColorName = "Żółty";
+        
         private static string _mainGridColorHex = "#FAD02C";
         private static string _subGridLineColorHex = "#1FE0C5";
         private static string _subLabelTextColorHex = "#FFFFFF";

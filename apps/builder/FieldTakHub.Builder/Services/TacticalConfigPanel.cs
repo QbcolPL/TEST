@@ -1,4 +1,4 @@
-﻿#pragma warning disable CS8600, CS8601, CS8602, CS8603, CS8604, CS8618, CS8625
+﻿#pragma warning disable CS0414, CS8600, CS8601, CS8602, CS8603, CS8604, CS8618, CS8625
 using System;
 using System.Collections.Generic;
 using System.ComponentModel;
@@ -73,7 +73,6 @@ namespace FieldTakHub.Builder.Services
         public string EnrollmentUri { get; set; } = "";
         public string OtsHost { get; set; } = "ggzstak.duckdns.org";
 
-        // Etap 2: Tabela kanałów głosowych (PMR / VHF / UHF / DMR), telefon alarmowy SOS oraz konfiguracja plakatu A4
         public string EmergencyPhone { get; set; } = "+48 600 000 000";
         public List<VoiceChannelModel> VoiceChannels { get; set; } = new List<VoiceChannelModel>();
         public bool PosterShowQr { get; set; } = true;
@@ -982,9 +981,7 @@ namespace FieldTakHub.Builder.Services
             idCard.Child = idGrid;
             mainStack.Children.Add(idCard);
 
-            // =====================================================================
             // UNIWERSALNA TABELA CZĘSTOTLIWOŚCI GŁOSOWYCH (PMR / VHF / UHF / DMR) + ALARM SOS MGRS
-            // =====================================================================
             var radioCard = new Border { Background = BrushItemBg, BorderBrush = BrushAccent, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(8), Padding = new Thickness(9), Margin = new Thickness(0, 0, 0, 8) };
             var radioStack = new StackPanel();
 
@@ -1103,9 +1100,7 @@ namespace FieldTakHub.Builder.Services
             radioCard.Child = radioStack;
             mainStack.Children.Add(radioCard);
 
-            // =====================================================================
-            // KONFIGURATOR ATAK-CIV (PLI, SIEĆ I WAŻNOŚĆ)
-            // =====================================================================
+            // KONFIGURATOR ATAK-CIV
             var atakCard = new Border { Background = BrushItemBg, BorderBrush = BrushTileBorder, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(8), Padding = new Thickness(9), Margin = new Thickness(0, 0, 0, 8) };
             var atakStack = new StackPanel();
             atakStack.Children.Add(new TextBlock { Text = "Konfiguracja raportowania ATAK-CIV (PLI, sieć i ważność)", Foreground = BrushAccent, FontWeight = FontWeights.Bold, FontSize = 11 });
@@ -1137,9 +1132,7 @@ namespace FieldTakHub.Builder.Services
             atakCard.Child = atakStack;
             mainStack.Children.Add(atakCard);
 
-            // =====================================================================
-            // KONFIGURACJA MESHTASTIC (LORA / AES-256 PSK)
-            // =====================================================================
+            // KONFIGURACJA MESHTASTIC
             var meshCard = new Border { Background = BrushItemBg, BorderBrush = BrushTileBorder, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(8), Padding = new Thickness(9), Margin = new Thickness(0, 0, 0, 8) };
             var meshStack = new StackPanel();
             meshStack.Children.Add(new TextBlock { Text = "Konfiguracja Meshtastic", Foreground = Brushes.White, FontWeight = FontWeights.Bold, FontSize = 11 });
@@ -1244,9 +1237,7 @@ namespace FieldTakHub.Builder.Services
             bottomSplitGrid.Children.Add(enrCard);
             mainStack.Children.Add(bottomSplitGrid);
 
-            // =====================================================================
             // CHECKBOXY ZAWARTOŚCI PLAKATU A4 SAFEZONE
-            // =====================================================================
             var posterCfgCard = new Border { Background = BrushItemBg, BorderBrush = BrushTileBorder, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(8), Padding = new Thickness(8), Margin = new Thickness(0, 0, 0, 8) };
             var posterCfgStack = new StackPanel();
             posterCfgStack.Children.Add(new TextBlock { Text = "🖨️ Konfigurator Plakatu A4 Safezone (Elementy widoczne na karcie):", Foreground = BrushAccent, FontWeight = FontWeights.Bold, FontSize = 10.5, Margin = new Thickness(0, 0, 0, 4) });
@@ -1596,9 +1587,6 @@ namespace FieldTakHub.Builder.Services
             ms.Write(manifestObj.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
         }
 
-        // =========================================================================
-        // DYNAMICZNY GENERATOR PLAKATU A4 SAFEZONE Z TABELĄ RADIOWĄ (PMR/VHF/DMR) I CHECKBOXAMI
-        // =========================================================================
         private static void RenderSafezoneA4PosterPng(string outputPath, string eventName, FactionProfileModel fac, string qrPayload, string sha256Hex)
         {
             const int width = 1240, height = 1754;
@@ -1609,14 +1597,12 @@ namespace FieldTakHub.Builder.Services
                 dc.DrawRectangle(BrushCardBg, null, new Rect(0, 0, width, height));
                 dc.DrawRoundedRectangle(null, new Pen(BrushAccent, 4), new Rect(28, 28, width - 56, height - 56), 18, 18);
 
-                // Górny baner w kolorze strony konfliktu
                 dc.DrawRoundedRectangle(facBrush, null, new Rect(64, 60, width - 128, 118), 14, 14);
                 DrawCenteredText(dc, "FIELD TAK HUB 2.4 — KARTA WDROŻENIOWA I ŁĄCZNOŚCI SAFEZONE", 22, Brushes.White, width / 2.0, 78, true);
                 DrawCenteredText(dc, $"OPERACJA: {eventName.ToUpperInvariant()}   •   STRONA: {fac.Name.ToUpperInvariant()}", 32, Brushes.White, width / 2.0, 116, true);
 
                 double curY = 205;
 
-                // 1. Kod QR wdrożenia (.ftak)
                 if (fac.PosterShowQr)
                 {
                     double qrBoxSize = (fac.PosterShowRadioTable && fac.PosterShowSteps) ? 450 : 540;
@@ -1626,7 +1612,6 @@ namespace FieldTakHub.Builder.Services
                     curY += qrBoxSize + 22;
                 }
 
-                // 2. Parametry techniczne OTS / LoRa Meshtastic
                 if (fac.PosterShowTechParams)
                 {
                     dc.DrawRoundedRectangle(BrushItemBg, new Pen(BrushTileBorder, 2), new Rect(64, curY, width - 128, 72), 10, 10);
@@ -1635,7 +1620,6 @@ namespace FieldTakHub.Builder.Services
                     curY += 94;
                 }
 
-                // 3. Uniwersalna Tabela Kanałów Głosowych (PMR / VHF / UHF / DMR) + Numer Alarmowy SOS
                 if (fac.PosterShowRadioTable)
                 {
                     var channels = (fac.VoiceChannels != null && fac.VoiceChannels.Count > 0)
@@ -1670,7 +1654,6 @@ namespace FieldTakHub.Builder.Services
                         rY += rowH;
                     }
 
-                    // Dolny pasek alarmowy SOS wewnątrz karty radiowej
                     string sosPhone = string.IsNullOrWhiteSpace(fac.EmergencyPhone) ? "Kanał Ratunkowy ORGA" : fac.EmergencyPhone;
                     dc.DrawRoundedRectangle(BrushRedMinus, null, new Rect(84, rY + 6, width - 168, 40), 6, 6);
                     DrawCenteredText(dc, $"🚨 NUMER ALARMOWY SOS MGRS (ORGA / MEDYK):  {sosPhone}", 19, Brushes.White, width / 2.0, rY + 14, true);
@@ -1678,7 +1661,6 @@ namespace FieldTakHub.Builder.Services
                     curY += tableH + 22;
                 }
 
-                // 4. Instrukcja 3 kroków wdrożenia dla graczy
                 if (fac.PosterShowSteps && curY < height - 160)
                 {
                     double stepsH = Math.Min(210, height - curY - 54);
@@ -1970,6 +1952,15 @@ namespace FieldTakHub.Builder.Services
             WriteConfigsToDirectory(tgt, _factions[0]);
         }
 
+        private static JsonObject GetOrCreateJsonObject(JsonObject parent, string key)
+        {
+            if (parent.TryGetPropertyValue(key, out JsonNode existingNode) && existingNode is JsonObject existingObj)
+                return existingObj;
+            var created = new JsonObject();
+            parent[key] = created;
+            return created;
+        }
+
         private static void WriteConfigsToDirectory(string tgt, FactionProfileModel fac = null)
         {
             if (string.IsNullOrWhiteSpace(tgt)) return;
@@ -1991,7 +1982,7 @@ namespace FieldTakHub.Builder.Services
                 root["neverExpires"] = (fac.ValidityHours == 0);
                 root["expiresAt"] = (fac.ValidityHours == 0) ? DateTimeOffset.UtcNow.AddYears(100).ToString("o") : DateTimeOffset.UtcNow.AddHours(fac.ValidityHours).ToString("o");
 
-                JsonObject atak = (root.TryGetPropertyValue("atak", out var an) && an is JsonObject ea) ? ea : (JsonObject)(root["atak"] = new JsonObject());
+                JsonObject atak = GetOrCreateJsonObject(root, "atak");
                 atak["locationReportingStrategy"] = fac.PliStrategy;
                 atak["constantReportingRateReliable"] = fac.ConstRateReliable;
                 atak["constantReportingRateUnreliable"] = fac.ConstRateUnreliable;
@@ -2003,15 +1994,15 @@ namespace FieldTakHub.Builder.Services
                 atak["dispatchLocationCotExternal"] = fac.DispatchCotExternal;
                 atak["enableNonStreamingConnections"] = fac.EnableMeshNonStreaming;
 
-                JsonObject ots = (root.TryGetPropertyValue("openTakServer", out var on) && on is JsonObject eo) ? eo : (JsonObject)(root["openTakServer"] = new JsonObject());
+                JsonObject ots = GetOrCreateJsonObject(root, "openTakServer");
                 ots["host"] = fac.OtsHost; ots["enrollmentUri"] = fac.EnrollmentUri; ots["gatewayEnabled"] = fac.GatewayEnabled;
 
-                JsonObject mesh = (root.TryGetPropertyValue("meshtastic", out var mn) && mn is JsonObject em) ? em : (JsonObject)(root["meshtastic"] = new JsonObject());
+                JsonObject mesh = GetOrCreateJsonObject(root, "meshtastic");
                 mesh["mode"] = fac.MeshMode; mesh["role"] = fac.DeviceRole; mesh["model"] = fac.HardwareModel;
                 mesh["region"] = fac.LoraRegion; mesh["modemPreset"] = fac.LoraModemPreset; mesh["hopLimit"] = fac.HopLimit;
                 mesh["channelName"] = fac.ChannelName; mesh["channelUrl"] = fac.ChannelUrl; mesh["psk"] = fac.Psk;
 
-                JsonObject lora = (mesh.TryGetPropertyValue("lora", out var ln) && ln is JsonObject el) ? ln : (JsonObject)(mesh["lora"] = new JsonObject());
+                JsonObject lora = GetOrCreateJsonObject(mesh, "lora");
                 lora["region"] = fac.LoraRegion; lora["modemPreset"] = fac.LoraModemPreset; lora["channelName"] = fac.ChannelName; lora["psk"] = fac.Psk;
 
                 File.WriteAllText(jsonPath, root.ToJsonString(new JsonSerializerOptions { WriteIndented = true }), Encoding.UTF8);
