@@ -482,6 +482,7 @@ namespace FieldTakHub.Builder.Services
                     if (_layerComboBox.SelectedItem is TacticalMapLayerDef def)
                     {
                         _activeLayer = def;
+                        _wmsLoadedScaleDenominator = -1;
                         if (!_isRebuildingMapControls) TacticalConfigPanel.MarkDirty();
                         RefreshTileCanvasesOnly();
                         _ = RenderMapTilesAsync();
@@ -493,23 +494,40 @@ namespace FieldTakHub.Builder.Services
                 var btnReloadTiles = MakeActionButton("🔄 Odśwież", false, () =>
                 {
                     PendingTileUrls.Clear();
+                    DecodedImageCache.Clear();
+                    _geoAnchoredBaseSheets.Clear();
+                    _geoAnchoredLidarSheets.Clear();
+                    _wmsLoadedScaleDenominator = -1;
                     RefreshTileCanvasesOnly();
                     _ = RenderMapTilesAsync();
                 });
                 btnReloadTiles.Height = 26;
                 btnReloadTiles.Padding = new Thickness(8, 0, 8, 0);
                 btnReloadTiles.Margin = new Thickness(6, 0, 0, 0);
-                btnReloadTiles.ToolTip = "Wymuś ponowne sprawdzenie i dociągnięcie kafelków podkładu mapowego";
+                btnReloadTiles.ToolTip = "Wyczyść bufor i wymuś ponowne pobranie podkładu z Geoportalu / LiDAR";
                 Grid.SetColumn(btnReloadTiles, 1);
                 layerRow.Children.Add(btnReloadTiles);
 
-                sec1.Children.Add(TacticalConfigPanel.FieldBox("Podkład bazowy (Strumieniowy Geoportal WMS / Google / ESRI / OSM):", layerRow));
+                sec1.Children.Add(TacticalConfigPanel.FieldBox("Podkład bazowy (Geoportal WMS EPSG:2180 / Google / ESRI / OSM):", layerRow));
 
                 var lidarBox = new Border { Background = TacticalConfigPanel.BrushInputBg, BorderBrush = TacticalConfigPanel.BrushAccent, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(6), Padding = new Thickness(8, 6, 8, 6) };
                 var lidarStack = new StackPanel();
-                var chkLidar = new CheckBox { Content = "Nałóż rzeźbę LiDAR ISOK (Strumieniowe kafelki WMS)", IsChecked = _showLidarSingleWms, Foreground = TacticalConfigPanel.BrushAccent, FontWeight = FontWeights.SemiBold, FontSize = 10 };
-                chkLidar.Checked += (s, e) => { _showLidarSingleWms = true; if (!_isRebuildingMapControls) TacticalConfigPanel.MarkDirty(); RefreshTileCanvasesOnly(); _ = RenderMapTilesAsync(); };
-                chkLidar.Unchecked += (s, e) => { _showLidarSingleWms = false; if (!_isRebuildingMapControls) TacticalConfigPanel.MarkDirty(); _lidarTileCanvas?.Children.Clear(); };
+                var chkLidar = new CheckBox { Content = "Nałóż rzeźbę LiDAR ISOK (Cieniowanie NMT GRID1 EPSG:2180)", IsChecked = _showLidarSingleWms, Foreground = TacticalConfigPanel.BrushAccent, FontWeight = FontWeights.SemiBold, FontSize = 10 };
+                chkLidar.Checked += (s, e) =>
+                {
+                    _showLidarSingleWms = true;
+                    _wmsLoadedLidarFlag = false;
+                    if (!_isRebuildingMapControls) TacticalConfigPanel.MarkDirty();
+                    RefreshTileCanvasesOnly();
+                    _ = RenderMapTilesAsync();
+                };
+                chkLidar.Unchecked += (s, e) =>
+                {
+                    _showLidarSingleWms = false;
+                    _wmsLoadedLidarFlag = false;
+                    if (!_isRebuildingMapControls) TacticalConfigPanel.MarkDirty();
+                    _lidarTileCanvas?.Children.Clear();
+                };
                 lidarStack.Children.Add(chkLidar);
                 lidarStack.Children.Add(MakeSliderRow("Przezroczystość rzeźby LiDAR ISOK:", 0.10, 0.95, _lidarOpacity, v => $"{(int)Math.Round(v * 100)}%", v =>
                 {
@@ -865,7 +883,6 @@ namespace FieldTakHub.Builder.Services
             Grid.SetColumn(_leftControlScrollViewer, 0);
             bodyGrid.Children.Add(_leftControlScrollViewer);
 
-            // PRAWA STRONA: SZYBKI SILNIK KAFELKOWY 60 FPS (_tileCanvas + _lidarTileCanvas + _fastOverlayRenderer + _interactiveCanvas)
             _viewportHostGrid = new Grid
             {
                 Background = TacticalConfigPanel.BrushInputBg,
@@ -924,7 +941,6 @@ namespace FieldTakHub.Builder.Services
                 _interactiveCanvas.CaptureMouse();
             };
 
-            // Jeśli użytkownik wyjedzie myszą poza okno i tam puści przycisk (utrata MouseCapture), automatycznie dokończ odświeżenie wszystkich kafelków!
             _interactiveCanvas.LostMouseCapture += (s, e) =>
             {
                 if (_isPanningMap)
@@ -1114,7 +1130,7 @@ namespace FieldTakHub.Builder.Services
             mainGrid.Children.Add(bodyGrid);
 
             var bottomBar = new Border { Background = TacticalConfigPanel.BrushInputBg, BorderBrush = TacticalConfigPanel.BrushCardBorder, BorderThickness = new Thickness(0, 1, 0, 0), Padding = new Thickness(16, 0, 16, 0) };
-            _statusText = new TextBlock { Text = "Gotowy. Strumieniowe kafelki Geoportal WMS z 3x Auto-Retry, Watchdogiem 1.1s, stałą siatką MGRS/WGS84 oraz pamięcią sesji.", Foreground = TacticalConfigPanel.BrushAccent, FontSize = 11, VerticalAlignment = VerticalAlignment.Center };
+            _statusText = new TextBlock { Text = "Gotowy. Stos Geodezyjnie Zakotwiczonych Arkuszy Geoportal WMS + Cieniowanie LiDAR ISOK (EPSG:2180) + Watchdog 750ms.", Foreground = TacticalConfigPanel.BrushAccent, FontSize = 11, VerticalAlignment = VerticalAlignment.Center };
             bottomBar.Child = _statusText; Grid.SetRow(bottomBar, 1); mainGrid.Children.Add(bottomBar);
 
             UpdateOfflineTileEstimateUI();
@@ -1211,7 +1227,6 @@ namespace FieldTakHub.Builder.Services
             catch { return baseBytes; }
         }
 
-        // Pobiera pojedynczy kafelek dla bazy Offline korzystając z tego samego silnika 3x Auto-Retry i Fallback GUGiK
         private static async Task<byte[]> FetchSingleOfflineTileBytesAsync(TacticalMapLayerDef layer, int tx, int ty, int zoom, CancellationToken ct)
         {
             string url = BuildTileUrl(layer, tx, ty, zoom);
@@ -1219,7 +1234,19 @@ namespace FieldTakHub.Builder.Services
                 return cached;
 
             string fallbackUrl = BuildFallbackTileUrl(layer, tx, ty, zoom);
-            var bmp = await FetchDecodedImageAsync(url, fallbackUrl, ct);
+            string secondFallbackUrl = null;
+            if (layer.IsWmsEpsg3857 && !string.IsNullOrEmpty(layer.SecondFallbackUrlTemplate))
+            {
+                string b3857 = GetEpsg3857BBox(tx, ty, zoom);
+                string b2180NE = GetEpsg2180TileBBoxNE(tx, ty, zoom);
+                string b2180EN = GetEpsg2180TileBBox(tx, ty, zoom);
+                string b4326 = GetEpsg4326TileBBox(tx, ty, zoom);
+                string sz = GetOptimalWmsTilePixelSize(layer.Id, zoom);
+                secondFallbackUrl = FillAllBBoxTokens(layer.SecondFallbackUrlTemplate, b3857, b2180NE, b2180EN, b4326, sz, sz);
+            }
+
+            bool checkWhite = layer.Id == "geoportal_hires" && zoom > 15;
+            var bmp = await FetchDecodedImageAsync(url, fallbackUrl, ct, secondFallbackUrl, checkWhite);
             if (RawTileCache.TryGetValue(url, out var fetchedBytes) && IsValidImagePayload(fetchedBytes))
                 return fetchedBytes;
 
