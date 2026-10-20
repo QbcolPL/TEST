@@ -125,10 +125,12 @@ namespace FieldTakHub.Builder.Services
         public static string LastKnownSourceDir { get; set; } = "";
         public static string LastExportDirectory { get; set; } = "";
         public static string CurrentDraftProjectPath { get; set; } = "";
+        public static string SavedEventName { get; set; } = "";
         public static bool IsWorkspaceDirty { get; set; } = false;
 
         public static Func<JsonObject> MapStateExportProvider { get; set; }
         public static Action<JsonObject> MapStateImportConsumer { get; set; }
+        private static JsonObject _pendingMapStateJson;
 
         internal static readonly SolidColorBrush BrushInputBg = CreateFrozenBrush(8, 19, 22);
         internal static readonly SolidColorBrush BrushInputBorder = CreateFrozenBrush(30, 66, 74);
@@ -164,20 +166,58 @@ namespace FieldTakHub.Builder.Services
         private static Button _injectedRefreshButton;
         private static FrameworkElement _factionsCardElement;
         private static WrapPanel _factionsWrapPanel;
-        private static bool _syncingValidity, _isRestoringSession, _closeConfirmed;
-        private static DispatcherTimer _previewTimer;
+        private static Window _mainHostWindow;
+        private static bool _syncingValidity, _isRestoringSession, _isSessionInitialized, _closeConfirmed;
+        private static DispatcherTimer _previewTimer, _debouncedAutoSaveTimer;
         private static readonly List<FactionProfileModel> _factions = new List<FactionProfileModel>();
 
         public static void MarkDirty()
         {
-            if (!_isRestoringSession) IsWorkspaceDirty = true;
+            if (_isRestoringSession || !_isSessionInitialized) return;
+            IsWorkspaceDirty = true;
+            TriggerDebouncedAutoSave();
         }
 
-        private static string GetAutoSessionFilePath()
+        private static void TriggerDebouncedAutoSave()
         {
-            string dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "FieldTakHub");
-            Directory.CreateDirectory(dir);
-            return Path.Combine(dir, "last_session_state_v24.json");
+            if (!_isSessionInitialized || _isRestoringSession || Application.Current == null) return;
+            try
+            {
+                if (_debouncedAutoSaveTimer == null)
+                {
+                    _debouncedAutoSaveTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(650) };
+                    _debouncedAutoSaveTimer.Tick += (_, __) =>
+                    {
+                        _debouncedAutoSaveTimer.Stop();
+                        SaveSessionStateAuto(_mainHostWindow);
+                    };
+                }
+                _debouncedAutoSaveTimer.Stop();
+                _debouncedAutoSaveTimer.Start();
+            }
+            catch { }
+        }
+
+        private static List<string> GetSessionStateFilePaths()
+        {
+            var paths = new List<string>();
+            try
+            {
+                string localAppDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "FieldTakHub");
+                Directory.CreateDirectory(localAppDir);
+                paths.Add(Path.Combine(localAppDir, "last_session_state_v24.json"));
+            }
+            catch { }
+
+            try
+            {
+                string portableDir = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "workspace");
+                Directory.CreateDirectory(portableDir);
+                paths.Add(Path.Combine(portableDir, "last_session_state_v24.json"));
+            }
+            catch { }
+
+            return paths;
         }
 
         private static List<VoiceChannelModel> CreateDefaultChannelsForSide(string sideName, int sideIdx)
@@ -199,7 +239,12 @@ namespace FieldTakHub.Builder.Services
             };
         }
 
-        internal static List<FactionProfileModel> GetInternalFactionsList() { EnsureDefaultFactions(); return _factions; }
+        internal static List<FactionProfileModel> GetInternalFactionsList()
+        {
+            EnsureDefaultFactions();
+            return _factions;
+        }
+
         public static List<(string Name, string Channel, string ColorHex, string Psk)> GetConfiguredFactions()
         {
             EnsureDefaultFactions();
@@ -233,21 +278,167 @@ namespace FieldTakHub.Builder.Services
             }
         }
 
+        // Jawna serializacja listy stron konfliktu do JsonArray (100% odporna na Single-File Trimming)
+        private static JsonArray SerializeFactionsToJsonArray()
+        {
+            EnsureDefaultFactions();
+            var arr = new JsonArray();
+            foreach (var f in _factions)
+            {
+                arr.Add(new JsonObject
+                {
+                    ["Name"] = f.Name ?? "BLUFOR",
+                    ["ColorHex"] = f.ColorHex ?? "#2684FF",
+                    ["PliStrategy"] = f.PliStrategy ?? "Constant",
+                    ["ConstRateReliable"] = f.ConstRateReliable,
+                    ["ConstRateUnreliable"] = f.ConstRateUnreliable,
+                    ["DynRateMax"] = f.DynRateMax,
+                    ["DynRateMin"] = f.DynRateMin,
+                    ["StationaryReliable"] = f.StationaryReliable,
+                    ["StationaryMesh"] = f.StationaryMesh,
+                    ["TcpTimeout"] = f.TcpTimeout,
+                    ["DispatchCotExternal"] = f.DispatchCotExternal,
+                    ["EnableMeshNonStreaming"] = f.EnableMeshNonStreaming,
+                    ["ValidityHours"] = f.ValidityHours,
+                    ["MeshMode"] = f.MeshMode ?? "HYBRID",
+                    ["DeviceRole"] = f.DeviceRole ?? "Auto",
+                    ["HardwareModel"] = f.HardwareModel ?? "generic_meshtastic",
+                    ["LoraRegion"] = f.LoraRegion ?? "EU_868",
+                    ["LoraModemPreset"] = f.LoraModemPreset ?? "SHORT_FAST",
+                    ["HopLimit"] = f.HopLimit,
+                    ["EnablePli"] = f.EnablePli,
+                    ["EnableGeoChat"] = f.EnableGeoChat,
+                    ["EnableOtsRelay"] = f.EnableOtsRelay,
+                    ["EnableFileTransfer"] = f.EnableFileTransfer,
+                    ["ChannelName"] = f.ChannelName ?? "GGZS-TAK",
+                    ["ChannelUrl"] = f.ChannelUrl ?? "",
+                    ["Psk"] = f.Psk ?? "",
+                    ["GatewayEnabled"] = f.GatewayEnabled,
+                    ["GatewayProfile"] = f.GatewayProfile ?? "generic_meshtastic",
+                    ["GatewayMode"] = f.GatewayMode ?? "ots_mqtt",
+                    ["GatewayProtocol"] = f.GatewayProtocol ?? "mqtt_tls",
+                    ["GatewayPort"] = f.GatewayPort,
+                    ["GatewayTopic"] = f.GatewayTopic ?? "opentakserver",
+                    ["SecretsExternal"] = f.SecretsExternal,
+                    ["EnrollmentUri"] = f.EnrollmentUri ?? "",
+                    ["OtsHost"] = f.OtsHost ?? "ggzstak.duckdns.org",
+                    ["EmergencyPhone"] = f.EmergencyPhone ?? "+48 600 000 000",
+                    ["PosterShowQr"] = f.PosterShowQr,
+                    ["PosterShowRadioTable"] = f.PosterShowRadioTable,
+                    ["PosterShowTechParams"] = f.PosterShowTechParams,
+                    ["PosterShowSteps"] = f.PosterShowSteps,
+                    ["VoiceChannels"] = SerializeVoiceChannelsToJsonArray(f.VoiceChannels)
+                });
+            }
+            return arr;
+        }
+
+        private static List<FactionProfileModel> DeserializeFactionsFromJsonArray(JsonArray fArr)
+        {
+            var result = new List<FactionProfileModel>();
+            if (fArr == null) return result;
+
+            string GetStr(JsonObject o, string k1, string k2, string defVal) =>
+                o[k1]?.ToString() ?? o[k2]?.ToString() ?? defVal;
+            int GetInt(JsonObject o, string k1, string k2, int defVal) =>
+                int.TryParse(o[k1]?.ToString() ?? o[k2]?.ToString(), out int v) ? v : defVal;
+            bool GetBool(JsonObject o, string k1, string k2, bool defVal) =>
+                bool.TryParse(o[k1]?.ToString() ?? o[k2]?.ToString(), out bool b) ? b : defVal;
+
+            int idx = 0;
+            foreach (var item in fArr.OfType<JsonObject>())
+            {
+                var fac = new FactionProfileModel
+                {
+                    Name = GetStr(item, "Name", "name", idx == 0 ? "BLUFOR" : "OPFOR"),
+                    ColorHex = GetStr(item, "ColorHex", "colorHex", idx == 0 ? "#2684FF" : "#EB4034"),
+                    PliStrategy = GetStr(item, "PliStrategy", "pliStrategy", "Constant"),
+                    ConstRateReliable = GetInt(item, "ConstRateReliable", "constRateReliable", 0),
+                    ConstRateUnreliable = GetInt(item, "ConstRateUnreliable", "constRateUnreliable", 1),
+                    DynRateMax = GetInt(item, "DynRateMax", "dynRateMax", 2),
+                    DynRateMin = GetInt(item, "DynRateMin", "dynRateMin", 20),
+                    StationaryReliable = GetInt(item, "StationaryReliable", "stationaryReliable", 180),
+                    StationaryMesh = GetInt(item, "StationaryMesh", "stationaryMesh", 30),
+                    TcpTimeout = GetInt(item, "TcpTimeout", "tcpTimeout", 20),
+                    DispatchCotExternal = GetBool(item, "DispatchCotExternal", "dispatchCotExternal", true),
+                    EnableMeshNonStreaming = GetBool(item, "EnableMeshNonStreaming", "enableMeshNonStreaming", true),
+                    ValidityHours = GetInt(item, "ValidityHours", "validityHours", 0),
+                    MeshMode = GetStr(item, "MeshMode", "meshMode", "HYBRID"),
+                    DeviceRole = GetStr(item, "DeviceRole", "deviceRole", "Auto"),
+                    HardwareModel = GetStr(item, "HardwareModel", "hardwareModel", "generic_meshtastic"),
+                    LoraRegion = GetStr(item, "LoraRegion", "loraRegion", "EU_868"),
+                    LoraModemPreset = GetStr(item, "LoraModemPreset", "loraModemPreset", "SHORT_FAST"),
+                    HopLimit = GetInt(item, "HopLimit", "hopLimit", 3),
+                    EnablePli = GetBool(item, "EnablePli", "enablePli", true),
+                    EnableGeoChat = GetBool(item, "EnableGeoChat", "enableGeoChat", true),
+                    EnableOtsRelay = GetBool(item, "EnableOtsRelay", "enableOtsRelay", true),
+                    EnableFileTransfer = GetBool(item, "EnableFileTransfer", "enableFileTransfer", false),
+                    ChannelName = GetStr(item, "ChannelName", "channelName", "GGZS-TAK"),
+                    ChannelUrl = GetStr(item, "ChannelUrl", "channelUrl", ""),
+                    Psk = GetStr(item, "Psk", "psk", TacticalConfigModel.GenerateRandomBase64Psk()),
+                    GatewayEnabled = GetBool(item, "GatewayEnabled", "gatewayEnabled", false),
+                    GatewayProfile = GetStr(item, "GatewayProfile", "gatewayProfile", "generic_meshtastic"),
+                    GatewayMode = GetStr(item, "GatewayMode", "gatewayMode", "ots_mqtt"),
+                    GatewayProtocol = GetStr(item, "GatewayProtocol", "gatewayProtocol", "mqtt_tls"),
+                    GatewayPort = GetInt(item, "GatewayPort", "gatewayPort", 8883),
+                    GatewayTopic = GetStr(item, "GatewayTopic", "gatewayTopic", "opentakserver"),
+                    SecretsExternal = GetBool(item, "SecretsExternal", "secretsExternal", true),
+                    EnrollmentUri = GetStr(item, "EnrollmentUri", "enrollmentUri", ""),
+                    OtsHost = GetStr(item, "OtsHost", "otsHost", "ggzstak.duckdns.org"),
+                    EmergencyPhone = GetStr(item, "EmergencyPhone", "emergencyPhone", "+48 600 000 000"),
+                    PosterShowQr = GetBool(item, "PosterShowQr", "posterShowQr", true),
+                    PosterShowRadioTable = GetBool(item, "PosterShowRadioTable", "posterShowRadioTable", true),
+                    PosterShowTechParams = GetBool(item, "PosterShowTechParams", "posterShowTechParams", true),
+                    PosterShowSteps = GetBool(item, "PosterShowSteps", "posterShowSteps", true),
+                    VoiceChannels = new List<VoiceChannelModel>()
+                };
+
+                var vcNode = (item["VoiceChannels"] ?? item["voiceChannels"]) as JsonArray;
+                if (vcNode != null && vcNode.Count > 0)
+                {
+                    foreach (var chObj in vcNode.OfType<JsonObject>())
+                    {
+                        fac.VoiceChannels.Add(new VoiceChannelModel
+                        {
+                            RoleName = GetStr(chObj, "roleName", "RoleName", "Kanał"),
+                            BandType = GetStr(chObj, "bandType", "BandType", "PMR"),
+                            FreqMhz = GetStr(chObj, "freqMhz", "FreqMhz", "CH 1"),
+                            ToneOrCode = GetStr(chObj, "toneOrCode", "ToneOrCode", "Brak tonu")
+                        });
+                    }
+                }
+                if (fac.VoiceChannels.Count == 0)
+                    fac.VoiceChannels = CreateDefaultChannelsForSide(fac.Name, idx);
+
+                result.Add(fac);
+                idx++;
+            }
+            return result;
+        }
+
         public static JsonObject BuildFullWorkspaceStateJson(Window win)
         {
             EnsureDefaultFactions();
+            string evName = GetEventNameFromWindow(win);
+            if (!string.IsNullOrWhiteSpace(evName) && evName != "Operacja_TAK")
+                SavedEventName = evName;
+
             var root = new JsonObject
             {
                 ["schemaVersion"] = "2.4-draft",
                 ["savedAt"] = DateTimeOffset.UtcNow.ToString("o"),
-                ["eventName"] = GetEventNameFromWindow(win),
+                ["eventName"] = !string.IsNullOrWhiteSpace(SavedEventName) ? SavedEventName : evName,
                 ["lastSourceDir"] = LastKnownSourceDir ?? "",
                 ["lastExportDir"] = LastExportDirectory ?? "",
-                ["factions"] = JsonSerializer.SerializeToNode(_factions)
+                ["factions"] = SerializeFactionsToJsonArray()
             };
             if (MapStateExportProvider != null)
             {
                 try { root["mapState"] = MapStateExportProvider.Invoke(); } catch { }
+            }
+            else if (_pendingMapStateJson != null)
+            {
+                try { root["mapState"] = JsonNode.Parse(_pendingMapStateJson.ToJsonString()); } catch { }
             }
             return root;
         }
@@ -263,24 +454,33 @@ namespace FieldTakHub.Builder.Services
                 if (root["lastExportDir"] != null && !string.IsNullOrWhiteSpace(root["lastExportDir"].ToString()))
                     LastExportDirectory = root["lastExportDir"].ToString();
 
-                if (root["eventName"] != null)
-                    SetEventNameInWindow(win, root["eventName"].ToString());
+                if (root["eventName"] != null && !string.IsNullOrWhiteSpace(root["eventName"].ToString()))
+                {
+                    SavedEventName = root["eventName"].ToString();
+                    SetEventNameInWindow(win, SavedEventName);
+                }
 
                 if (root["factions"] is JsonArray fArr && fArr.Count > 0)
                 {
-                    var loaded = JsonSerializer.Deserialize<List<FactionProfileModel>>(fArr.ToJsonString());
-                    if (loaded != null && loaded.Count > 0)
+                    var loaded = DeserializeFactionsFromJsonArray(fArr);
+                    if (loaded.Count > 0)
                     {
                         _factions.Clear();
                         _factions.AddRange(loaded);
                         EnsureDefaultFactions();
-                        if (win != null) RebuildWrappedFactionPanels(win);
+                        SyncActiveFactionToDefaultModel();
+                        if (win != null && _factionsWrapPanel != null)
+                            RebuildWrappedFactionPanels(win);
                     }
                 }
 
-                if (root["mapState"] is JsonObject mapObj && MapStateImportConsumer != null)
+                if (root["mapState"] is JsonObject mapObj)
                 {
-                    MapStateImportConsumer.Invoke(mapObj);
+                    _pendingMapStateJson = JsonNode.Parse(mapObj.ToJsonString()) as JsonObject;
+                    if (MapStateImportConsumer != null)
+                    {
+                        MapStateImportConsumer.Invoke(_pendingMapStateJson);
+                    }
                 }
             }
             catch { }
@@ -290,12 +490,30 @@ namespace FieldTakHub.Builder.Services
             }
         }
 
+        public static void ConsumePendingMapStateIfAny()
+        {
+            if (_pendingMapStateJson != null && MapStateImportConsumer != null)
+            {
+                bool prev = _isRestoringSession;
+                _isRestoringSession = true;
+                try { MapStateImportConsumer.Invoke(_pendingMapStateJson); }
+                catch { }
+                finally { _isRestoringSession = prev; }
+            }
+        }
+
         public static void SaveSessionStateAuto(Window win = null)
         {
+            // Nie nadpisuj zapisanej sesji na dysku, dopóki aplikacja nie zakończyła wczytywania stanu początkowego!
+            if (!_isSessionInitialized || _isRestoringSession) return;
             try
             {
-                var json = BuildFullWorkspaceStateJson(win);
-                File.WriteAllText(GetAutoSessionFilePath(), json.ToJsonString(new JsonSerializerOptions { WriteIndented = true }), Encoding.UTF8);
+                var jsonObj = BuildFullWorkspaceStateJson(win ?? _mainHostWindow);
+                string payload = jsonObj.ToJsonString(new JsonSerializerOptions { WriteIndented = true });
+                foreach (string path in GetSessionStateFilePaths())
+                {
+                    try { File.WriteAllText(path, payload, Encoding.UTF8); } catch { }
+                }
             }
             catch { }
         }
@@ -304,22 +522,33 @@ namespace FieldTakHub.Builder.Services
         {
             try
             {
-                string path = GetAutoSessionFilePath();
-                if (!File.Exists(path)) return;
-                var node = JsonNode.Parse(File.ReadAllText(path, Encoding.UTF8)) as JsonObject;
-                if (node != null)
+                string bestPath = GetSessionStateFilePaths()
+                    .Where(File.Exists)
+                    .OrderByDescending(File.GetLastWriteTimeUtc)
+                    .FirstOrDefault();
+
+                if (!string.IsNullOrEmpty(bestPath))
                 {
-                    ApplyFullWorkspaceStateJson(win, node);
-                    IsWorkspaceDirty = false;
+                    string raw = File.ReadAllText(bestPath, Encoding.UTF8);
+                    if (JsonNode.Parse(raw) is JsonObject node)
+                    {
+                        ApplyFullWorkspaceStateJson(win ?? _mainHostWindow, node);
+                        IsWorkspaceDirty = false;
+                    }
                 }
             }
             catch { }
+            finally
+            {
+                _isSessionInitialized = true;
+            }
         }
 
         public static bool SaveDraftProjectDialog(Window win)
         {
             try
             {
+                _isSessionInitialized = true;
                 string evName = GetEventNameFromWindow(win);
                 string initDir = !string.IsNullOrWhiteSpace(LastExportDirectory) && Directory.Exists(LastExportDirectory)
                     ? LastExportDirectory
@@ -371,6 +600,7 @@ namespace FieldTakHub.Builder.Services
                 if (node != null)
                 {
                     ApplyFullWorkspaceStateJson(win, node);
+                    _isSessionInitialized = true;
                     SaveSessionStateAuto(win);
                     IsWorkspaceDirty = false;
                     return true;
@@ -382,8 +612,9 @@ namespace FieldTakHub.Builder.Services
 
         private static void OnMainWindowClosing(Window win, CancelEventArgs e)
         {
-            if (_closeConfirmed) return;
+            _isSessionInitialized = true;
             SaveSessionStateAuto(win);
+            if (_closeConfirmed) return;
 
             int choice = 0;
             var dlg = new Window
@@ -472,6 +703,7 @@ namespace FieldTakHub.Builder.Services
 
             if (choice == 0) { e.Cancel = true; return; }
             if (choice == 1 && !SaveDraftProjectDialog(win)) { e.Cancel = true; return; }
+            SaveSessionStateAuto(win);
             _closeConfirmed = true;
         }
 
@@ -579,6 +811,13 @@ namespace FieldTakHub.Builder.Services
         public static void AttachToMainWindow(Window win)
         {
             if (Application.Current == null || win == null) return;
+            _mainHostWindow = win;
+
+            // KROK KRYTYCZNY: Wczytaj zapisaną sesję z dysku PRZED utworzeniem jakichkolwiek kart i kontrolek UI!
+            if (!_isSessionInitialized)
+            {
+                LoadSessionStateAuto(win);
+            }
             EnsureDefaultFactions();
 
             void Init()
@@ -590,6 +829,9 @@ namespace FieldTakHub.Builder.Services
                     foreach (var c in combos) ApplyUnifiedComboBoxTheme(c, win);
 
                     RemoveStandaloneLegacyCardsAndInsertFactions(win);
+
+                    if (!string.IsNullOrWhiteSpace(SavedEventName))
+                        SetEventNameInWindow(win, SavedEventName);
 
                     var allBtns = new List<Button>();
                     FindVisualChildren(win, allBtns);
@@ -644,6 +886,7 @@ namespace FieldTakHub.Builder.Services
                     }
 
                     TacticalMapGeneratorView.AttachFullScreenTab(win);
+                    ConsumePendingMapStateIfAny();
                     HookNativeValidityControls(win);
                 }
                 catch { }
@@ -656,6 +899,11 @@ namespace FieldTakHub.Builder.Services
                 win.SetValue(IsHookedProperty, true);
                 win.AddHandler(UIElement.PreviewMouseLeftButtonDownEvent, new MouseButtonEventHandler((_, __) => ApplyIndefiniteValidityBeforeAction(win)), true);
                 win.Closing += (_, e) => OnMainWindowClosing(win, e);
+
+                if (Application.Current != null)
+                {
+                    Application.Current.Exit += (_, __) => SaveSessionStateAuto(win);
+                }
 
                 _previewTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(1800) };
                 _previewTimer.Tick += async (_, __) =>
@@ -676,14 +924,17 @@ namespace FieldTakHub.Builder.Services
                 };
                 _previewTimer.Start();
 
-                win.Loaded += async (_, __) =>
+                // Wywołaj odświeżenie po pełnym wyrenderowaniu drzewa wizualnego (niezależnie od tego, czy win.IsLoaded było już true!)
+                _ = win.Dispatcher.BeginInvoke(new Action(async () =>
                 {
                     Init();
-                    LoadSessionStateAuto(win);
+                    if (!string.IsNullOrWhiteSpace(SavedEventName))
+                        SetEventNameInWindow(win, SavedEventName);
+                    ConsumePendingMapStateIfAny();
                     var res = await ForceSizeUpdateAsync(win);
                     if (_injectedRefreshButton != null)
                         _injectedRefreshButton.Content = $"Odśwież / Skalkuluj (Plików: {res.FileCount} | {FormatBytes(res.TotalBytes)})";
-                };
+                }), DispatcherPriority.ContextIdle);
             }
         }
 
@@ -792,7 +1043,6 @@ namespace FieldTakHub.Builder.Services
             return wrapperStack;
         }
 
-        // Szersze kafelki stron konfliktu, aby cała Tabela Kanałów Głosowych mieściła długie nazwy i częstotliwości bez ucinania
         private static void AdjustFactionCardsWidth(double availableWidth)
         {
             if (_factionsWrapPanel == null || availableWidth <= 100) return;
@@ -985,9 +1235,7 @@ namespace FieldTakHub.Builder.Services
             idCard.Child = idGrid;
             mainStack.Children.Add(idCard);
 
-            // =====================================================================
-            // UNIWERSALNA TABELA CZĘSTOTLIWOŚCI GŁOSOWYCH (POPRAWIONE PROPORCJE BEZ UCINANIA TEKSTU)
-            // =====================================================================
+            // UNIWERSALNA TABELA CZĘSTOTLIWOŚCI GŁOSOWYCH (PMR / VHF / UHF / DMR) + ALARM SOS MGRS
             var radioCard = new Border { Background = BrushItemBg, BorderBrush = BrushAccent, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(8), Padding = new Thickness(10, 8, 10, 8), Margin = new Thickness(0, 0, 0, 8) };
             var radioStack = new StackPanel();
 
@@ -1225,7 +1473,7 @@ namespace FieldTakHub.Builder.Services
             meshBtnBar.Children.Add(SmallActBtn("Open", () => TryOpenFolderInExplorer(GetPrimarySourceDirectory(win))));
             meshBtnBar.Children.Add(SmallActBtn("Copy", () => { try { Clipboard.SetText(!string.IsNullOrWhiteSpace(fac.ChannelUrl) ? fac.ChannelUrl : fac.Psk); meshStatusTxt.Text = "✓ Skopiowano do schowka."; } catch { } }));
             meshBtnBar.Children.Add(SmallActBtn("Clear", () => { chUrlBox.Text = ""; fac.ChannelUrl = ""; }));
-                        meshBtnBar.Children.Add(SmallActBtn("USB", () => MeshtasticUsbProvisionerView.ShowUsbProvisionerForFaction(win, fac.Name)));
+            meshBtnBar.Children.Add(SmallActBtn("🔌 USB", () => MeshtasticUsbProvisionerView.ShowUsbProvisionerForFaction(win, fac.Name)));
             meshStack.Children.Add(meshBtnBar);
             meshCard.Child = meshStack;
             mainStack.Children.Add(meshCard);
@@ -1493,24 +1741,26 @@ namespace FieldTakHub.Builder.Services
 
         internal static string GetEventNameFromWindow(Window win)
         {
-            if (win == null) return "Operacja_TAK";
-            try
+            if (win != null)
             {
-                var tbs = new List<TextBlock>(); FindVisualChildren(win, tbs);
-                foreach (var tb in tbs)
-                    if (tb.Text != null && (tb.Text.Contains("Nazwa wydarzenia") || tb.Text.Contains("Nazwa paczki")))
-                    {
-                        var parent = GetAnyParent(tb);
-                        if (parent != null)
+                try
+                {
+                    var tbs = new List<TextBlock>(); FindVisualChildren(win, tbs);
+                    foreach (var tb in tbs)
+                        if (tb.Text != null && (tb.Text.Contains("Nazwa wydarzenia") || tb.Text.Contains("Nazwa paczki")))
                         {
-                            var siblings = new List<TextBox>(); FindVisualChildren(parent, siblings);
-                            var nonEmpty = siblings.FirstOrDefault(x => !string.IsNullOrWhiteSpace(x.Text));
-                            if (nonEmpty != null) return SanitizeFileName(nonEmpty.Text.Trim());
+                            var parent = GetAnyParent(tb);
+                            if (parent != null)
+                            {
+                                var siblings = new List<TextBox>(); FindVisualChildren(parent, siblings);
+                                var nonEmpty = siblings.FirstOrDefault(x => !string.IsNullOrWhiteSpace(x.Text));
+                                if (nonEmpty != null) return SanitizeFileName(nonEmpty.Text.Trim());
+                            }
                         }
-                    }
+                }
+                catch { }
             }
-            catch { }
-            return "Operacja_TAK";
+            return !string.IsNullOrWhiteSpace(SavedEventName) ? SavedEventName : "Operacja_TAK";
         }
 
         private static void SetEventNameInWindow(Window win, string eventName)
@@ -1527,7 +1777,20 @@ namespace FieldTakHub.Builder.Services
                         {
                             var siblings = new List<TextBox>(); FindVisualChildren(parent, siblings);
                             var targetBox = siblings.FirstOrDefault();
-                            if (targetBox != null) { targetBox.Text = eventName; break; }
+                            if (targetBox != null)
+                            {
+                                targetBox.Text = eventName;
+                                if (!(bool)targetBox.GetValue(IsHookedProperty))
+                                {
+                                    targetBox.SetValue(IsHookedProperty, true);
+                                    targetBox.TextChanged += (_, __) =>
+                                    {
+                                        SavedEventName = SanitizeFileName(targetBox.Text.Trim());
+                                        MarkDirty();
+                                    };
+                                }
+                                break;
+                            }
                         }
                     }
             }
@@ -1882,7 +2145,7 @@ namespace FieldTakHub.Builder.Services
                 foreach (var file in Directory.GetFiles(sourceDir, "*", SearchOption.AllDirectories))
                 {
                     string fileName = Path.GetFileName(file);
-                    if (string.IsNullOrEmpty(fileName) || fileName.StartsWith(".") || fileName.StartsWith("README", StringComparison.OrdinalIgnoreCase) || fileName.EndsWith(".fthproj", StringComparison.OrdinalIgnoreCase) || fileName.Equals("WORKSPACE_HELP.txt", StringComparison.OrdinalIgnoreCase)) continue;
+                    if (string.IsNullOrEmpty(fileName) || fileName.StartsWith(".") || fileName.StartsWith("README", StringComparison.OrdinalIgnoreCase) || fileName.EndsWith(".fthproj", StringComparison.OrdinalIgnoreCase) || fileName.Equals("last_session_state_v24.json", StringComparison.OrdinalIgnoreCase) || fileName.Equals("WORKSPACE_HELP.txt", StringComparison.OrdinalIgnoreCase)) continue;
                     long len = 0; try { len = new FileInfo(file).Length; } catch { continue; }
                     string rel = Path.GetRelativePath(sourceDir, file).Replace('\\', '/').ToLowerInvariant();
                     string ext = Path.GetExtension(fileName).ToLowerInvariant();
@@ -1983,7 +2246,7 @@ namespace FieldTakHub.Builder.Services
         {
             if (string.IsNullOrWhiteSpace(tgt) || tgt.Contains("fth-analyze-", StringComparison.OrdinalIgnoreCase)) return;
             LastKnownSourceDir = tgt;
-            if (Application.Current == null) return;
+            if (Application.Current == null || !_isSessionInitialized) return;
             EnsureDefaultFactions();
             WriteConfigsToDirectory(tgt, _factions[0]);
         }

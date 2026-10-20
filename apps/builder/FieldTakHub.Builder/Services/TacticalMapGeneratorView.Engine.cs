@@ -498,6 +498,7 @@ namespace FieldTakHub.Builder.Services
                         swatch.Background = TacticalConfigPanel.BrushFromHex(picked, Colors.White);
                         lbl.Text = picked.ToUpperInvariant();
                         GlyphCache.Clear();
+                ImportExtraMapUiState(root);
                         TacticalConfigPanel.MarkDirty();
                         _fastOverlayRenderer?.InvalidateVisual();
                     }
@@ -513,7 +514,8 @@ namespace FieldTakHub.Builder.Services
             sec2.Children.Add(rgbGrid);
 
             sec2.Children.Add(MakeSliderRow("Grubość linii siatki (głównej i pomocniczej):", 0.5, 3.0, _gridThicknessMultiplier, v => $"{v:0.1}x", v => { _gridThicknessMultiplier = Math.Round(v, 1); _fastOverlayRenderer?.InvalidateVisual(); }));
-            sec2.Children.Add(MakeSliderRow("Rozmiar / grubość czcionki współrzędnych (MGRS i Keypad):", 0.7, 2.0, _fontScaleMultiplier, v => $"{v:0.1}x", v => { _fontScaleMultiplier = Math.Round(v, 1); GlyphCache.Clear(); _fastOverlayRenderer?.InvalidateVisual(); }));
+            sec2.Children.Add(MakeSliderRow("Rozmiar / grubość czcionki współrzędnych (MGRS i Keypad):", 0.7, 2.0, _fontScaleMultiplier, v => $"{v:0.1}x", v => { _fontScaleMultiplier = Math.Round(v, 1); GlyphCache.Clear();
+                ImportExtraMapUiState(root); _fastOverlayRenderer?.InvalidateVisual(); }));
             sec2.Children.Add(MakeSliderRow("Widoczność (alfa) głównych linii i opisów (MGRS / WGS84):", 0.05, 1.0, _mainGridOpacity, v => $"{(int)Math.Round(v * 100)}%", v => { _mainGridOpacity = Math.Round(v, 2); _fastOverlayRenderer?.InvalidateVisual(); }));
             sec2.Children.Add(MakeSliderRow("Widoczność (alfa) podziałki wewnętrznej (Keypad 1-9 / Ćwiartki):", 0.0, 1.0, _subGridOpacity, v => $"{(int)Math.Round(v * 100)}%", v => { _subGridOpacity = Math.Round(v, 2); _fastOverlayRenderer?.InvalidateVisual(); }));
             sec2.Children.Add(MakeSliderRow("Krycie tła (kasetonu) pod cyframi Keypad / Ćwiartek:", 0.0, 1.0, _subLabelBgOpacity, v => $"{(int)Math.Round(v * 100)}%", v => { _subLabelBgOpacity = Math.Round(v, 2); _fastOverlayRenderer?.InvalidateVisual(); }));
@@ -1176,6 +1178,7 @@ namespace FieldTakHub.Builder.Services
             string key = $"{keyPrefix}_{text}_{fontSize:0.0}";
             if (GlyphCache.TryGetValue(key, out var ft)) return ft;
             if (GlyphCache.Count > 600) GlyphCache.Clear();
+                ImportExtraMapUiState(root);
             var created = new FormattedText(text ?? "", CultureInfo.InvariantCulture, FlowDirection.LeftToRight, BoldSegoeTypeface, fontSize, fg, 1.0);
             GlyphCache[key] = created;
             return created;
@@ -1693,6 +1696,7 @@ namespace FieldTakHub.Builder.Services
                 });
             }
             root["objects"] = arr;
+            ExportExtraMapUiState(root);
             return root;
         }
 
@@ -1779,6 +1783,7 @@ namespace FieldTakHub.Builder.Services
                 }
 
                 GlyphCache.Clear();
+                ImportExtraMapUiState(root);
                 if (_fmtComboBox != null) _fmtComboBox.SelectedItem = _selectedSheet;
                 if (_oriComboBox != null) _oriComboBox.SelectedItem = _sheetOrientation;
                 if (_layerComboBox != null) _layerComboBox.SelectedItem = _activeLayer;
