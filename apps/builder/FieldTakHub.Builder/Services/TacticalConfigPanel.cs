@@ -12,6 +12,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
@@ -146,6 +147,8 @@ namespace FieldTakHub.Builder.Services
         internal static readonly SolidColorBrush BrushGreenPlus = CreateFrozenBrush(34, 197, 94);
         internal static readonly SolidColorBrush BrushRedMinus = CreateFrozenBrush(239, 68, 68);
 
+        private static readonly Dictionary<string, SolidColorBrush> HexBrushPool = new Dictionary<string, SolidColorBrush>(StringComparer.OrdinalIgnoreCase);
+
         internal static SolidColorBrush CreateFrozenBrush(byte r, byte g, byte b)
         {
             var brush = new SolidColorBrush(Color.FromRgb(r, g, b));
@@ -155,21 +158,48 @@ namespace FieldTakHub.Builder.Services
 
         internal static SolidColorBrush BrushFromHex(string hex, Color fallback)
         {
-            try { if (!string.IsNullOrWhiteSpace(hex)) { var c = (Color)ColorConverter.ConvertFromString(hex.Trim()); return CreateFrozenBrush(c.R, c.G, c.B); } } catch { }
-            return CreateFrozenBrush(fallback.R, fallback.G, fallback.B);
+            string key = string.IsNullOrWhiteSpace(hex) ? $"FB_{fallback.R}_{fallback.G}_{fallback.B}" : hex.Trim();
+            lock (HexBrushPool)
+            {
+                if (HexBrushPool.TryGetValue(key, out var cached)) return cached;
+                SolidColorBrush created;
+                try
+                {
+                    if (!string.IsNullOrWhiteSpace(hex))
+                    {
+                        var c = (Color)ColorConverter.ConvertFromString(hex.Trim());
+                        created = CreateFrozenBrush(c.R, c.G, c.B);
+                    }
+                    else created = CreateFrozenBrush(fallback.R, fallback.G, fallback.B);
+                }
+                catch
+                {
+                    created = CreateFrozenBrush(fallback.R, fallback.G, fallback.B);
+                }
+                if (HexBrushPool.Count > 300) HexBrushPool.Clear();
+                HexBrushPool[key] = created;
+                return created;
+            }
         }
 
         private static readonly DependencyProperty IsHookedProperty =
             DependencyProperty.RegisterAttached("IsHooked", typeof(bool), typeof(TacticalConfigPanel), new PropertyMetadata(false));
+
+        private static readonly JsonSerializerOptions IndentedJsonOptions = new JsonSerializerOptions { WriteIndented = true };
 
         private static Style _darkComboBoxStyle, _darkComboBoxItemStyle;
         private static Button _injectedRefreshButton;
         private static FrameworkElement _factionsCardElement;
         private static WrapPanel _factionsWrapPanel;
         private static Window _mainHostWindow;
+        private static TextBox _cachedEventNameBox;
+        private static readonly Dictionary<string, TextBlock> _cachedPreviewValueLabels = new Dictionary<string, TextBlock>(StringComparer.OrdinalIgnoreCase);
+        private static bool _legacyCardsRemoved;
         private static bool _syncingValidity, _isRestoringSession, _isSessionInitialized, _closeConfirmed;
+        private static int _bgSaveInProgress;
         private static DispatcherTimer _previewTimer, _debouncedAutoSaveTimer;
         private static readonly List<FactionProfileModel> _factions = new List<FactionProfileModel>();
+        private static List<string> _cachedSessionPaths;
 
         public static void MarkDirty()
         {
@@ -185,11 +215,11 @@ namespace FieldTakHub.Builder.Services
             {
                 if (_debouncedAutoSaveTimer == null)
                 {
-                    _debouncedAutoSaveTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(650) };
+                    _debouncedAutoSaveTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(850) };
                     _debouncedAutoSaveTimer.Tick += (_, __) =>
                     {
                         _debouncedAutoSaveTimer.Stop();
-                        SaveSessionStateAuto(_mainHostWindow);
+                        SaveSessionStateBackground(_mainHostWindow);
                     };
                 }
                 _debouncedAutoSaveTimer.Stop();
@@ -200,6 +230,9 @@ namespace FieldTakHub.Builder.Services
 
         private static List<string> GetSessionStateFilePaths()
         {
+            if (_cachedSessionPaths != null && _cachedSessionPaths.Count > 0)
+                return _cachedSessionPaths;
+
             var paths = new List<string>();
             try
             {
@@ -217,6 +250,7 @@ namespace FieldTakHub.Builder.Services
             }
             catch { }
 
+            _cachedSessionPaths = paths;
             return paths;
         }
 
@@ -278,7 +312,6 @@ namespace FieldTakHub.Builder.Services
             }
         }
 
-        // Jawna serializacja listy stron konfliktu do JsonArray (100% odporna na Single-File Trimming)
         private static JsonArray SerializeFactionsToJsonArray()
         {
             EnsureDefaultFactions();
@@ -502,14 +535,46 @@ namespace FieldTakHub.Builder.Services
             }
         }
 
+        // Nieblokujący zapis w tle wywoływany przez timer po edycji kontrolek
+        private static void SaveSessionStateBackground(Window win = null)
+        {
+            if (!_isSessionInitialized || _isRestoringSession) return;
+            if (Interlocked.CompareExchange(ref _bgSaveInProgress, 1, 0) != 0) return;
+
+            try
+            {
+                var jsonObj = BuildFullWorkspaceStateJson(win ?? _mainHostWindow);
+                var paths = GetSessionStateFilePaths();
+                _ = Task.Run(() =>
+                {
+                    try
+                    {
+                        string payload = jsonObj.ToJsonString(IndentedJsonOptions);
+                        foreach (string path in paths)
+                        {
+                            try { File.WriteAllText(path, payload, Encoding.UTF8); } catch { }
+                        }
+                    }
+                    catch { }
+                    finally
+                    {
+                        Interlocked.Exchange(ref _bgSaveInProgress, 0);
+                    }
+                });
+            }
+            catch
+            {
+                Interlocked.Exchange(ref _bgSaveInProgress, 0);
+            }
+        }
+
         public static void SaveSessionStateAuto(Window win = null)
         {
-            // Nie nadpisuj zapisanej sesji na dysku, dopóki aplikacja nie zakończyła wczytywania stanu początkowego!
             if (!_isSessionInitialized || _isRestoringSession) return;
             try
             {
                 var jsonObj = BuildFullWorkspaceStateJson(win ?? _mainHostWindow);
-                string payload = jsonObj.ToJsonString(new JsonSerializerOptions { WriteIndented = true });
+                string payload = jsonObj.ToJsonString(IndentedJsonOptions);
                 foreach (string path in GetSessionStateFilePaths())
                 {
                     try { File.WriteAllText(path, payload, Encoding.UTF8); } catch { }
@@ -569,7 +634,7 @@ namespace FieldTakHub.Builder.Services
                 CurrentDraftProjectPath = dlg.FileName;
 
                 var root = BuildFullWorkspaceStateJson(win);
-                File.WriteAllText(dlg.FileName, root.ToJsonString(new JsonSerializerOptions { WriteIndented = true }), Encoding.UTF8);
+                File.WriteAllText(dlg.FileName, root.ToJsonString(IndentedJsonOptions), Encoding.UTF8);
                 SaveSessionStateAuto(win);
                 IsWorkspaceDirty = false;
                 return true;
@@ -813,7 +878,6 @@ namespace FieldTakHub.Builder.Services
             if (Application.Current == null || win == null) return;
             _mainHostWindow = win;
 
-            // KROK KRYTYCZNY: Wczytaj zapisaną sesję z dysku PRZED utworzeniem jakichkolwiek kart i kontrolek UI!
             if (!_isSessionInitialized)
             {
                 LoadSessionStateAuto(win);
@@ -846,43 +910,46 @@ namespace FieldTakHub.Builder.Services
                         }
                     }
 
-                    var allBorders = new List<Border>();
-                    FindVisualChildren(win, allBorders);
-                    Border previewBorder = allBorders.Where(b =>
+                    if (_injectedRefreshButton == null)
                     {
-                        var tbs = new List<TextBlock>(); FindVisualChildren(b, tbs);
-                        return tbs.Count >= 8 && tbs.Count <= 25 &&
-                               tbs.Any(t => t.Text != null && t.Text.StartsWith("Pliki paczki", StringComparison.OrdinalIgnoreCase)) &&
-                               tbs.Any(t => t.Text != null && t.Text.StartsWith("Mapy", StringComparison.OrdinalIgnoreCase));
-                    }).OrderBy(b => { var l = new List<TextBlock>(); FindVisualChildren(b, l); return l.Count; }).FirstOrDefault();
-
-                    if (previewBorder != null && GetAnyParent(previewBorder) is Panel previewParent && _injectedRefreshButton == null)
-                    {
-                        _injectedRefreshButton = new Button
+                        var allBorders = new List<Border>();
+                        FindVisualChildren(win, allBorders);
+                        Border previewBorder = allBorders.Where(b =>
                         {
-                            Content = "Odśwież / Skalkuluj zawartość (folder source)",
-                            Height = 32,
-                            Margin = new Thickness(0, 8, 0, 14),
-                            Background = BrushButtonAccent,
-                            Foreground = BrushDarkFg,
-                            FontWeight = FontWeights.Bold,
-                            Cursor = Cursors.Hand,
-                            BorderThickness = new Thickness(0),
-                            Tag = "INJECTED_BTN"
-                        };
-                        Grid.SetRow(_injectedRefreshButton, Grid.GetRow(previewBorder));
-                        Grid.SetColumn(_injectedRefreshButton, Grid.GetColumn(previewBorder));
-                        Grid.SetColumnSpan(_injectedRefreshButton, Grid.GetColumnSpan(previewBorder));
+                            var tbs = new List<TextBlock>(); FindVisualChildren(b, tbs);
+                            return tbs.Count >= 8 && tbs.Count <= 25 &&
+                                   tbs.Any(t => t.Text != null && t.Text.StartsWith("Pliki paczki", StringComparison.OrdinalIgnoreCase)) &&
+                                   tbs.Any(t => t.Text != null && t.Text.StartsWith("Mapy", StringComparison.OrdinalIgnoreCase));
+                        }).OrderBy(b => { var l = new List<TextBlock>(); FindVisualChildren(b, l); return l.Count; }).FirstOrDefault();
 
-                        _injectedRefreshButton.Click += async (_, __) =>
+                        if (previewBorder != null && GetAnyParent(previewBorder) is Panel previewParent)
                         {
-                            _injectedRefreshButton.IsEnabled = false;
-                            var result = await ForceSizeUpdateAsync(win);
-                            _injectedRefreshButton.Content = $"Odśwież / Skalkuluj (Plików: {result.FileCount} | {FormatBytes(result.TotalBytes)})";
-                            _injectedRefreshButton.IsEnabled = true;
-                        };
-                        int idx = previewParent.Children.IndexOf(previewBorder);
-                        previewParent.Children.Insert(idx + 1, _injectedRefreshButton);
+                            _injectedRefreshButton = new Button
+                            {
+                                Content = "Odśwież / Skalkuluj zawartość (folder source)",
+                                Height = 32,
+                                Margin = new Thickness(0, 8, 0, 14),
+                                Background = BrushButtonAccent,
+                                Foreground = BrushDarkFg,
+                                FontWeight = FontWeights.Bold,
+                                Cursor = Cursors.Hand,
+                                BorderThickness = new Thickness(0),
+                                Tag = "INJECTED_BTN"
+                            };
+                            Grid.SetRow(_injectedRefreshButton, Grid.GetRow(previewBorder));
+                            Grid.SetColumn(_injectedRefreshButton, Grid.GetColumn(previewBorder));
+                            Grid.SetColumnSpan(_injectedRefreshButton, Grid.GetColumnSpan(previewBorder));
+
+                            _injectedRefreshButton.Click += async (_, __) =>
+                            {
+                                _injectedRefreshButton.IsEnabled = false;
+                                var result = await ForceSizeUpdateAsync(win);
+                                _injectedRefreshButton.Content = $"Odśwież / Skalkuluj (Plików: {result.FileCount} | {FormatBytes(result.TotalBytes)})";
+                                _injectedRefreshButton.IsEnabled = true;
+                            };
+                            int idx = previewParent.Children.IndexOf(previewBorder);
+                            previewParent.Children.Insert(idx + 1, _injectedRefreshButton);
+                        }
                     }
 
                     TacticalMapGeneratorView.AttachFullScreenTab(win);
@@ -905,12 +972,19 @@ namespace FieldTakHub.Builder.Services
                     Application.Current.Exit += (_, __) => SaveSessionStateAuto(win);
                 }
 
-                _previewTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(1800) };
+                // Zoptymalizowany timer: nie przeszukuje drzewa WPF, jeśli karty zostały już podmienione, i wstrzymuje pracę, gdy użytkownik pracuje na Mapie!
+                _previewTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(3200) };
                 _previewTimer.Tick += async (_, __) =>
                 {
                     try
                     {
-                        RemoveStandaloneLegacyCardsAndInsertFactions(win);
+                        if (!_legacyCardsRemoved)
+                            RemoveStandaloneLegacyCardsAndInsertFactions(win);
+
+                        // Jeśli główne okno konfiguratora jest ukryte (bo użytkownik jest w Generatorze Map), nie obciążaj dysku ani UI!
+                        if (_factionsCardElement != null && !_factionsCardElement.IsVisible)
+                            return;
+
                         string srcDir = GetPrimarySourceDirectory(win);
                         if (!string.IsNullOrEmpty(srcDir) && Directory.Exists(srcDir))
                         {
@@ -924,7 +998,6 @@ namespace FieldTakHub.Builder.Services
                 };
                 _previewTimer.Start();
 
-                // Wywołaj odświeżenie po pełnym wyrenderowaniu drzewa wizualnego (niezależnie od tego, czy win.IsLoaded było już true!)
                 _ = win.Dispatcher.BeginInvoke(new Action(async () =>
                 {
                     Init();
@@ -940,8 +1013,11 @@ namespace FieldTakHub.Builder.Services
 
         private static void RemoveStandaloneLegacyCardsAndInsertFactions(Window win)
         {
+            if (_legacyCardsRemoved && _factionsCardElement != null) return;
+
             var tbs = new List<TextBlock>();
             FindVisualChildren(win, tbs);
+            int hiddenCount = 0;
 
             foreach (var tb in tbs)
             {
@@ -986,6 +1062,7 @@ namespace FieldTakHub.Builder.Services
                         }
 
                         cardBorder.Visibility = Visibility.Collapsed;
+                        hiddenCount++;
                         if (GetAnyParent(cardBorder) is Panel p && p is not StackPanel && p.Children.Count <= 3)
                         {
                             bool allHidden = true;
@@ -1000,6 +1077,7 @@ namespace FieldTakHub.Builder.Services
 
             if (_factionsCardElement != null)
             {
+                if (hiddenCount > 0) _legacyCardsRemoved = true;
                 DependencyObject cur = _factionsCardElement;
                 while (cur != null && cur != win)
                 {
@@ -1164,7 +1242,6 @@ namespace FieldTakHub.Builder.Services
                 });
                 MarkDirty();
                 RebuildWrappedFactionPanels(win);
-                SaveSessionStateAuto(win);
             });
             Grid.SetColumn(btnPlus, 0);
             topCornerBar.Children.Add(btnPlus);
@@ -1184,7 +1261,6 @@ namespace FieldTakHub.Builder.Services
                 _factions.RemoveAt(index);
                 MarkDirty();
                 RebuildWrappedFactionPanels(win);
-                SaveSessionStateAuto(win);
             });
             Grid.SetColumn(btnMinus, 2);
             topCornerBar.Children.Add(btnMinus);
@@ -1469,7 +1545,7 @@ namespace FieldTakHub.Builder.Services
                 return b;
             }
             var meshBtnBar = new UniformGrid { Columns = 5 };
-            meshBtnBar.Children.Add(SmallActBtn("Save", () => { WriteConfigsToDirectory(GetPrimarySourceDirectory(win), fac); SaveSessionStateAuto(win); meshStatusTxt.Text = $"✓ Zapisano konfigurację {fac.Name}."; meshStatusTxt.Foreground = BrushAccent; }));
+            meshBtnBar.Children.Add(SmallActBtn("Save", () => { WriteConfigsToDirectory(GetPrimarySourceDirectory(win), fac); SaveSessionStateBackground(win); meshStatusTxt.Text = $"✓ Zapisano konfigurację {fac.Name}."; meshStatusTxt.Foreground = BrushAccent; }));
             meshBtnBar.Children.Add(SmallActBtn("Open", () => TryOpenFolderInExplorer(GetPrimarySourceDirectory(win))));
             meshBtnBar.Children.Add(SmallActBtn("Copy", () => { try { Clipboard.SetText(!string.IsNullOrWhiteSpace(fac.ChannelUrl) ? fac.ChannelUrl : fac.Psk); meshStatusTxt.Text = "✓ Skopiowano do schowka."; } catch { } }));
             meshBtnBar.Children.Add(SmallActBtn("Clear", () => { chUrlBox.Text = ""; fac.ChannelUrl = ""; }));
@@ -1514,7 +1590,7 @@ namespace FieldTakHub.Builder.Services
             enrStack.Children.Add(enrUriBox);
 
             var enrBtnBar = new UniformGrid { Columns = 2 };
-            enrBtnBar.Children.Add(SmallActBtn("Save enrollment", () => { WriteConfigsToDirectory(GetPrimarySourceDirectory(win), fac); SaveSessionStateAuto(win); }));
+            enrBtnBar.Children.Add(SmallActBtn("Save enrollment", () => { WriteConfigsToDirectory(GetPrimarySourceDirectory(win), fac); SaveSessionStateBackground(win); }));
             enrBtnBar.Children.Add(SmallActBtn("Clear", () => { enrUriBox.Text = ""; fac.EnrollmentUri = ""; }));
             enrStack.Children.Add(enrBtnBar);
             enrCard.Child = enrStack;
@@ -1545,7 +1621,7 @@ namespace FieldTakHub.Builder.Services
                 var sides = _factions.Select(f => (SanitizeFileName(f.Name).ToLowerInvariant(), f.ColorHex)).ToList();
                 await Task.Run(() => { EnsureFactionFoldersInitialized(srcDir, sides); WriteConfigsToDirectory(srcDir, fac); });
                 await ForceSizeUpdateAsync(win);
-                SaveSessionStateAuto(win);
+                SaveSessionStateBackground(win);
                 meshStatusTxt.Text = $"✓ Przygotowano pliki konfiguracyjne i podfoldery KML dla {_factions.Count} stron.";
                 meshStatusTxt.Foreground = BrushAccent;
             };
@@ -1645,7 +1721,7 @@ namespace FieldTakHub.Builder.Services
             try
             {
                 EnsureDefaultFactions();
-                SaveSessionStateAuto(win);
+                SaveSessionStateBackground(win);
                 string sourceDir = GetPrimarySourceDirectory(win);
                 string eventName = GetEventNameFromWindow(win);
                 string parentDir = Path.GetDirectoryName(Path.TrimEndingDirectorySeparator(sourceDir)) ?? AppDomain.CurrentDomain.BaseDirectory;
@@ -1679,7 +1755,7 @@ namespace FieldTakHub.Builder.Services
         {
             try
             {
-                SaveSessionStateAuto(win);
+                SaveSessionStateBackground(win);
                 string sourceDir = GetPrimarySourceDirectory(win);
                 string eventName = GetEventNameFromWindow(win);
                 string parentDir = Path.GetDirectoryName(Path.TrimEndingDirectorySeparator(sourceDir)) ?? AppDomain.CurrentDomain.BaseDirectory;
@@ -1701,7 +1777,7 @@ namespace FieldTakHub.Builder.Services
                 string posterOutPath = dlg.FileName;
                 string outDir = Path.GetDirectoryName(posterOutPath) ?? defaultDir;
                 LastExportDirectory = outDir;
-                SaveSessionStateAuto(win);
+                SaveSessionStateBackground(win);
 
                 string ftakPath = Path.Combine(outDir, $"{eventName}_{cleanName}.ftak");
                 string sha256 = await Task.Run(() =>
@@ -1735,12 +1811,20 @@ namespace FieldTakHub.Builder.Services
 
         internal static string GetPrimarySourceDirectory(Window win)
         {
+            if (!string.IsNullOrWhiteSpace(LastKnownSourceDir) && Directory.Exists(LastKnownSourceDir))
+                return LastKnownSourceDir;
+
             var dirs = ResolveSourceDirectories(win);
-            return dirs.FirstOrDefault(Directory.Exists) ?? dirs.FirstOrDefault() ?? Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "workspace", "source");
+            string resolved = dirs.FirstOrDefault(Directory.Exists) ?? dirs.FirstOrDefault() ?? Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "workspace", "source");
+            LastKnownSourceDir = resolved;
+            return resolved;
         }
 
         internal static string GetEventNameFromWindow(Window win)
         {
+            if (_cachedEventNameBox != null && !string.IsNullOrWhiteSpace(_cachedEventNameBox.Text))
+                return SanitizeFileName(_cachedEventNameBox.Text.Trim());
+
             if (win != null)
             {
                 try
@@ -1754,7 +1838,11 @@ namespace FieldTakHub.Builder.Services
                             {
                                 var siblings = new List<TextBox>(); FindVisualChildren(parent, siblings);
                                 var nonEmpty = siblings.FirstOrDefault(x => !string.IsNullOrWhiteSpace(x.Text));
-                                if (nonEmpty != null) return SanitizeFileName(nonEmpty.Text.Trim());
+                                if (nonEmpty != null)
+                                {
+                                    _cachedEventNameBox = nonEmpty;
+                                    return SanitizeFileName(nonEmpty.Text.Trim());
+                                }
                             }
                         }
                 }
@@ -1768,6 +1856,12 @@ namespace FieldTakHub.Builder.Services
             if (win == null || string.IsNullOrWhiteSpace(eventName)) return;
             try
             {
+                if (_cachedEventNameBox != null)
+                {
+                    _cachedEventNameBox.Text = eventName;
+                    return;
+                }
+
                 var tbs = new List<TextBlock>(); FindVisualChildren(win, tbs);
                 foreach (var tb in tbs)
                     if (tb.Text != null && (tb.Text.Contains("Nazwa wydarzenia") || tb.Text.Contains("Nazwa paczki")))
@@ -1779,6 +1873,7 @@ namespace FieldTakHub.Builder.Services
                             var targetBox = siblings.FirstOrDefault();
                             if (targetBox != null)
                             {
+                                _cachedEventNameBox = targetBox;
                                 targetBox.Text = eventName;
                                 if (!(bool)targetBox.GetValue(IsHookedProperty))
                                 {
@@ -1883,7 +1978,7 @@ namespace FieldTakHub.Builder.Services
             };
             var manifestEntry = archive.CreateEntry("manifest.json", CompressionLevel.Optimal);
             using var ms = new StreamWriter(manifestEntry.Open(), Encoding.UTF8);
-            ms.Write(manifestObj.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
+            ms.Write(manifestObj.ToJsonString(IndentedJsonOptions));
         }
 
         private static void RenderSafezoneA4PosterPng(string outputPath, string eventName, FactionProfileModel fac, string qrPayload, string sha256Hex)
@@ -2172,15 +2267,27 @@ namespace FieldTakHub.Builder.Services
             return idx == 0 ? $"{bytes} B" : $"{val:0.#} {units[idx]}";
         }
 
+        // Zoptymalizowana aktualizacja etykiet podglądu: buforuje referencje do TextBlocków przy pierwszym przebiegu (0 ms kosztu w kolejnych cyklach!)
         private static void UpdatePreviewCardLabels(Window win, SourceStats stats)
         {
             if (win == null || stats == null) return;
             try
             {
-                var cardTbs = new List<TextBlock>();
-                FindVisualChildren(win, cardTbs);
                 string[] rowLabels = { "Pliki paczki", "Mapy", "Pluginy", "Konfiguracja", "Dane taktyczne", "Pozostałe" };
                 string[] rowValues = { FormatBytes(stats.TotalBytes), FormatBytes(stats.MapsBytes), FormatBytes(stats.PluginsBytes), FormatBytes(stats.ConfigBytes), FormatBytes(stats.TacticalBytes), FormatBytes(stats.OtherBytes) };
+
+                if (_cachedPreviewValueLabels.Count == rowLabels.Length)
+                {
+                    for (int r = 0; r < rowLabels.Length; r++)
+                    {
+                        if (_cachedPreviewValueLabels.TryGetValue(rowLabels[r], out var cachedTb) && cachedTb != null)
+                            cachedTb.Text = rowValues[r];
+                    }
+                    return;
+                }
+
+                var cardTbs = new List<TextBlock>();
+                FindVisualChildren(win, cardTbs);
 
                 bool IsLabel(string text)
                 {
@@ -2200,18 +2307,34 @@ namespace FieldTakHub.Builder.Services
                         if (pTbs.Count == 2)
                         {
                             var valTb = pTbs.FirstOrDefault(x => x != labelTb);
-                            if (valTb != null) { valTb.Text = rowValues[r]; continue; }
+                            if (valTb != null)
+                            {
+                                _cachedPreviewValueLabels[rowLabels[r]] = valTb;
+                                valTb.Text = rowValues[r];
+                                continue;
+                            }
                         }
                         if (parent is Grid g)
                         {
                             int tr = Grid.GetRow(labelTb);
                             foreach (UIElement ch in g.Children)
-                                if (ch is TextBlock sib && sib != labelTb && Grid.GetRow(sib) == tr && !IsLabel(sib.Text)) { sib.Text = rowValues[r]; break; }
+                                if (ch is TextBlock sib && sib != labelTb && Grid.GetRow(sib) == tr && !IsLabel(sib.Text))
+                                {
+                                    _cachedPreviewValueLabels[rowLabels[r]] = sib;
+                                    sib.Text = rowValues[r];
+                                    break;
+                                }
                         }
                     }
-                    int idx = cardTbs.IndexOf(labelTb);
-                    if (idx >= 0 && idx + 1 < cardTbs.Count && !IsLabel(cardTbs[idx + 1].Text))
-                        cardTbs[idx + 1].Text = rowValues[r];
+                    if (!_cachedPreviewValueLabels.ContainsKey(rowLabels[r]))
+                    {
+                        int idx = cardTbs.IndexOf(labelTb);
+                        if (idx >= 0 && idx + 1 < cardTbs.Count && !IsLabel(cardTbs[idx + 1].Text))
+                        {
+                            _cachedPreviewValueLabels[rowLabels[r]] = cardTbs[idx + 1];
+                            cardTbs[idx + 1].Text = rowValues[r];
+                        }
+                    }
                 }
             }
             catch { }
@@ -2304,7 +2427,7 @@ namespace FieldTakHub.Builder.Services
                 JsonObject lora = GetOrCreateJsonObject(mesh, "lora");
                 lora["region"] = fac.LoraRegion; lora["modemPreset"] = fac.LoraModemPreset; lora["channelName"] = fac.ChannelName; lora["psk"] = fac.Psk;
 
-                File.WriteAllText(jsonPath, root.ToJsonString(new JsonSerializerOptions { WriteIndented = true }), Encoding.UTF8);
+                File.WriteAllText(jsonPath, root.ToJsonString(IndentedJsonOptions), Encoding.UTF8);
             }
             catch { }
         }

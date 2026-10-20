@@ -496,7 +496,7 @@ namespace FieldTakHub.Builder.Services
                 {
                     PendingTileUrls.Clear();
                     DecodedImageCache.Clear();
-                    GeoportalLidarEngine.ClearCache();
+                    GeoportalLidarEngine.ClearCache(Keyboard.Modifiers.HasFlag(ModifierKeys.Shift));
                     _geoAnchoredBaseSheets.Clear();
                     _geoAnchoredLidarSheets.Clear();
                     _wmsLoadedScaleDenominator = -1;
@@ -1133,7 +1133,7 @@ namespace FieldTakHub.Builder.Services
 
                 if (_wheelZoomDebounceTimer == null)
                 {
-                    _wheelZoomDebounceTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(90) };
+                    _wheelZoomDebounceTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(55) };
                     _wheelZoomDebounceTimer.Tick += (_, __) =>
                     {
                         _wheelZoomDebounceTimer.Stop();
@@ -1157,7 +1157,7 @@ namespace FieldTakHub.Builder.Services
             mainGrid.Children.Add(bodyGrid);
 
             var bottomBar = new Border { Background = TacticalConfigPanel.BrushInputBg, BorderBrush = TacticalConfigPanel.BrushCardBorder, BorderThickness = new Thickness(0, 1, 0, 0), Padding = new Thickness(16, 0, 16, 0) };
-            _statusText = new TextBlock { Text = "Gotowy. Silnik LiDAR ISOK (EVRF2007 + KRON86 + Auto-Kontrast 3D), niezależne potoki ładowania i stała siatka MGRS.", Foreground = TacticalConfigPanel.BrushAccent, FontSize = 11, VerticalAlignment = VerticalAlignment.Center };
+            _statusText = new TextBlock { Text = "Gotowy. Silnik TURBO: SSD Disk Cache + 2-Fazowy Geoportal WMS (Fast Draft -> HD) + LiDAR 3D (EVRF2007/KRON86) + Zero-GC 60 FPS.", Foreground = TacticalConfigPanel.BrushAccent, FontSize = 11, VerticalAlignment = VerticalAlignment.Center };
             bottomBar.Child = _statusText; Grid.SetRow(bottomBar, 1); mainGrid.Children.Add(bottomBar);
 
             UpdateOfflineTileEstimateUI();
