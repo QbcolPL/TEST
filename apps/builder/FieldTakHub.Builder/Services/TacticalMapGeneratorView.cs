@@ -496,24 +496,26 @@ namespace FieldTakHub.Builder.Services
                 {
                     PendingTileUrls.Clear();
                     DecodedImageCache.Clear();
+                    GeoportalLidarEngine.ClearCache();
                     _geoAnchoredBaseSheets.Clear();
                     _geoAnchoredLidarSheets.Clear();
                     _wmsLoadedScaleDenominator = -1;
+                    _wmsLoadedLidarFlag = false;
                     RefreshTileCanvasesOnly();
                     _ = RenderMapTilesAsync();
                 });
                 btnReloadTiles.Height = 26;
                 btnReloadTiles.Padding = new Thickness(8, 0, 8, 0);
                 btnReloadTiles.Margin = new Thickness(6, 0, 0, 0);
-                btnReloadTiles.ToolTip = "Wyczyść bufor i wymuś ponowne pobranie podkładu z Geoportalu / LiDAR";
+                btnReloadTiles.ToolTip = "Wyczyść wszystkie bufory i wymuś ponowne pobranie podkładu z Geoportalu / LiDAR";
                 Grid.SetColumn(btnReloadTiles, 1);
                 layerRow.Children.Add(btnReloadTiles);
 
-                sec1.Children.Add(TacticalConfigPanel.FieldBox("Podkład bazowy (Geoportal WMS EPSG:2180 / Google / ESRI / OSM):", layerRow));
+                sec1.Children.Add(TacticalConfigPanel.FieldBox("Podkład bazowy (Geoportal WMS / LiDAR Multi-Sector / Google / OSM):", layerRow));
 
                 var lidarBox = new Border { Background = TacticalConfigPanel.BrushInputBg, BorderBrush = TacticalConfigPanel.BrushAccent, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(6), Padding = new Thickness(8, 6, 8, 6) };
                 var lidarStack = new StackPanel();
-                var chkLidar = new CheckBox { Content = "Nałóż rzeźbę LiDAR ISOK (Cieniowanie NMT GRID1 EPSG:2180)", IsChecked = _showLidarSingleWms, Foreground = TacticalConfigPanel.BrushAccent, FontWeight = FontWeights.SemiBold, FontSize = 10 };
+                var chkLidar = new CheckBox { Content = "Nałóż rzeźbę LiDAR ISOK (Multi-Sector + Przezroczystość Cieni)", IsChecked = _showLidarSingleWms, Foreground = TacticalConfigPanel.BrushAccent, FontWeight = FontWeights.SemiBold, FontSize = 10 };
                 chkLidar.Checked += (s, e) =>
                 {
                     _showLidarSingleWms = true;
@@ -1126,11 +1128,9 @@ namespace FieldTakHub.Builder.Services
                 double equatorMetersPerPx = 156543.03392 * Math.Cos(_centerLat * Math.PI / 180.0);
                 _zoom = Math.Clamp((int)Math.Round(Math.Log(equatorMetersPerPx / targetMetersPerPx, 2.0)), 5, 19);
 
-                // 0 ms: natychmiastowe przeskalowanie podglądu na ekranie
                 RefreshTileCanvasesOnly();
                 RedrawVectorsOnly();
 
-                // Debounce 90 ms: zapobiega zalewaniu serwerów GUGiK zapytaniami podczas szybkiego kręcenia rolką myszy
                 if (_wheelZoomDebounceTimer == null)
                 {
                     _wheelZoomDebounceTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(90) };
@@ -1157,7 +1157,7 @@ namespace FieldTakHub.Builder.Services
             mainGrid.Children.Add(bodyGrid);
 
             var bottomBar = new Border { Background = TacticalConfigPanel.BrushInputBg, BorderBrush = TacticalConfigPanel.BrushCardBorder, BorderThickness = new Thickness(0, 1, 0, 0), Padding = new Thickness(16, 0, 16, 0) };
-            _statusText = new TextBlock { Text = "Gotowy. Cieniowanie LiDAR ISOK (PNG EPSG:2180), płynny zoom (Debounce 90ms) i stała siatka MGRS.", Foreground = TacticalConfigPanel.BrushAccent, FontSize = 11, VerticalAlignment = VerticalAlignment.Center };
+            _statusText = new TextBlock { Text = "Gotowy. Wielosektorowy silnik LiDAR ISOK (Luminance-to-Alpha), płynny zoom (Debounce 90ms) i stała siatka MGRS.", Foreground = TacticalConfigPanel.BrushAccent, FontSize = 11, VerticalAlignment = VerticalAlignment.Center };
             bottomBar.Child = _statusText; Grid.SetRow(bottomBar, 1); mainGrid.Children.Add(bottomBar);
 
             UpdateOfflineTileEstimateUI();
@@ -1225,6 +1225,7 @@ namespace FieldTakHub.Builder.Services
             catch { }
         }
 
+        // Wypala cieniowanie LiDAR na kafelkach Offline (z automatycznym wycięciem białego tła Luminance-to-Alpha!)
         private static byte[] BlendBaseAndLidarTilesOnUiThread(byte[] baseBytes, byte[] lidarBytes, double lidarAlpha)
         {
             try
@@ -1232,15 +1233,17 @@ namespace FieldTakHub.Builder.Services
                 BitmapImage bmpBase = new BitmapImage();
                 using (var ms1 = new MemoryStream(baseBytes)) { bmpBase.BeginInit(); bmpBase.CacheOption = BitmapCacheOption.OnLoad; bmpBase.StreamSource = ms1; bmpBase.EndInit(); bmpBase.Freeze(); }
 
-                BitmapImage bmpLidar = new BitmapImage();
-                using (var ms2 = new MemoryStream(lidarBytes)) { bmpLidar.BeginInit(); bmpLidar.CacheOption = BitmapCacheOption.OnLoad; bmpLidar.StreamSource = ms2; bmpLidar.EndInit(); bmpLidar.Freeze(); }
+                BitmapImage bmpLidarRaw = new BitmapImage();
+                using (var ms2 = new MemoryStream(lidarBytes)) { bmpLidarRaw.BeginInit(); bmpLidarRaw.CacheOption = BitmapCacheOption.OnLoad; bmpLidarRaw.StreamSource = ms2; bmpLidarRaw.EndInit(); bmpLidarRaw.Freeze(); }
+
+                BitmapSource alphaLidar = GeoportalLidarEngine.ConvertLidarToAlphaOverlay(bmpLidarRaw) ?? bmpLidarRaw;
 
                 var dv = new DrawingVisual();
                 using (DrawingContext dc = dv.RenderOpen())
                 {
                     dc.DrawImage(bmpBase, new Rect(0, 0, 256, 256));
                     dc.PushOpacity(lidarAlpha);
-                    dc.DrawImage(bmpLidar, new Rect(0, 0, 256, 256));
+                    dc.DrawImage(alphaLidar, new Rect(0, 0, 256, 256));
                     dc.Pop();
                 }
                 var rtb = new RenderTargetBitmap(256, 256, 96, 96, PixelFormats.Pbgra32);
@@ -1256,6 +1259,42 @@ namespace FieldTakHub.Builder.Services
 
         private static async Task<byte[]> FetchSingleOfflineTileBytesAsync(TacticalMapLayerDef layer, int tx, int ty, int zoom, CancellationToken ct)
         {
+            if (layer.Id == "geoportal_lidar")
+            {
+                var (latNorth, lonWest) = TileXYToLatLon(tx, ty, zoom);
+                var (latSouth, lonEast) = TileXYToLatLon(tx + 1, ty + 1, zoom);
+                int reqSz = int.TryParse(GetOptimalWmsTilePixelSize("geoportal_lidar", zoom), out int parsedSz) ? parsedSz : 512;
+                string[] lidarUrls = GeoportalLidarEngine.BuildLidarCandidateUrls(latNorth, latSouth, lonEast, lonWest, reqSz, reqSz);
+
+                string primaryKey = lidarUrls[0];
+                if (RawTileCache.TryGetValue(primaryKey, out var cachedLidar) && IsValidImagePayload(cachedLidar))
+                    return cachedLidar;
+
+                var lidarBmp = await FetchDecodedImageAsync(
+                    lidarUrls[0],
+                    lidarUrls.Length > 1 ? lidarUrls[1] : null,
+                    ct,
+                    lidarUrls.Length > 2 ? lidarUrls[2] : null,
+                    true);
+
+                if (RawTileCache.TryGetValue(primaryKey, out var fetchedLidar) && IsValidImagePayload(fetchedLidar))
+                    return fetchedLidar;
+
+                if (lidarBmp != null)
+                {
+                    try
+                    {
+                        var enc = new JpegBitmapEncoder { QualityLevel = 90 };
+                        enc.Frames.Add(BitmapFrame.Create(lidarBmp));
+                        using var ms = new MemoryStream();
+                        enc.Save(ms);
+                        return ms.ToArray();
+                    }
+                    catch { }
+                }
+                return null;
+            }
+
             string url = BuildTileUrl(layer, tx, ty, zoom);
             if (RawTileCache.TryGetValue(url, out var cached) && IsValidImagePayload(cached))
                 return cached;
@@ -1272,8 +1311,7 @@ namespace FieldTakHub.Builder.Services
                 secondFallbackUrl = FillAllBBoxTokens(layer.SecondFallbackUrlTemplate, b3857, b2180NE, b2180EN, b4326, sz, sz);
             }
 
-            bool checkWhite = layer.Id == "geoportal_hires" && zoom > 15;
-            var bmp = await FetchDecodedImageAsync(url, fallbackUrl, ct, secondFallbackUrl, checkWhite);
+            var bmp = await FetchDecodedImageAsync(url, fallbackUrl, ct, secondFallbackUrl, true);
             if (RawTileCache.TryGetValue(url, out var fetchedBytes) && IsValidImagePayload(fetchedBytes))
                 return fetchedBytes;
 
