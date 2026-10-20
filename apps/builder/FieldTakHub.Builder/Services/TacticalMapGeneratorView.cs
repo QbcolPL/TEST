@@ -511,11 +511,11 @@ namespace FieldTakHub.Builder.Services
                 Grid.SetColumn(btnReloadTiles, 1);
                 layerRow.Children.Add(btnReloadTiles);
 
-                sec1.Children.Add(TacticalConfigPanel.FieldBox("Podkład bazowy (Geoportal WMS / LiDAR Multi-Sector / Google / OSM):", layerRow));
+                sec1.Children.Add(TacticalConfigPanel.FieldBox("Podkład bazowy (Geoportal WMS / LiDAR EVRF2007 / Google / OSM):", layerRow));
 
                 var lidarBox = new Border { Background = TacticalConfigPanel.BrushInputBg, BorderBrush = TacticalConfigPanel.BrushAccent, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(6), Padding = new Thickness(8, 6, 8, 6) };
                 var lidarStack = new StackPanel();
-                var chkLidar = new CheckBox { Content = "Nałóż rzeźbę LiDAR ISOK (Multi-Sector + Przezroczystość Cieni)", IsChecked = _showLidarSingleWms, Foreground = TacticalConfigPanel.BrushAccent, FontWeight = FontWeights.SemiBold, FontSize = 10 };
+                var chkLidar = new CheckBox { Content = "Nałóż rzeźbę LiDAR ISOK (EVRF2007/KRON86 + Auto-Kontrast 3D)", IsChecked = _showLidarSingleWms, Foreground = TacticalConfigPanel.BrushAccent, FontWeight = FontWeights.SemiBold, FontSize = 10 };
                 chkLidar.Checked += (s, e) =>
                 {
                     _showLidarSingleWms = true;
@@ -1157,7 +1157,7 @@ namespace FieldTakHub.Builder.Services
             mainGrid.Children.Add(bodyGrid);
 
             var bottomBar = new Border { Background = TacticalConfigPanel.BrushInputBg, BorderBrush = TacticalConfigPanel.BrushCardBorder, BorderThickness = new Thickness(0, 1, 0, 0), Padding = new Thickness(16, 0, 16, 0) };
-            _statusText = new TextBlock { Text = "Gotowy. Wielosektorowy silnik LiDAR ISOK (Luminance-to-Alpha), płynny zoom (Debounce 90ms) i stała siatka MGRS.", Foreground = TacticalConfigPanel.BrushAccent, FontSize = 11, VerticalAlignment = VerticalAlignment.Center };
+            _statusText = new TextBlock { Text = "Gotowy. Silnik LiDAR ISOK (EVRF2007 + KRON86 + Auto-Kontrast 3D), niezależne potoki ładowania i stała siatka MGRS.", Foreground = TacticalConfigPanel.BrushAccent, FontSize = 11, VerticalAlignment = VerticalAlignment.Center };
             bottomBar.Child = _statusText; Grid.SetRow(bottomBar, 1); mainGrid.Children.Add(bottomBar);
 
             UpdateOfflineTileEstimateUI();
@@ -1225,7 +1225,6 @@ namespace FieldTakHub.Builder.Services
             catch { }
         }
 
-        // Wypala cieniowanie LiDAR na kafelkach Offline (z automatycznym wycięciem białego tła Luminance-to-Alpha!)
         private static byte[] BlendBaseAndLidarTilesOnUiThread(byte[] baseBytes, byte[] lidarBytes, double lidarAlpha)
         {
             try
