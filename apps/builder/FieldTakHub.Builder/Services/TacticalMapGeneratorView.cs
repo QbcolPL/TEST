@@ -347,12 +347,45 @@ namespace FieldTakHub.Builder.Services
             MeshtasticUsbProvisionerView.HideUsbTabOnly();
             if (_fullScreenOverlay != null)
             {
+                _wmsSheetCts?.Cancel();
+                _isWmsSheetFetchRunning = false;
                 _fullScreenOverlay.Visibility = Visibility.Collapsed;
                 if (_originalWindowContent != null) _originalWindowContent.Visibility = Visibility.Visible;
                 if (_tabBuilderBtn != null) { _tabBuilderBtn.Background = TacticalConfigPanel.BrushButtonAccent; _tabBuilderBtn.Foreground = TacticalConfigPanel.BrushDarkFg; }
                 if (_tabMapBtn != null) { _tabMapBtn.Background = TacticalConfigPanel.BrushItemBg; _tabMapBtn.Foreground = TacticalConfigPanel.BrushAccent; }
                 TacticalConfigPanel.SaveSessionStateAuto(_hostWindow);
             }
+        }
+
+        private static void UpdateScalePresetButtonHighlights()
+        {
+            foreach (var b in _scalePresetButtons)
+            {
+                bool isCurrent = b.Content?.ToString() == $"1:{_targetScaleDenominator}";
+                b.Background = isCurrent ? TacticalConfigPanel.BrushButtonAccent : TacticalConfigPanel.BrushInputBg;
+                b.Foreground = isCurrent ? TacticalConfigPanel.BrushDarkFg : Brushes.White;
+                b.BorderBrush = isCurrent ? TacticalConfigPanel.BrushAccent : TacticalConfigPanel.BrushInputBorder;
+            }
+        }
+
+        private static void ScheduleDebouncedTileRender(int delayMs = 220)
+        {
+            _wmsSheetCts?.Cancel();
+            _isWmsSheetFetchRunning = false;
+
+            if (_wheelZoomDebounceTimer == null)
+            {
+                _wheelZoomDebounceTimer = new DispatcherTimer();
+                _wheelZoomDebounceTimer.Tick += (_, __) =>
+                {
+                    _wheelZoomDebounceTimer.Stop();
+                    TacticalConfigPanel.MarkDirty();
+                    _ = RenderMapTilesAsync();
+                };
+            }
+            _wheelZoomDebounceTimer.Interval = TimeSpan.FromMilliseconds(delayMs);
+            _wheelZoomDebounceTimer.Stop();
+            _wheelZoomDebounceTimer.Start();
         }
 
         private static void ApplyScaleDenominator(int scaleDenom)
@@ -366,17 +399,10 @@ namespace FieldTakHub.Builder.Services
             double equatorMetersPerPx = 156543.03392 * Math.Cos(_centerLat * Math.PI / 180.0);
             _zoom = Math.Clamp((int)Math.Round(Math.Log(equatorMetersPerPx / targetMetersPerPx, 2.0)), 5, 19);
 
-            foreach (var b in _scalePresetButtons)
-            {
-                bool isCurrent = b.Content?.ToString() == $"1:{_targetScaleDenominator}";
-                b.Background = isCurrent ? TacticalConfigPanel.BrushButtonAccent : TacticalConfigPanel.BrushInputBg;
-                b.Foreground = isCurrent ? TacticalConfigPanel.BrushDarkFg : Brushes.White;
-                b.BorderBrush = isCurrent ? TacticalConfigPanel.BrushAccent : TacticalConfigPanel.BrushInputBorder;
-            }
-
+            UpdateScalePresetButtonHighlights();
             RefreshTileCanvasesOnly();
             RedrawVectorsOnly();
-            _ = RenderMapTilesAsync();
+            ScheduleDebouncedTileRender(160);
         }
 
         private static void RebuildLeftControlsPanel(Window win)
@@ -486,7 +512,7 @@ namespace FieldTakHub.Builder.Services
                         _wmsLoadedScaleDenominator = -1;
                         if (!_isRebuildingMapControls) TacticalConfigPanel.MarkDirty();
                         RefreshTileCanvasesOnly();
-                        _ = RenderMapTilesAsync();
+                        ScheduleDebouncedTileRender(80);
                     }
                 };
                 Grid.SetColumn(_layerComboBox, 0);
@@ -494,6 +520,8 @@ namespace FieldTakHub.Builder.Services
 
                 var btnReloadTiles = MakeActionButton("🔄 Odśwież", false, () =>
                 {
+                    _wmsSheetCts?.Cancel();
+                    _isWmsSheetFetchRunning = false;
                     PendingTileUrls.Clear();
                     DecodedImageCache.Clear();
                     GeoportalLidarEngine.ClearCache(Keyboard.Modifiers.HasFlag(ModifierKeys.Shift));
@@ -501,28 +529,30 @@ namespace FieldTakHub.Builder.Services
                     _geoAnchoredLidarSheets.Clear();
                     _wmsLoadedScaleDenominator = -1;
                     _wmsLoadedLidarFlag = false;
+                    if (_statusText != null)
+                        _statusText.Text = "🔄 Zresetowano pulę połączeń TCP HTTP/1.1 — pobieranie świeżego arkusza...";
                     RefreshTileCanvasesOnly();
                     _ = RenderMapTilesAsync();
                 });
                 btnReloadTiles.Height = 26;
                 btnReloadTiles.Padding = new Thickness(8, 0, 8, 0);
                 btnReloadTiles.Margin = new Thickness(6, 0, 0, 0);
-                btnReloadTiles.ToolTip = "Wyczyść wszystkie bufory i wymuś ponowne pobranie podkładu z Geoportalu / LiDAR";
+                btnReloadTiles.ToolTip = "Zresetuj połączenia sieciowe i pobierz mapę na nowo (Z przytrzymanym SHIFT czyści też cache na dysku SSD)";
                 Grid.SetColumn(btnReloadTiles, 1);
                 layerRow.Children.Add(btnReloadTiles);
 
-                sec1.Children.Add(TacticalConfigPanel.FieldBox("Podkład bazowy (Geoportal WMS / LiDAR EVRF2007 / Google / OSM):", layerRow));
+                sec1.Children.Add(TacticalConfigPanel.FieldBox("Podkład bazowy (Geoportal WMS HTTP/1.1 / LiDAR EVRF2007 / Google / OSM):", layerRow));
 
                 var lidarBox = new Border { Background = TacticalConfigPanel.BrushInputBg, BorderBrush = TacticalConfigPanel.BrushAccent, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(6), Padding = new Thickness(8, 6, 8, 6) };
                 var lidarStack = new StackPanel();
-                var chkLidar = new CheckBox { Content = "Nałóż rzeźbę LiDAR ISOK (EVRF2007/KRON86 + Auto-Kontrast 3D)", IsChecked = _showLidarSingleWms, Foreground = TacticalConfigPanel.BrushAccent, FontWeight = FontWeights.SemiBold, FontSize = 10 };
+                var chkLidar = new CheckBox { Content = "Nałóż rzeźbę LiDAR ISOK (Single-Shot EVRF2007/KRON86 + Auto-Kontrast 3D)", IsChecked = _showLidarSingleWms, Foreground = TacticalConfigPanel.BrushAccent, FontWeight = FontWeights.SemiBold, FontSize = 10 };
                 chkLidar.Checked += (s, e) =>
                 {
                     _showLidarSingleWms = true;
                     _wmsLoadedLidarFlag = false;
                     if (!_isRebuildingMapControls) TacticalConfigPanel.MarkDirty();
                     RefreshTileCanvasesOnly();
-                    _ = RenderMapTilesAsync();
+                    ScheduleDebouncedTileRender(80);
                 };
                 chkLidar.Unchecked += (s, e) =>
                 {
@@ -937,6 +967,11 @@ namespace FieldTakHub.Builder.Services
             _interactiveCanvas.MouseLeftButtonDown += (s, e) =>
             {
                 if (_draggedHudId != null || _draggedObject != null) return;
+                // Natychmiast przerwij trwające w tle zapytanie WMS w chwili dotknięcia mapy myszą!
+                _wheelZoomDebounceTimer?.Stop();
+                _wmsSheetCts?.Cancel();
+                _isWmsSheetFetchRunning = false;
+
                 _isPanningMap = true;
                 _mouseDownPoint = e.GetPosition(_interactiveCanvas);
                 _dragStartLat = _centerLat;
@@ -952,7 +987,7 @@ namespace FieldTakHub.Builder.Services
                     RefreshTileCanvasesOnly();
                     RedrawVectorsOnly();
                     UpdateOfflineTileEstimateUI();
-                    _ = RenderMapTilesAsync();
+                    ScheduleDebouncedTileRender(120);
                 }
             };
 
@@ -1056,7 +1091,6 @@ namespace FieldTakHub.Builder.Services
                     _centerLon = Math.Clamp(_dragStartLon - dx * (360.0 / scaledWorldSize), -180.0, 180.0);
                     _centerLat = Math.Clamp(_dragStartLat + dy * ((360.0 / scaledWorldSize) * Math.Cos(_dragStartLat * Math.PI / 180.0)), -85.0, 85.0);
 
-                    TacticalConfigPanel.MarkDirty();
                     _fastOverlayRenderer?.InvalidateVisual();
                     RefreshTileCanvasesOnly();
                     if ((DateTime.UtcNow - _lastPanTileRefreshUtc).TotalMilliseconds >= 32)
@@ -1074,7 +1108,7 @@ namespace FieldTakHub.Builder.Services
                     _draggedHudId = null;
                     _draggedHudElement = null;
                     _interactiveCanvas.ReleaseMouseCapture();
-                    TacticalConfigPanel.SaveSessionStateAuto(win);
+                    TacticalConfigPanel.MarkDirty();
                     return;
                 }
                 if (_draggedObject != null)
@@ -1088,7 +1122,7 @@ namespace FieldTakHub.Builder.Services
                     UpdateSelectedMarkerInspectorUI();
                     RedrawVectorsOnly();
                     UpdateOfflineTileEstimateUI();
-                    TacticalConfigPanel.SaveSessionStateAuto(win);
+                    TacticalConfigPanel.MarkDirty();
                     return;
                 }
                 if (!_isPanningMap) return;
@@ -1105,16 +1139,20 @@ namespace FieldTakHub.Builder.Services
                 }
                 else
                 {
+                    TacticalConfigPanel.MarkDirty();
                     RefreshTileCanvasesOnly();
                     RedrawVectorsOnly();
                     UpdateOfflineTileEstimateUI();
-                    _ = RenderMapTilesAsync();
+                    ScheduleDebouncedTileRender(90);
                 }
-                TacticalConfigPanel.SaveSessionStateAuto(win);
             };
 
             _interactiveCanvas.MouseWheel += (s, e) =>
             {
+                // Natychmiast anuluj poprzednie pobieranie i przeskaluj obraz na karcie graficznej (0 ms)
+                _wmsSheetCts?.Cancel();
+                _isWmsSheetFetchRunning = false;
+
                 double factor = e.Delta > 0 ? 0.8 : 1.25;
                 int newScale = (int)(Math.Round((_targetScaleDenominator * factor) / 100.0) * 100);
                 newScale = Math.Clamp(newScale, 500, 100000);
@@ -1128,27 +1166,18 @@ namespace FieldTakHub.Builder.Services
                 double equatorMetersPerPx = 156543.03392 * Math.Cos(_centerLat * Math.PI / 180.0);
                 _zoom = Math.Clamp((int)Math.Round(Math.Log(equatorMetersPerPx / targetMetersPerPx, 2.0)), 5, 19);
 
+                UpdateScalePresetButtonHighlights();
                 RefreshTileCanvasesOnly();
                 RedrawVectorsOnly();
 
-                if (_wheelZoomDebounceTimer == null)
-                {
-                    _wheelZoomDebounceTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(55) };
-                    _wheelZoomDebounceTimer.Tick += (_, __) =>
-                    {
-                        _wheelZoomDebounceTimer.Stop();
-                        TacticalConfigPanel.MarkDirty();
-                        _ = RenderMapTilesAsync();
-                    };
-                }
-                _wheelZoomDebounceTimer.Stop();
-                _wheelZoomDebounceTimer.Start();
+                // Wyślij zapytanie do Geoportalu dopiero gdy użytkownik przestanie kręcić rolką na 240 ms!
+                ScheduleDebouncedTileRender(240);
             };
 
             _viewportHostGrid.SizeChanged += (s, e) =>
             {
                 UpdateSheetViewportSize();
-                _ = RenderMapTilesAsync();
+                ScheduleDebouncedTileRender(180);
             };
 
             Grid.SetColumn(_viewportHostGrid, 1);
@@ -1157,7 +1186,7 @@ namespace FieldTakHub.Builder.Services
             mainGrid.Children.Add(bodyGrid);
 
             var bottomBar = new Border { Background = TacticalConfigPanel.BrushInputBg, BorderBrush = TacticalConfigPanel.BrushCardBorder, BorderThickness = new Thickness(0, 1, 0, 0), Padding = new Thickness(16, 0, 16, 0) };
-            _statusText = new TextBlock { Text = "Gotowy. Silnik TURBO: SSD Disk Cache + 2-Fazowy Geoportal WMS (Fast Draft -> HD) + LiDAR 3D (EVRF2007/KRON86) + Zero-GC 60 FPS.", Foreground = TacticalConfigPanel.BrushAccent, FontSize = 11, VerticalAlignment = VerticalAlignment.Center };
+            _statusText = new TextBlock { Text = "Gotowy. Czysty protokół HTTP/1.1 + Single-Shot WMS/LiDAR + Brak zapytań w trakcie ruchu myszą + Auto-Reset gniazd TCP.", Foreground = TacticalConfigPanel.BrushAccent, FontSize = 11, VerticalAlignment = VerticalAlignment.Center };
             bottomBar.Child = _statusText; Grid.SetRow(bottomBar, 1); mainGrid.Children.Add(bottomBar);
 
             UpdateOfflineTileEstimateUI();
