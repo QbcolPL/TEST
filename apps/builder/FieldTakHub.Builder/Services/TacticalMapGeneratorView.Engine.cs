@@ -245,6 +245,7 @@ namespace FieldTakHub.Builder.Services
             new NatoSymbolOption { Code = "NATO_HAZARD",    ShortBadge = "!",   NatoMeaning = "Zagrożenie / Strefa No-Go",                Label = "[!] NATO Zagrożenie / Strefa No-Go" }
         };
 
+        // Warstwy Geoportalu WMS z dwoma niezależnymi serwerami GUGiK (mapy.geoportal.gov.pl + integracja.gugik.gov.pl)
         public static readonly List<TacticalMapLayerDef> Layers = new List<TacticalMapLayerDef>
         {
             new TacticalMapLayerDef { Id = "google_hyb", Name = "Google Satelita + Opisy", IsWmsEpsg3857 = false, UrlTemplate = "https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}" },
@@ -288,11 +289,9 @@ namespace FieldTakHub.Builder.Services
             new TacticalMapLayerDef { Id = "open_fotomap", Name = "OpenFotoMap / CyclOSM (Siatka Szlaków)", IsWmsEpsg3857 = false, UrlTemplate = "https://a.tile-cyclosm.openstreetmap.fr/cyclosm/{z}/{x}/{y}.png" }
         };
 
-        private const double WmsOverscanFactor = 1.36;
-
         private static readonly HttpClient Http = CreateHttpClient();
-        private static readonly SemaphoreSlim TileThrottle = new SemaphoreSlim(10, 10);
-        private static readonly SemaphoreSlim WmsDedicatedThrottle = new SemaphoreSlim(4, 4);
+        private static readonly SemaphoreSlim TileThrottle = new SemaphoreSlim(12, 12);
+        private static readonly SemaphoreSlim WmsDedicatedThrottle = new SemaphoreSlim(6, 6);
         private static readonly ConcurrentDictionary<string, byte[]> RawTileCache = new ConcurrentDictionary<string, byte[]>();
         private static readonly ConcurrentDictionary<string, BitmapSource> DecodedImageCache = new ConcurrentDictionary<string, BitmapSource>();
         private static readonly ConcurrentDictionary<string, byte> PendingTileUrls = new ConcurrentDictionary<string, byte>();
@@ -315,6 +314,8 @@ namespace FieldTakHub.Builder.Services
         private static readonly HashSet<string> _selectedMapFactions = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         private static CancellationTokenSource _renderCts, _wmsSheetCts, _offlineDownloadCts;
         private static DateTime _lastPanTileRefreshUtc = DateTime.MinValue;
+        private static DispatcherTimer _tileWatchdogTimer;
+        private static volatile bool _hasMissingVisibleTiles;
 
         private static double _centerLat = 49.9135, _centerLon = 19.0238, _dragStartLat, _dragStartLon;
         private static double _wmsLoadedCenterLat = 49.9135, _wmsLoadedCenterLon = 19.0238;
@@ -395,9 +396,9 @@ namespace FieldTakHub.Builder.Services
                 {
                     AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate,
                     ServerCertificateCustomValidationCallback = (s, c, ch, e) => true,
-                    MaxConnectionsPerServer = 20
+                    MaxConnectionsPerServer = 24
                 };
-                var c = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(16) };
+                var c = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(14) };
                 c.DefaultRequestHeaders.UserAgent.ParseAdd("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36");
                 c.DefaultRequestHeaders.Referrer = new Uri("https://mapy.geoportal.gov.pl/");
                 c.DefaultRequestHeaders.Accept.ParseAdd("image/jpeg,image/png,image/*;q=0.9,*/*;q=0.5");
@@ -405,8 +406,23 @@ namespace FieldTakHub.Builder.Services
             }
             catch
             {
-                return new HttpClient { Timeout = TimeSpan.FromSeconds(16) };
+                return new HttpClient { Timeout = TimeSpan.FromSeconds(14) };
             }
+        }
+
+        // Strażnik Niedoczytanych Kafelków: sprawdza co 1.1 s, czy na ekranie został jakikolwiek niedoczytany kafelek i dociąga go automatycznie bez ruszania myszą!
+        private static void EnsureTileWatchdogStarted()
+        {
+            if (_tileWatchdogTimer != null || Application.Current == null) return;
+            _tileWatchdogTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(1100) };
+            _tileWatchdogTimer.Tick += (_, __) =>
+            {
+                if (_fullScreenOverlay?.Visibility == Visibility.Visible && _hasMissingVisibleTiles && PendingTileUrls.IsEmpty)
+                {
+                    RefreshTileCanvasesOnly();
+                }
+            };
+            _tileWatchdogTimer.Start();
         }
 
         private static bool IsValidImagePayload(byte[] data)
@@ -432,7 +448,7 @@ namespace FieldTakHub.Builder.Services
                 byte[] pixels = new byte[h * stride];
                 converted.CopyPixels(pixels, stride, 0);
 
-                int gridN = 16;
+                int gridN = 12;
                 int nearWhiteOrTransparent = 0, totalSamples = 0;
                 double sumLum = 0, sumLumSq = 0;
 
@@ -462,8 +478,8 @@ namespace FieldTakHub.Builder.Services
                 double mean = sumLum / totalSamples;
                 double variance = Math.Max(0, (sumLumSq / totalSamples) - (mean * mean));
 
-                if (whiteRatio >= 0.72) return true;
-                if (variance < 2.0 && mean > 240.0) return true;
+                if (whiteRatio >= 0.78) return true;
+                if (variance < 1.5 && mean > 242.0) return true;
                 return false;
             }
             catch { return false; }
@@ -738,67 +754,62 @@ namespace FieldTakHub.Builder.Services
 
         private static string GetEpsg2180TileBBox(int tx, int ty, int zoom) => GetEpsg3857BBox(tx, ty, zoom);
 
+        // Wylicza optymalną rozdzielczość pojedynczego kafelka WMS (256..640 px), aby skala serwerowa GUGiK ZAWSZE mieściła się w oknie aktywności danej warstwy!
+        private static string GetOptimalWmsTilePixelSize(string layerId, int zoom)
+        {
+            double bboxSpanMeters = 40075016.68 / Math.Pow(2.0, zoom);
+            if (layerId == "geoportal_topo")
+            {
+                // TOPO wymaga skali serwerowej między 1:9500 a 1:24000
+                int px = (int)Math.Round(bboxSpanMeters / (14500.0 * 0.00028));
+                return Math.Clamp(px, 180, 640).ToString();
+            }
+            if (layerId == "geoportal_lidar")
+            {
+                int px = (int)Math.Round(bboxSpanMeters / (7500.0 * 0.00028));
+                return Math.Clamp(px, 256, 640).ToString();
+            }
+            int stdPx = zoom <= 13 ? 640 : (zoom == 14 ? 512 : 384);
+            return stdPx.ToString();
+        }
+
         private static string BuildTileUrl(TacticalMapLayerDef layer, int tx, int ty, int zoom)
         {
             if (layer.IsWmsEpsg3857)
             {
                 string b3857 = GetEpsg3857BBox(tx, ty, zoom);
-                return layer.UrlTemplate
+                string sz = GetOptimalWmsTilePixelSize(layer.Id, zoom);
+
+                // Dla High-Res przy zoom <= 15 oraz LiDAR przy zoom <= 14 od razu używamy warstwy Standard / GRID5
+                string tpl = (layer.Id == "geoportal_hires" && zoom <= 15)
+                    ? layer.FallbackUrlTemplate
+                    : (layer.Id == "geoportal_lidar" && zoom <= 14 ? layer.FallbackUrlTemplate : layer.UrlTemplate);
+
+                return tpl
                     .Replace("{bbox2180}", b3857)
                     .Replace("{bbox}", b3857)
-                    .Replace("{w}", "256")
-                    .Replace("{h}", "256");
+                    .Replace("{w}", sz)
+                    .Replace("{h}", sz);
             }
             return layer.UrlTemplate.Replace("{z}", zoom.ToString()).Replace("{x}", tx.ToString()).Replace("{y}", ty.ToString());
         }
 
-        private static string BuildOverscanSheetWmsUrl(string layerId, string template, double viewW, double viewH, double centerLat, double centerLon)
+        private static string BuildFallbackTileUrl(TacticalMapLayerDef layer, int tx, int ty, int zoom)
         {
-            double overW = viewW * WmsOverscanFactor;
-            double overH = viewH * WmsOverscanFactor;
+            if (layer == null || !layer.IsWmsEpsg3857 || string.IsNullOrEmpty(layer.FallbackUrlTemplate))
+                return null;
 
-            double tilePx = GetScaledTileSizePx();
-            var (cx, cy) = LatLonToTileXY(centerLat, centerLon, _zoom);
-            var (nwLat, nwLon) = TileXYToLatLon(cx - (overW / 2.0) / tilePx, cy - (overH / 2.0) / tilePx, _zoom);
-            var (seLat, seLon) = TileXYToLatLon(cx + (overW / 2.0) / tilePx, cy + (overH / 2.0) / tilePx, _zoom);
+            string b3857 = GetEpsg3857BBox(tx, ty, zoom);
+            string sz = GetOptimalWmsTilePixelSize(layer.Id, zoom);
+            string fbTpl = (layer.Id == "geoportal_hires" && zoom <= 15)
+                ? Layers.First(l => l.Id == "geoportal_std").FallbackUrlTemplate
+                : layer.FallbackUrlTemplate;
 
-            var (minX, minY) = LatLonToEpsg3857(seLat, nwLon);
-            var (maxX, maxY) = LatLonToEpsg3857(nwLat, seLon);
-
-            double bboxSpan3857 = Math.Max(50.0, Math.Abs(maxX - minX));
-            double aspect = Math.Max(0.25, overW / Math.Max(1.0, overH));
-
-            double desiredW = Math.Clamp(overW * 1.15, 760.0, 1780.0);
-
-            if (layerId == "geoportal_topo")
-            {
-                double minWForMaxScale = bboxSpan3857 / (22000.0 * 0.00028);
-                double maxWForMinScale = bboxSpan3857 / (9800.0 * 0.00028);
-                desiredW = Math.Clamp(desiredW, minWForMaxScale, Math.Max(minWForMaxScale, maxWForMinScale));
-            }
-            else if (layerId == "geoportal_lidar")
-            {
-                double minWForLidar = bboxSpan3857 / (13500.0 * 0.00028);
-                desiredW = Math.Max(desiredW, minWForLidar);
-            }
-            else
-            {
-                double minWForOrto = bboxSpan3857 / (18000.0 * 0.00028);
-                desiredW = Math.Max(desiredW, minWForOrto);
-            }
-
-            int reqW = Math.Clamp((int)Math.Round(desiredW), 360, 1920);
-            int reqH = Math.Clamp((int)Math.Round(reqW / aspect), 360, 1920);
-            if (reqH == 1920 && aspect < 1.0)
-                reqW = Math.Clamp((int)Math.Round(reqH * aspect), 360, 1920);
-
-            string bbox3857 = string.Create(CultureInfo.InvariantCulture, $"{minX:0.00},{minY:0.00},{maxX:0.00},{maxY:0.00}");
-
-            return template
-                .Replace("{bbox2180}", bbox3857)
-                .Replace("{bbox}", bbox3857)
-                .Replace("{w}", reqW.ToString())
-                .Replace("{h}", reqH.ToString());
+            return fbTpl
+                .Replace("{bbox2180}", b3857)
+                .Replace("{bbox}", b3857)
+                .Replace("{w}", sz)
+                .Replace("{h}", sz);
         }
 
         private static Point ApplyShift45DegreeSnap(Point anchorPt, Point rawTargetPt, out bool isSnapped, out int snappedAngleDeg)
@@ -839,6 +850,7 @@ namespace FieldTakHub.Builder.Services
             catch { return null; }
         }
 
+        // Niezawodny klient pobierania kafelków z 3-krotnym Auto-Retry oraz automatycznym przełączaniem na serwer zapasowy GUGiK
         private static async Task<BitmapSource> FetchDecodedImageAsync(string url, string fallbackUrl, CancellationToken ct)
         {
             if (string.IsNullOrEmpty(url)) return null;
@@ -853,7 +865,8 @@ namespace FieldTakHub.Builder.Services
                 if (DecodedImageCache.TryGetValue(url, out var secondCheck)) return secondCheck;
 
                 byte[] primaryBytes = null;
-                for (int attempt = 0; attempt < 2 && !ct.IsCancellationRequested; attempt++)
+                int[] retryDelaysMs = { 75, 220, 450 };
+                for (int attempt = 0; attempt < 3 && !ct.IsCancellationRequested; attempt++)
                 {
                     try
                     {
@@ -861,7 +874,8 @@ namespace FieldTakHub.Builder.Services
                         if (IsValidImagePayload(data)) { primaryBytes = data; break; }
                     }
                     catch { }
-                    if (attempt == 0) await Task.Delay(60, ct);
+                    if (attempt < 2 && !ct.IsCancellationRequested)
+                        await Task.Delay(retryDelaysMs[attempt], ct);
                 }
 
                 BitmapSource primaryBmp = DecodeBytesToFrozenBitmap(primaryBytes);
@@ -874,7 +888,7 @@ namespace FieldTakHub.Builder.Services
 
                 if (primaryBmp == null && !string.IsNullOrEmpty(fallbackUrl) && !ct.IsCancellationRequested)
                 {
-                    for (int fbAttempt = 0; fbAttempt < 2 && !ct.IsCancellationRequested; fbAttempt++)
+                    for (int fbAttempt = 0; fbAttempt < 3 && !ct.IsCancellationRequested; fbAttempt++)
                     {
                         try
                         {
@@ -891,14 +905,15 @@ namespace FieldTakHub.Builder.Services
                             }
                         }
                         catch { }
-                        if (fbAttempt == 0) await Task.Delay(60, ct);
+                        if (fbAttempt < 2 && !ct.IsCancellationRequested)
+                            await Task.Delay(retryDelaysMs[fbAttempt], ct);
                     }
                 }
 
                 if (primaryBmp != null)
                 {
-                    if (DecodedImageCache.Count > 500) DecodedImageCache.Clear();
-                    if (RawTileCache.Count > 1400) RawTileCache.Clear();
+                    if (DecodedImageCache.Count > 900) DecodedImageCache.Clear();
+                    if (RawTileCache.Count > 1800) RawTileCache.Clear();
                     DecodedImageCache[url] = primaryBmp;
                     if (primaryBytes != null) RawTileCache[url] = primaryBytes;
                 }
@@ -910,52 +925,10 @@ namespace FieldTakHub.Builder.Services
             }
         }
 
-        private static async Task<BitmapSource> FetchWmsOverscanSheetBitmapAsync(TacticalMapLayerDef layer, double viewW, double viewH, double centerLat, double centerLon, int scaleDenom, CancellationToken ct)
+        // Ujednolicony silnik kafelkowy dla WSZYSTKICH warstw (zarówno Google/OSM jak i Geoportal WMS!) — pobiera w trakcie ruchu myszą i odświeża każdy kafelek natychmiast po pobraniu
+        private static bool RenderLayerTilesSmoothly(Canvas targetCanvas, TacticalMapLayerDef layer, double w, double h, double opacity, CancellationToken ct)
         {
-            string primaryTpl = (layer.Id == "geoportal_hires" && scaleDenom > 4500)
-                ? layer.FallbackUrlTemplate
-                : (layer.Id == "geoportal_lidar" && scaleDenom > 6500
-                    ? layer.FallbackUrlTemplate
-                    : layer.UrlTemplate);
-
-            string fallbackTpl = (layer.Id == "geoportal_hires" && scaleDenom > 4500)
-                ? Layers.First(l => l.Id == "geoportal_std").FallbackUrlTemplate
-                : layer.FallbackUrlTemplate;
-
-            string primaryUrl = BuildOverscanSheetWmsUrl(layer.Id, primaryTpl, viewW, viewH, centerLat, centerLon);
-            string fallbackUrl = !string.IsNullOrEmpty(fallbackTpl)
-                ? BuildOverscanSheetWmsUrl(layer.Id, fallbackTpl, viewW, viewH, centerLat, centerLon)
-                : null;
-
-            return await FetchDecodedImageAsync(primaryUrl, fallbackUrl, ct);
-        }
-
-        private static void PlaceOverscanSheetOnCanvas(Canvas targetCanvas, BitmapSource bmp, double viewW, double viewH, double opacity)
-        {
-            if (targetCanvas == null || bmp == null) return;
-            double overW = viewW * WmsOverscanFactor;
-            double overH = viewH * WmsOverscanFactor;
-            double offsetX = -(overW - viewW) / 2.0;
-            double offsetY = -(overH - viewH) / 2.0;
-
-            targetCanvas.Opacity = opacity;
-            targetCanvas.Children.Clear();
-            var img = new Image
-            {
-                Source = bmp,
-                Width = overW,
-                Height = overH,
-                Stretch = Stretch.Fill,
-                UseLayoutRounding = true
-            };
-            Canvas.SetLeft(img, offsetX);
-            Canvas.SetTop(img, offsetY);
-            targetCanvas.Children.Add(img);
-        }
-
-        private static void RenderLayerTilesSmoothly(Canvas targetCanvas, TacticalMapLayerDef layer, double w, double h, double opacity, CancellationToken ct)
-        {
-            if (targetCanvas == null || layer == null) return;
+            if (targetCanvas == null || layer == null) return false;
             targetCanvas.RenderTransform = Transform.Identity;
 
             double tilePx = GetScaledTileSizePx();
@@ -968,6 +941,7 @@ namespace FieldTakHub.Builder.Services
 
             targetCanvas.Children.Clear();
             targetCanvas.Opacity = opacity;
+            bool anyMissing = false;
 
             for (int tx = minTx; tx <= maxTx; tx++)
             {
@@ -981,13 +955,16 @@ namespace FieldTakHub.Builder.Services
 
                     if (DecodedImageCache.TryGetValue(url, out var readyBmp))
                     {
-                        var img = new Image { Source = readyBmp, Width = tilePx + 0.8, Height = tilePx + 0.8, Stretch = Stretch.Fill };
+                        var img = new Image { Source = readyBmp, Width = tilePx + 0.9, Height = tilePx + 0.9, Stretch = Stretch.Fill };
                         Canvas.SetLeft(img, sx);
                         Canvas.SetTop(img, sy);
                         targetCanvas.Children.Add(img);
                     }
                     else
                     {
+                        anyMissing = true;
+
+                        // Podgląd z kafelka nadrzędnego (Zoom - 1), aby podczas doczytywania nie było pustego pola
                         if (_zoom > 6)
                         {
                             int pZ = _zoom - 1;
@@ -995,9 +972,11 @@ namespace FieldTakHub.Builder.Services
                             string parentUrl = BuildTileUrl(layer, pTx, pTy, pZ);
                             if (DecodedImageCache.TryGetValue(parentUrl, out var parentBmp))
                             {
-                                var crop = new CroppedBitmap(parentBmp, new Int32Rect((wrappedTx % 2) * (parentBmp.PixelWidth / 2), (ty % 2) * (parentBmp.PixelHeight / 2), parentBmp.PixelWidth / 2, parentBmp.PixelHeight / 2));
+                                int cw = Math.Max(1, parentBmp.PixelWidth / 2);
+                                int ch = Math.Max(1, parentBmp.PixelHeight / 2);
+                                var crop = new CroppedBitmap(parentBmp, new Int32Rect((wrappedTx % 2) * cw, (ty % 2) * ch, cw, ch));
                                 crop.Freeze();
-                                var fallbackImg = new Image { Source = crop, Width = tilePx + 0.8, Height = tilePx + 0.8, Stretch = Stretch.Fill };
+                                var fallbackImg = new Image { Source = crop, Width = tilePx + 0.9, Height = tilePx + 0.9, Stretch = Stretch.Fill };
                                 Canvas.SetLeft(fallbackImg, sx);
                                 Canvas.SetTop(fallbackImg, sy);
                                 targetCanvas.Children.Add(fallbackImg);
@@ -1006,16 +985,17 @@ namespace FieldTakHub.Builder.Services
 
                         if (PendingTileUrls.TryAdd(url, 1))
                         {
+                            string fbUrl = BuildFallbackTileUrl(layer, wrappedTx, ty, _zoom);
                             _ = Task.Run(async () =>
                             {
                                 try
                                 {
-                                    var downloaded = await FetchDecodedImageAsync(url, null, ct);
+                                    var downloaded = await FetchDecodedImageAsync(url, fbUrl, ct);
                                     if (downloaded != null && !ct.IsCancellationRequested && Application.Current != null)
                                     {
                                         _ = Application.Current.Dispatcher.BeginInvoke(new Action(() =>
                                         {
-                                            if (_fullScreenOverlay?.Visibility == Visibility.Visible && !_activeLayer.IsWmsEpsg3857)
+                                            if (_fullScreenOverlay?.Visibility == Visibility.Visible)
                                                 RefreshTileCanvasesOnly();
                                         }), DispatcherPriority.Background);
                                     }
@@ -1029,39 +1009,79 @@ namespace FieldTakHub.Builder.Services
                     }
                 }
             }
-        }
-
-        private static Transform BuildWmsInstantViewportTransform(double w, double h)
-        {
-            Point loadedCenterScreenPt = LatLonToScreen(_wmsLoadedCenterLat, _wmsLoadedCenterLon, w, h);
-            double dx = loadedCenterScreenPt.X - (w / 2.0);
-            double dy = loadedCenterScreenPt.Y - (h / 2.0);
-            double scaleRatio = (double)Math.Max(100, _wmsLoadedScaleDenominator) / Math.Max(100, _targetScaleDenominator);
-
-            var tg = new TransformGroup();
-            tg.Children.Add(new ScaleTransform(scaleRatio, scaleRatio, w / 2.0, h / 2.0));
-            tg.Children.Add(new TranslateTransform(dx, dy));
-            return tg;
+            return anyMissing;
         }
 
         private static void RefreshTileCanvasesOnly()
         {
             if (_tileCanvas == null || _activeLayer == null || _fullScreenOverlay?.Visibility != Visibility.Visible) return;
+            EnsureTileWatchdogStarted();
+
             var (w, h) = GetExactCanvasSize();
             var ct = _renderCts?.Token ?? CancellationToken.None;
 
-            if (_activeLayer.IsWmsEpsg3857)
+            bool baseMissing = RenderLayerTilesSmoothly(_tileCanvas, _activeLayer, w, h, 1.0, ct);
+            bool lidarMissing = false;
+
+            if (_lidarTileCanvas != null)
             {
-                var wmsTransform = BuildWmsInstantViewportTransform(w, h);
-                _tileCanvas.RenderTransform = wmsTransform;
-                if (_lidarTileCanvas != null)
-                    _lidarTileCanvas.RenderTransform = wmsTransform;
+                if (_showLidarSingleWms && _activeLayer.Id != "geoportal_lidar")
+                {
+                    var lidarLayer = Layers.First(l => l.Id == "geoportal_lidar");
+                    lidarMissing = RenderLayerTilesSmoothly(_lidarTileCanvas, lidarLayer, w, h, _lidarOpacity, ct);
+                }
+                else
+                {
+                    _lidarTileCanvas.Children.Clear();
+                }
             }
-            else
+
+            _hasMissingVisibleTiles = baseMissing || lidarMissing;
+        }
+
+        // Oczekuje na pełne pobranie wszystkich widocznych kafelków na ekranie (używane m.in. przed zrzutem do PDF i KMZ)
+        private static async Task WaitForAllVisibleTilesAsync(double w, double h, CancellationToken ct)
+        {
+            double tilePx = GetScaledTileSizePx();
+            var (centerTileX, centerTileY) = LatLonToTileXY(_centerLat, _centerLon, _zoom);
+            int minTx = (int)Math.Floor(centerTileX - (w / 2.0) / tilePx);
+            int maxTx = (int)Math.Floor(centerTileX + (w / 2.0) / tilePx);
+            int minTy = (int)Math.Floor(centerTileY - (h / 2.0) / tilePx);
+            int maxTy = (int)Math.Floor(centerTileY + (h / 2.0) / tilePx);
+            int maxIndex = (1 << _zoom) - 1;
+
+            var tasks = new List<Task>();
+            var lidarLayer = Layers.First(l => l.Id == "geoportal_lidar");
+
+            for (int tx = minTx; tx <= maxTx; tx++)
             {
-                RenderLayerTilesSmoothly(_tileCanvas, _activeLayer, w, h, 1.0, ct);
-                if (_lidarTileCanvas != null && _showLidarSingleWms)
-                    _lidarTileCanvas.RenderTransform = BuildWmsInstantViewportTransform(w, h);
+                for (int ty = minTy; ty <= maxTy; ty++)
+                {
+                    if (ty < 0 || ty > maxIndex) continue;
+                    int wrappedTx = ((tx % (maxIndex + 1)) + (maxIndex + 1)) % (maxIndex + 1);
+
+                    string baseUrl = BuildTileUrl(_activeLayer, wrappedTx, ty, _zoom);
+                    if (!DecodedImageCache.ContainsKey(baseUrl))
+                    {
+                        string fbUrl = BuildFallbackTileUrl(_activeLayer, wrappedTx, ty, _zoom);
+                        tasks.Add(FetchDecodedImageAsync(baseUrl, fbUrl, ct));
+                    }
+
+                    if (_showLidarSingleWms && _activeLayer.Id != "geoportal_lidar")
+                    {
+                        string lUrl = BuildTileUrl(lidarLayer, wrappedTx, ty, _zoom);
+                        if (!DecodedImageCache.ContainsKey(lUrl))
+                        {
+                            string lFb = BuildFallbackTileUrl(lidarLayer, wrappedTx, ty, _zoom);
+                            tasks.Add(FetchDecodedImageAsync(lUrl, lFb, ct));
+                        }
+                    }
+                }
+            }
+
+            if (tasks.Count > 0)
+            {
+                try { await Task.WhenAll(tasks); } catch { }
             }
         }
 
@@ -1072,6 +1092,7 @@ namespace FieldTakHub.Builder.Services
             if (_renderCts == null || _renderCts.IsCancellationRequested)
                 _renderCts = new CancellationTokenSource();
 
+            EnsureTileWatchdogStarted();
             UpdateSheetViewportSize();
             var (w, h) = GetExactCanvasSize();
             RedrawVectorsOnly();
@@ -1090,70 +1111,10 @@ namespace FieldTakHub.Builder.Services
             _dimmerRect.Opacity = _mapDimmerOpacity;
 
             RefreshTileCanvasesOnly();
-
-            if (_activeLayer.IsWmsEpsg3857 || _showLidarSingleWms)
+            if (_hasMissingVisibleTiles)
             {
-                _wmsSheetCts?.Cancel();
-                var wmsCts = new CancellationTokenSource();
-                _wmsSheetCts = wmsCts;
-                var ct = wmsCts.Token;
-
-                double reqLat = _centerLat, reqLon = _centerLon;
-                int reqScale = _targetScaleDenominator;
-
-                try
-                {
-                    await Task.Delay(95, ct);
-                    if (ct.IsCancellationRequested) return;
-
-                    if (_statusText != null && _activeLayer.IsWmsEpsg3857)
-                        _statusText.Text = $"⏳ Pobieranie arkusza Geoportal WMS ({_activeLayer.Name.Split('(')[0].Trim()} | Skala 1:{reqScale:N0})...";
-
-                    Task<BitmapSource> baseSheetTask = _activeLayer.IsWmsEpsg3857
-                        ? FetchWmsOverscanSheetBitmapAsync(_activeLayer, w, h, reqLat, reqLon, reqScale, ct)
-                        : Task.FromResult<BitmapSource>(null);
-
-                    Task<BitmapSource> lidarSheetTask = (_showLidarSingleWms && _activeLayer.Id != "geoportal_lidar")
-                        ? FetchWmsOverscanSheetBitmapAsync(Layers.First(l => l.Id == "geoportal_lidar"), w, h, reqLat, reqLon, reqScale, ct)
-                        : Task.FromResult<BitmapSource>(null);
-
-                    await Task.WhenAll(baseSheetTask, lidarSheetTask);
-                    if (ct.IsCancellationRequested) return;
-
-                    if (_activeLayer.IsWmsEpsg3857 && baseSheetTask.Result != null)
-                    {
-                        _wmsLoadedCenterLat = reqLat;
-                        _wmsLoadedCenterLon = reqLon;
-                        _wmsLoadedScaleDenominator = reqScale;
-
-                        PlaceOverscanSheetOnCanvas(_tileCanvas, baseSheetTask.Result, w, h, 1.0);
-                        _tileCanvas.RenderTransform = BuildWmsInstantViewportTransform(w, h);
-
-                        if (_statusText != null)
-                            _statusText.Text = $"✓ Wczytano Geoportal WMS ({_activeLayer.Name.Split('(')[0].Trim()} | Skala 1:{reqScale:N0} | Bufor 1.36x).";
-                    }
-
-                    if (_lidarTileCanvas != null)
-                    {
-                        _lidarTileCanvas.Children.Clear();
-                        if (_showLidarSingleWms && lidarSheetTask.Result != null)
-                        {
-                            if (!_activeLayer.IsWmsEpsg3857)
-                            {
-                                _wmsLoadedCenterLat = reqLat;
-                                _wmsLoadedCenterLon = reqLon;
-                                _wmsLoadedScaleDenominator = reqScale;
-                            }
-                            PlaceOverscanSheetOnCanvas(_lidarTileCanvas, lidarSheetTask.Result, w, h, _lidarOpacity);
-                            _lidarTileCanvas.RenderTransform = BuildWmsInstantViewportTransform(w, h);
-                        }
-                    }
-                }
-                catch { }
-            }
-            else if (_lidarTileCanvas != null)
-            {
-                _lidarTileCanvas.Children.Clear();
+                await WaitForAllVisibleTilesAsync(w, h, _renderCts.Token);
+                RefreshTileCanvasesOnly();
             }
         }
 

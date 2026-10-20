@@ -33,7 +33,6 @@ namespace FieldTakHub.Builder.Services
         private static ScrollViewer _leftControlScrollViewer;
         private static bool _isRebuildingMapControls;
 
-        // Eksportuje dodatkowe parametry UI Generatora Map (pozycje HUD Drag&Drop, ustawienia Offline, kolory i domyślne narzędzia)
         private static void ExportExtraMapUiState(JsonObject root)
         {
             if (root == null) return;
@@ -62,7 +61,6 @@ namespace FieldTakHub.Builder.Services
             root["includeVectorsWithOffline"] = _includeVectorsWithOffline;
         }
 
-        // Wczytuje dodatkowe parametry UI i przebudowuje cały lewy panel kontrolek, aby wszystkie suwaki, checkboxy i kolory RGB odzwierciedlały zapisany stan!
         private static void ImportExtraMapUiState(JsonObject root)
         {
             if (root == null) return;
@@ -258,7 +256,6 @@ namespace FieldTakHub.Builder.Services
             TacticalConfigPanel.MapStateExportProvider = ExportMapStateToJson;
             TacticalConfigPanel.MapStateImportConsumer = ImportMapStateFromJson;
 
-            // Wczytaj oczekujący stan mapy z pliku sesji PRZED zbudowaniem kontrolek UI!
             TacticalConfigPanel.ConsumePendingMapStateIfAny();
 
             try
@@ -381,7 +378,6 @@ namespace FieldTakHub.Builder.Services
             _ = RenderMapTilesAsync();
         }
 
-        // Przebudowuje cały lewy panel kontrolek Generatora Map (wszystkie suwaki, checkboxy, listy i próbki RGB) na podstawie bieżących zmiennych stanu
         private static void RebuildLeftControlsPanel(Window win)
         {
             if (_leftControlScrollViewer == null || win == null) return;
@@ -475,7 +471,11 @@ namespace FieldTakHub.Builder.Services
                 _scalePresetButtons.Add(btnScale25k);
                 sec1.Children.Add(btnScale25k);
 
-                _layerComboBox = new ComboBox { ItemsSource = Layers, SelectedItem = _activeLayer ?? Layers[0], Height = 26, FontSize = 10.5, Margin = new Thickness(0, 0, 0, 6), Tag = "INJECTED" };
+                var layerRow = new Grid { Margin = new Thickness(0, 0, 0, 6) };
+                layerRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+                layerRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+                _layerComboBox = new ComboBox { ItemsSource = Layers, SelectedItem = _activeLayer ?? Layers[0], Height = 26, FontSize = 10.5, Tag = "INJECTED" };
                 TacticalConfigPanel.ApplyUnifiedComboBoxTheme(_layerComboBox, win);
                 _layerComboBox.SelectionChanged += (s, e) =>
                 {
@@ -483,15 +483,32 @@ namespace FieldTakHub.Builder.Services
                     {
                         _activeLayer = def;
                         if (!_isRebuildingMapControls) TacticalConfigPanel.MarkDirty();
+                        RefreshTileCanvasesOnly();
                         _ = RenderMapTilesAsync();
                     }
                 };
-                sec1.Children.Add(TacticalConfigPanel.FieldBox("Podkład bazowy (Geoportal WMS 1.36x / Google / ESRI / OSM):", _layerComboBox));
+                Grid.SetColumn(_layerComboBox, 0);
+                layerRow.Children.Add(_layerComboBox);
+
+                var btnReloadTiles = MakeActionButton("🔄 Odśwież", false, () =>
+                {
+                    PendingTileUrls.Clear();
+                    RefreshTileCanvasesOnly();
+                    _ = RenderMapTilesAsync();
+                });
+                btnReloadTiles.Height = 26;
+                btnReloadTiles.Padding = new Thickness(8, 0, 8, 0);
+                btnReloadTiles.Margin = new Thickness(6, 0, 0, 0);
+                btnReloadTiles.ToolTip = "Wymuś ponowne sprawdzenie i dociągnięcie kafelków podkładu mapowego";
+                Grid.SetColumn(btnReloadTiles, 1);
+                layerRow.Children.Add(btnReloadTiles);
+
+                sec1.Children.Add(TacticalConfigPanel.FieldBox("Podkład bazowy (Strumieniowy Geoportal WMS / Google / ESRI / OSM):", layerRow));
 
                 var lidarBox = new Border { Background = TacticalConfigPanel.BrushInputBg, BorderBrush = TacticalConfigPanel.BrushAccent, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(6), Padding = new Thickness(8, 6, 8, 6) };
                 var lidarStack = new StackPanel();
-                var chkLidar = new CheckBox { Content = "Nałóż rzeźbę LiDAR ISOK (Bufor 1.36x EPSG:3857)", IsChecked = _showLidarSingleWms, Foreground = TacticalConfigPanel.BrushAccent, FontWeight = FontWeights.SemiBold, FontSize = 10 };
-                chkLidar.Checked += (s, e) => { _showLidarSingleWms = true; if (!_isRebuildingMapControls) TacticalConfigPanel.MarkDirty(); _ = RenderMapTilesAsync(); };
+                var chkLidar = new CheckBox { Content = "Nałóż rzeźbę LiDAR ISOK (Strumieniowe kafelki WMS)", IsChecked = _showLidarSingleWms, Foreground = TacticalConfigPanel.BrushAccent, FontWeight = FontWeights.SemiBold, FontSize = 10 };
+                chkLidar.Checked += (s, e) => { _showLidarSingleWms = true; if (!_isRebuildingMapControls) TacticalConfigPanel.MarkDirty(); RefreshTileCanvasesOnly(); _ = RenderMapTilesAsync(); };
                 chkLidar.Unchecked += (s, e) => { _showLidarSingleWms = false; if (!_isRebuildingMapControls) TacticalConfigPanel.MarkDirty(); _lidarTileCanvas?.Children.Clear(); };
                 lidarStack.Children.Add(chkLidar);
                 lidarStack.Children.Add(MakeSliderRow("Przezroczystość rzeźby LiDAR ISOK:", 0.10, 0.95, _lidarOpacity, v => $"{(int)Math.Round(v * 100)}%", v =>
@@ -848,7 +865,7 @@ namespace FieldTakHub.Builder.Services
             Grid.SetColumn(_leftControlScrollViewer, 0);
             bodyGrid.Children.Add(_leftControlScrollViewer);
 
-            // PRAWA STRONA: SZYBKI SILNIK 60 FPS (_tileCanvas + _lidarTileCanvas + _fastOverlayRenderer + _interactiveCanvas)
+            // PRAWA STRONA: SZYBKI SILNIK KAFELKOWY 60 FPS (_tileCanvas + _lidarTileCanvas + _fastOverlayRenderer + _interactiveCanvas)
             _viewportHostGrid = new Grid
             {
                 Background = TacticalConfigPanel.BrushInputBg,
@@ -905,6 +922,19 @@ namespace FieldTakHub.Builder.Services
                 _dragStartLat = _centerLat;
                 _dragStartLon = _centerLon;
                 _interactiveCanvas.CaptureMouse();
+            };
+
+            // Jeśli użytkownik wyjedzie myszą poza okno i tam puści przycisk (utrata MouseCapture), automatycznie dokończ odświeżenie wszystkich kafelków!
+            _interactiveCanvas.LostMouseCapture += (s, e) =>
+            {
+                if (_isPanningMap)
+                {
+                    _isPanningMap = false;
+                    RefreshTileCanvasesOnly();
+                    RedrawVectorsOnly();
+                    UpdateOfflineTileEstimateUI();
+                    _ = RenderMapTilesAsync();
+                }
             };
 
             _interactiveCanvas.MouseRightButtonDown += (s, e) =>
@@ -1056,6 +1086,7 @@ namespace FieldTakHub.Builder.Services
                 }
                 else
                 {
+                    RefreshTileCanvasesOnly();
                     RedrawVectorsOnly();
                     UpdateOfflineTileEstimateUI();
                     _ = RenderMapTilesAsync();
@@ -1083,7 +1114,7 @@ namespace FieldTakHub.Builder.Services
             mainGrid.Children.Add(bodyGrid);
 
             var bottomBar = new Border { Background = TacticalConfigPanel.BrushInputBg, BorderBrush = TacticalConfigPanel.BrushCardBorder, BorderThickness = new Thickness(0, 1, 0, 0), Padding = new Thickness(16, 0, 16, 0) };
-            _statusText = new TextBlock { Text = "Gotowy. Automatyczny zapis i odczyt pełnej sesji (strony, kanały głosowe, mapa, kolory RGB, suwaki i znaczniki).", Foreground = TacticalConfigPanel.BrushAccent, FontSize = 11, VerticalAlignment = VerticalAlignment.Center };
+            _statusText = new TextBlock { Text = "Gotowy. Strumieniowe kafelki Geoportal WMS z 3x Auto-Retry, Watchdogiem 1.1s, stałą siatką MGRS/WGS84 oraz pamięcią sesji.", Foreground = TacticalConfigPanel.BrushAccent, FontSize = 11, VerticalAlignment = VerticalAlignment.Center };
             bottomBar.Child = _statusText; Grid.SetRow(bottomBar, 1); mainGrid.Children.Add(bottomBar);
 
             UpdateOfflineTileEstimateUI();
@@ -1180,64 +1211,30 @@ namespace FieldTakHub.Builder.Services
             catch { return baseBytes; }
         }
 
+        // Pobiera pojedynczy kafelek dla bazy Offline korzystając z tego samego silnika 3x Auto-Retry i Fallback GUGiK
         private static async Task<byte[]> FetchSingleOfflineTileBytesAsync(TacticalMapLayerDef layer, int tx, int ty, int zoom, CancellationToken ct)
         {
-            string bbox2180 = layer.IsWmsEpsg3857 ? GetEpsg2180TileBBox(tx, ty, zoom) : "";
-            string bbox3857 = layer.IsWmsEpsg3857 ? GetEpsg3857BBox(tx, ty, zoom) : "";
-            string tileReqSz = (layer.IsWmsEpsg3857 && zoom <= 14) ? "512" : "256";
-
-            string primaryTpl = (layer.Id == "geoportal_hires" && zoom <= 15)
-                ? layer.FallbackUrlTemplate
-                : (layer.Id == "geoportal_lidar" && zoom <= 14 ? layer.FallbackUrlTemplate : layer.UrlTemplate);
-
-            string url = layer.IsWmsEpsg3857
-                ? primaryTpl.Replace("{bbox2180}", bbox2180).Replace("{bbox}", bbox3857).Replace("{w}", tileReqSz).Replace("{h}", tileReqSz)
-                : BuildTileUrl(layer, tx, ty, zoom);
-
+            string url = BuildTileUrl(layer, tx, ty, zoom);
             if (RawTileCache.TryGetValue(url, out var cached) && IsValidImagePayload(cached))
                 return cached;
 
-            string fallbackUrl = (!string.IsNullOrEmpty(layer.FallbackUrlTemplate) && layer.IsWmsEpsg3857)
-                ? layer.FallbackUrlTemplate.Replace("{bbox2180}", bbox2180).Replace("{bbox}", bbox3857).Replace("{w}", tileReqSz).Replace("{h}", tileReqSz)
-                : null;
+            string fallbackUrl = BuildFallbackTileUrl(layer, tx, ty, zoom);
+            var bmp = await FetchDecodedImageAsync(url, fallbackUrl, ct);
+            if (RawTileCache.TryGetValue(url, out var fetchedBytes) && IsValidImagePayload(fetchedBytes))
+                return fetchedBytes;
 
-            await TileThrottle.WaitAsync(ct);
-            try
+            if (bmp != null)
             {
-                for (int attempt = 0; attempt < 2 && !ct.IsCancellationRequested; attempt++)
+                try
                 {
-                    try
-                    {
-                        byte[] data = await Http.GetByteArrayAsync(url, ct);
-                        if (IsValidImagePayload(data))
-                        {
-                            var bmp = DecodeBytesToFrozenBitmap(data);
-                            if (bmp != null && (!layer.IsWmsEpsg3857 || string.IsNullOrEmpty(fallbackUrl) || !IsBlankWhiteWmsPayload(data, bmp)))
-                            {
-                                if (RawTileCache.Count < 1500) RawTileCache[url] = data;
-                                return data;
-                            }
-                        }
-                    }
-                    catch { }
-                    if (attempt == 0) await Task.Delay(75, ct);
+                    var enc = new JpegBitmapEncoder { QualityLevel = 90 };
+                    enc.Frames.Add(BitmapFrame.Create(bmp));
+                    using var ms = new MemoryStream();
+                    enc.Save(ms);
+                    return ms.ToArray();
                 }
-
-                if (!string.IsNullOrEmpty(fallbackUrl) && !ct.IsCancellationRequested)
-                {
-                    try
-                    {
-                        byte[] fb = await Http.GetByteArrayAsync(fallbackUrl, ct);
-                        if (IsValidImagePayload(fb))
-                        {
-                            if (RawTileCache.Count < 1500) RawTileCache[url] = fb;
-                            return fb;
-                        }
-                    }
-                    catch { }
-                }
+                catch { }
             }
-            finally { TileThrottle.Release(); }
             return null;
         }
 
