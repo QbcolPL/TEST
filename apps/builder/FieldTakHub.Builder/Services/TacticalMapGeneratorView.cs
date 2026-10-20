@@ -32,6 +32,7 @@ namespace FieldTakHub.Builder.Services
         private static string _savedDefaultObjectName = "➤";
         private static ScrollViewer _leftControlScrollViewer;
         private static bool _isRebuildingMapControls;
+        private static DispatcherTimer _wheelZoomDebounceTimer;
 
         private static void ExportExtraMapUiState(JsonObject root)
         {
@@ -1114,8 +1115,34 @@ namespace FieldTakHub.Builder.Services
             {
                 double factor = e.Delta > 0 ? 0.8 : 1.25;
                 int newScale = (int)(Math.Round((_targetScaleDenominator * factor) / 100.0) * 100);
-                TacticalConfigPanel.MarkDirty();
-                ApplyScaleDenominator(Math.Clamp(newScale, 500, 100000));
+                newScale = Math.Clamp(newScale, 500, 100000);
+                _targetScaleDenominator = newScale;
+
+                if (_scaleInputBox != null)
+                    _scaleInputBox.Text = _targetScaleDenominator.ToString();
+
+                UpdateSheetViewportSize();
+                double targetMetersPerPx = GetExactMetersPerPixel();
+                double equatorMetersPerPx = 156543.03392 * Math.Cos(_centerLat * Math.PI / 180.0);
+                _zoom = Math.Clamp((int)Math.Round(Math.Log(equatorMetersPerPx / targetMetersPerPx, 2.0)), 5, 19);
+
+                // 0 ms: natychmiastowe przeskalowanie podglądu na ekranie
+                RefreshTileCanvasesOnly();
+                RedrawVectorsOnly();
+
+                // Debounce 90 ms: zapobiega zalewaniu serwerów GUGiK zapytaniami podczas szybkiego kręcenia rolką myszy
+                if (_wheelZoomDebounceTimer == null)
+                {
+                    _wheelZoomDebounceTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(90) };
+                    _wheelZoomDebounceTimer.Tick += (_, __) =>
+                    {
+                        _wheelZoomDebounceTimer.Stop();
+                        TacticalConfigPanel.MarkDirty();
+                        _ = RenderMapTilesAsync();
+                    };
+                }
+                _wheelZoomDebounceTimer.Stop();
+                _wheelZoomDebounceTimer.Start();
             };
 
             _viewportHostGrid.SizeChanged += (s, e) =>
@@ -1130,7 +1157,7 @@ namespace FieldTakHub.Builder.Services
             mainGrid.Children.Add(bodyGrid);
 
             var bottomBar = new Border { Background = TacticalConfigPanel.BrushInputBg, BorderBrush = TacticalConfigPanel.BrushCardBorder, BorderThickness = new Thickness(0, 1, 0, 0), Padding = new Thickness(16, 0, 16, 0) };
-            _statusText = new TextBlock { Text = "Gotowy. Stos Geodezyjnie Zakotwiczonych Arkuszy Geoportal WMS + Cieniowanie LiDAR ISOK (EPSG:2180) + Watchdog 750ms.", Foreground = TacticalConfigPanel.BrushAccent, FontSize = 11, VerticalAlignment = VerticalAlignment.Center };
+            _statusText = new TextBlock { Text = "Gotowy. Cieniowanie LiDAR ISOK (PNG EPSG:2180), płynny zoom (Debounce 90ms) i stała siatka MGRS.", Foreground = TacticalConfigPanel.BrushAccent, FontSize = 11, VerticalAlignment = VerticalAlignment.Center };
             bottomBar.Child = _statusText; Grid.SetRow(bottomBar, 1); mainGrid.Children.Add(bottomBar);
 
             UpdateOfflineTileEstimateUI();
