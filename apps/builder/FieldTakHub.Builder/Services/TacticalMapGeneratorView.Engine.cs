@@ -362,7 +362,6 @@ namespace FieldTakHub.Builder.Services
         private static TextBox _objectNameInputBox, _scaleInputBox, _searchPlaceBox;
         private static ComboBox _fmtComboBox, _oriComboBox, _layerComboBox;
 
-        // Stan wybranego (klikniętego) znacznika do odczytu współrzędnych MGRS / UTM / WGS84
         private static TacticalMapObjectItem _inspectedObject;
         private static int _inspectedVertexIndex = 0;
         private static TextBlock _inspectorTitleLabel, _inspectorMgrsLabel, _inspectorWgsUtmLabel;
@@ -498,7 +497,6 @@ namespace FieldTakHub.Builder.Services
                         swatch.Background = TacticalConfigPanel.BrushFromHex(picked, Colors.White);
                         lbl.Text = picked.ToUpperInvariant();
                         GlyphCache.Clear();
-                ImportExtraMapUiState(root);
                         TacticalConfigPanel.MarkDirty();
                         _fastOverlayRenderer?.InvalidateVisual();
                     }
@@ -514,8 +512,7 @@ namespace FieldTakHub.Builder.Services
             sec2.Children.Add(rgbGrid);
 
             sec2.Children.Add(MakeSliderRow("Grubość linii siatki (głównej i pomocniczej):", 0.5, 3.0, _gridThicknessMultiplier, v => $"{v:0.1}x", v => { _gridThicknessMultiplier = Math.Round(v, 1); _fastOverlayRenderer?.InvalidateVisual(); }));
-            sec2.Children.Add(MakeSliderRow("Rozmiar / grubość czcionki współrzędnych (MGRS i Keypad):", 0.7, 2.0, _fontScaleMultiplier, v => $"{v:0.1}x", v => { _fontScaleMultiplier = Math.Round(v, 1); GlyphCache.Clear();
-                ImportExtraMapUiState(root); _fastOverlayRenderer?.InvalidateVisual(); }));
+            sec2.Children.Add(MakeSliderRow("Rozmiar / grubość czcionki współrzędnych (MGRS i Keypad):", 0.7, 2.0, _fontScaleMultiplier, v => $"{v:0.1}x", v => { _fontScaleMultiplier = Math.Round(v, 1); GlyphCache.Clear(); _fastOverlayRenderer?.InvalidateVisual(); }));
             sec2.Children.Add(MakeSliderRow("Widoczność (alfa) głównych linii i opisów (MGRS / WGS84):", 0.05, 1.0, _mainGridOpacity, v => $"{(int)Math.Round(v * 100)}%", v => { _mainGridOpacity = Math.Round(v, 2); _fastOverlayRenderer?.InvalidateVisual(); }));
             sec2.Children.Add(MakeSliderRow("Widoczność (alfa) podziałki wewnętrznej (Keypad 1-9 / Ćwiartki):", 0.0, 1.0, _subGridOpacity, v => $"{(int)Math.Round(v * 100)}%", v => { _subGridOpacity = Math.Round(v, 2); _fastOverlayRenderer?.InvalidateVisual(); }));
             sec2.Children.Add(MakeSliderRow("Krycie tła (kasetonu) pod cyframi Keypad / Ćwiartek:", 0.0, 1.0, _subLabelBgOpacity, v => $"{(int)Math.Round(v * 100)}%", v => { _subLabelBgOpacity = Math.Round(v, 2); _fastOverlayRenderer?.InvalidateVisual(); }));
@@ -533,9 +530,6 @@ namespace FieldTakHub.Builder.Services
             return sec2;
         }
 
-        // =========================================================================
-        // MATEMATYKA GEODEZYJNA: DWUKIERUNKOWA KONWERSJA WGS84 <-> UTM ORAZ MELDUNEK MGRS
-        // =========================================================================
         private static (double W, double H) GetExactCanvasSize()
         {
             if (_interactiveCanvas != null && _interactiveCanvas.ActualWidth > 60 && _interactiveCanvas.ActualHeight > 60)
@@ -628,7 +622,6 @@ namespace FieldTakHub.Builder.Services
             if (lat < 0) northing += 10000000.0;
         }
 
-        // Dokładna transformacja odwrotna UTM (Easting, Northing) -> WGS84 (Lat, Lon) gwarantująca 100% zakotwiczenie siatki do mapy!
         private static void UtmMetersToLatLon(double easting, double northing, int zone, out double lat, out double lon)
         {
             const double a = 6378137.0;
@@ -668,19 +661,13 @@ namespace FieldTakHub.Builder.Services
             lon = lonOrigin + lonRad * 180.0 / Math.PI;
         }
 
-        // Wylicza pełny meldunek MGRS (ze strefą, literami 100km, współrzędnymi 1m, numerem Keypad 1-9 oraz Ćwiartką A-D) dla dowolnego punktu (Lat, Lon)
         public static (string FullMgrs, string ShortGrid100m, string KeypadAndQuarter, string UtmText, string WgsText) FormatTacticalPointCoordinates(double lat, double lon)
         {
             int zone = (int)Math.Floor((lon + 180.0) / 6.0) + 1;
             const double refEasting = 360000.0;
             const double refNorthing = 5530000.0;
 
-            // Aby odczyt MGRS pokrywał się co do ułamka milimetra z ortogonalną siatką na mapie, wyliczamy Easting z długości geograficznej, a Northing z szerokości
             LatLonToUtmMeters(lat, lon, zone, out double rawE, out double rawN);
-            UtmMetersToLatLon(refEasting, rawN, zone, out double refLatForN, out _);
-            UtmMetersToLatLon(rawE, refNorthing, zone, out _, out double refLonForE);
-
-            // Dokładna inwersja zgodna z liniami siatki:
             double easting = rawE;
             double northing = rawN;
             for (int iter = 0; iter < 2; iter++)
@@ -719,7 +706,7 @@ namespace FieldTakHub.Builder.Services
             double remN = (northing % stepM + stepM) % stepM;
 
             int kpCol = Math.Clamp((int)Math.Floor(remE / (stepM / 3.0)), 0, 2);
-            int kpRowFromBottom = Math.Clamp((int)Math.Floor(remN / (stepM / 3.0)), 0, 2); // 0=dolny(123), 1=środkowy(456), 2=górny(789)
+            int kpRowFromBottom = Math.Clamp((int)Math.Floor(remN / (stepM / 3.0)), 0, 2);
             int[,] kpMap = { { 1, 2, 3 }, { 4, 5, 6 }, { 7, 8, 9 } };
             int keypadNum = kpMap[kpRowFromBottom, kpCol];
 
@@ -1170,15 +1157,11 @@ namespace FieldTakHub.Builder.Services
             }
         }
 
-        // =========================================================================
-        // RYSOWANIE SIATKI MGRS / WGS84 Z NUMERACJĄ KARTOGRAFICZNĄ NA LINII I STAŁYM ZAKOTWICZENIEM
-        // =========================================================================
         private static FormattedText GetCachedGlyph(string text, double fontSize, Brush fg, string keyPrefix)
         {
             string key = $"{keyPrefix}_{text}_{fontSize:0.0}";
             if (GlyphCache.TryGetValue(key, out var ft)) return ft;
             if (GlyphCache.Count > 600) GlyphCache.Clear();
-                ImportExtraMapUiState(root);
             var created = new FormattedText(text ?? "", CultureInfo.InvariantCulture, FlowDirection.LeftToRight, BoldSegoeTypeface, fontSize, fg, 1.0);
             GlyphCache[key] = created;
             return created;
@@ -1212,7 +1195,6 @@ namespace FieldTakHub.Builder.Services
             dc.DrawText(ft, new Point(x, y));
         }
 
-        // Rysuje oznaczenia głównych linii siatki (np. 426, 427, 239, 238 lub stopnie WGS84) CENTRALNIE NA LINII zgodnie z wytycznymi kartograficznymi!
         private static void DrawCartographicLineLabelOnContext(DrawingContext dc, string text, double lineCoord, bool isVerticalLine, double canvasW, double canvasH, Brush fg, double fontSize, double opacity, string cachePrefix)
         {
             if (string.IsNullOrEmpty(text) || opacity <= 0.02) return;
@@ -1221,20 +1203,17 @@ namespace FieldTakHub.Builder.Services
             double drawX, drawY;
             if (isVerticalLine)
             {
-                // Linia pionowa (Easting / Południk): środek tekstu dokładnie na osi X linii (lineCoord)
                 drawX = lineCoord - ft.Width / 2.0;
                 drawY = 6.0;
                 if (drawX < 2.0 || drawX + ft.Width > canvasW - 2.0) return;
             }
             else
             {
-                // Linia pozioma (Northing / Równoleżnik): środek tekstu dokładnie na osi Y linii (lineCoord)
                 drawX = 6.0;
                 drawY = lineCoord - ft.Height / 2.0;
                 if (drawY < 2.0 || drawY + ft.Height > canvasH - 2.0) return;
             }
 
-            // Nawet w trybie "Czysty tekst" dajemy subtelną maskę przerywającą linię pod cyframi, aby linia nie przekreślała cyfr
             byte bgAlpha = (byte)Math.Clamp((int)Math.Round((_labelBgStyle.StartsWith("Kaseton") ? 225 : 165) * opacity), 0, 245);
             var bgBrush = new SolidColorBrush(Color.FromArgb(bgAlpha, 6, 14, 18)); bgBrush.Freeze();
             Pen borderPen = null;
@@ -1463,7 +1442,6 @@ namespace FieldTakHub.Builder.Services
                             if (sx < 0 || sx > w) continue;
                             if (useHalo) dc.DrawLine(mainHaloPen, new Point(sx, 0), new Point(sx, h));
                             dc.DrawLine(mainPen, new Point(sx, 0), new Point(sx, h));
-                            // Numeracja południka centralnie NA LINII pionowej
                             DrawCartographicLineLabelOnContext(dc, $"{lon:0.0000}°E", sx, true, w, h, mainBrush, mainFontSz, _mainGridOpacity, mainCacheKey);
                         }
 
@@ -1474,16 +1452,12 @@ namespace FieldTakHub.Builder.Services
                             if (sy < 0 || sy > h) continue;
                             if (useHalo) dc.DrawLine(mainHaloPen, new Point(0, sy), new Point(w, sy));
                             dc.DrawLine(mainPen, new Point(0, sy), new Point(w, sy));
-                            // Numeracja równoleżnika centralnie NA LINII poziomej
                             DrawCartographicLineLabelOnContext(dc, $"{lat:0.0000}°N", sy, false, w, h, mainBrush, mainFontSz, _mainGridOpacity, mainCacheKey);
                         }
                     }
                 }
                 else
                 {
-                    // =========================================================================
-                    // SIATKA MGRS / UTM W 100% ZAKOTWICZONA DO WSPÓŁRZĘDNYCH ZIEMI (ZERO DRYFOWANIA!)
-                    // =========================================================================
                     double metersPerPixel = GetExactMetersPerPixel();
                     int baseStepMeters = _subGridDivision.Contains("250") ? 250 : (_subGridDivision.Contains("500") ? 500 : 100);
 
@@ -1493,7 +1467,6 @@ namespace FieldTakHub.Builder.Services
                     _effectiveMgrsStepMeters = effectiveStepMeters;
 
                     int utmZone = (int)Math.Floor((_centerLon + 180.0) / 6.0) + 1;
-                    // Stałe odniesienie wewnątrz strefy eliminuje dryfowanie od zbieżności południków podczas przesuwania mapy!
                     const double refEasting = 360000.0;
                     const double refNorthing = 5530000.0;
 
@@ -1507,7 +1480,6 @@ namespace FieldTakHub.Builder.Services
                     double firstNorthing = Math.Floor((Math.Min(southNorthing, northNorthing) - effectiveStepMeters * 2) / effectiveStepMeters) * effectiveStepMeters;
                     double lastNorthing = Math.Ceiling((Math.Max(southNorthing, northNorthing) + effectiveStepMeters * 2) / effectiveStepMeters) * effectiveStepMeters;
 
-                    // Funkcje rzutujące każdą linię metryczną MGRS przez UtmMetersToLatLon -> LatLonToScreen (identycznie jak znaczniki!)
                     double EastingToScreenX(double eastVal)
                     {
                         UtmMetersToLatLon(eastVal, refNorthing, utmZone, out _, out double lineLon);
@@ -1589,7 +1561,6 @@ namespace FieldTakHub.Builder.Services
                         }
                     }
 
-                    // Główne linie MGRS i ich numeracja rysowana CENTRALNIE NA LINII (np. 426, 427, 428 oraz 239, 238, 237)
                     if (_mainGridOpacity > 0.02)
                     {
                         string mainCacheKey = $"MAIN_{_mainGridColorHex}_{_mainGridOpacity:0.00}";
