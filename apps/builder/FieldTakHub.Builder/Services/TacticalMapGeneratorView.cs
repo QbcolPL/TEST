@@ -1,4 +1,4 @@
-﻿#pragma warning disable CS8600, CS8601, CS8602, CS8603, CS8604, CS8618, CS8625
+﻿#pragma warning disable CS0414, CS8600, CS8601, CS8602, CS8603, CS8604, CS8618, CS8625
 global using System.Text.RegularExpressions;
 using System;
 using System.Collections.Concurrent;
@@ -28,6 +28,46 @@ namespace FieldTakHub.Builder.Services
     {
         private static double _dotMarkerSizePx = 14.0;
         private static double _natoMarkerScale = 1.0;
+
+        // Aktualizuje panel Inspektora Współrzędnych w Sekcji 3 dla aktualnie klikniętego znacznika
+        private static void UpdateSelectedMarkerInspectorUI()
+        {
+            if (_inspectorTitleLabel == null || _inspectorMgrsLabel == null || _inspectorWgsUtmLabel == null)
+                return;
+
+            if (_inspectedObject == null || _inspectedObject.Points.Count == 0 || !_mapObjects.Contains(_inspectedObject))
+            {
+                _inspectorTitleLabel.Text = "📍 Kliknij dowolny znacznik na mapie, aby odczytać jego współrzędne";
+                _inspectorMgrsLabel.Text = "MGRS: —   |   Keypad / Ćwiartka: —";
+                _inspectorWgsUtmLabel.Text = "WGS84: —   |   UTM: —";
+                return;
+            }
+
+            int idx = Math.Clamp(_inspectedVertexIndex, 0, _inspectedObject.Points.Count - 1);
+            var pt = _inspectedObject.Points[idx];
+            var (fullMgrs, _, kpInfo, utmTxt, wgsTxt) = FormatTacticalPointCoordinates(pt.Lat, pt.Lon);
+
+            string ptSuffix = _inspectedObject.Points.Count > 1 ? $" (Punkt #{idx + 1})" : "";
+            _inspectorTitleLabel.Text = $"🎯 {_inspectedObject.Name}{ptSuffix}  [{_inspectedObject.SymbolCode.Replace("NATO_", "").Replace("SHAPE_", "")}]";
+            _inspectorMgrsLabel.Text = $"MGRS: {fullMgrs}   •   {kpInfo}";
+            _inspectorWgsUtmLabel.Text = $"WGS84: {wgsTxt}   •   UTM: {utmTxt}";
+        }
+
+        private static void CopySelectedMarkerCoordsToClipboard()
+        {
+            if (_inspectedObject == null || _inspectedObject.Points.Count == 0) return;
+            try
+            {
+                int idx = Math.Clamp(_inspectedVertexIndex, 0, _inspectedObject.Points.Count - 1);
+                var pt = _inspectedObject.Points[idx];
+                var (fullMgrs, _, kpInfo, utmTxt, wgsTxt) = FormatTacticalPointCoordinates(pt.Lat, pt.Lon);
+                string report = $"{_inspectedObject.Name} | MGRS: {fullMgrs} ({kpInfo}) | WGS84: {wgsTxt} | UTM: {utmTxt}";
+                Clipboard.SetText(report);
+                if (_statusText != null)
+                    _statusText.Text = $"✓ Skopiowano meldunek współrzędnych do schowka: {report}";
+            }
+            catch { }
+        }
 
         private static void UpdateSheetViewportSize()
         {
@@ -210,7 +250,8 @@ namespace FieldTakHub.Builder.Services
         public static void ShowFullScreenMapTab(Window win)
         {
             if (_fullScreenOverlay == null && win != null) AttachFullScreenTab(win);
-            if (_fullScreenOverlay != null) {
+            if (_fullScreenOverlay != null)
+            {
                 MeshtasticUsbProvisionerView.HideUsbTabOnly();
                 if (_originalWindowContent != null) _originalWindowContent.Visibility = Visibility.Collapsed;
                 _fullScreenOverlay.Visibility = Visibility.Visible;
@@ -228,7 +269,8 @@ namespace FieldTakHub.Builder.Services
             }
         }
 
-        public static void HideFullScreenMapTab() {
+        public static void HideFullScreenMapTab()
+        {
             MeshtasticUsbProvisionerView.HideUsbTabOnly();
             if (_fullScreenOverlay != null)
             {
@@ -373,16 +415,15 @@ namespace FieldTakHub.Builder.Services
                 if (_layerComboBox.SelectedItem is TacticalMapLayerDef def)
                 {
                     _activeLayer = def;
-                    
                     TacticalConfigPanel.MarkDirty();
                     _ = RenderMapTilesAsync();
                 }
             };
-            sec1.Children.Add(TacticalConfigPanel.FieldBox("Podkład bazowy (Geoportal Multi-Sector WMS / Google / ESRI / OSM):", _layerComboBox));
+            sec1.Children.Add(TacticalConfigPanel.FieldBox("Podkład bazowy (Geoportal WMS 1.36x / Google / ESRI / OSM):", _layerComboBox));
 
             var lidarBox = new Border { Background = TacticalConfigPanel.BrushInputBg, BorderBrush = TacticalConfigPanel.BrushAccent, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(6), Padding = new Thickness(8, 6, 8, 6) };
             var lidarStack = new StackPanel();
-            var chkLidar = new CheckBox { Content = "Nałóż rzeźbę LiDAR ISOK (Multi-Sector EPSG:2180)", IsChecked = false, Foreground = TacticalConfigPanel.BrushAccent, FontWeight = FontWeights.SemiBold, FontSize = 10 };
+            var chkLidar = new CheckBox { Content = "Nałóż rzeźbę LiDAR ISOK (Bufor 1.36x EPSG:3857)", IsChecked = false, Foreground = TacticalConfigPanel.BrushAccent, FontWeight = FontWeights.SemiBold, FontSize = 10 };
             chkLidar.Checked += (s, e) => { _showLidarSingleWms = true; TacticalConfigPanel.MarkDirty(); _ = RenderMapTilesAsync(); };
             chkLidar.Unchecked += (s, e) => { _showLidarSingleWms = false; TacticalConfigPanel.MarkDirty(); _lidarTileCanvas?.Children.Clear(); };
             lidarStack.Children.Add(chkLidar);
@@ -395,11 +436,11 @@ namespace FieldTakHub.Builder.Services
             sec1.Children.Add(lidarBox);
             leftStack.Children.Add(WrapCard(sec1));
 
-            // SEKCJA 2: SIATKA MGRS / WGS84 & KOLORY RGB
+            // SEKCJA 2: SIATKA MGRS / WGS84 (NUMERACJA NA LINII) & KOLORY RGB
             leftStack.Children.Add(WrapCard(BuildSection2GridAndColorsUI(win)));
 
-            // SEKCJA 3: KSZTAŁTY GEOMETRYCZNE / NAMIOT / NATO (OBRACANE DRAG&DROP ↻), STREFY (✥) & SHIFT 45°
-            var sec3 = CreateSectionCard("3. ZNACZNIKI I KSZTAŁTY (OBRACANIE DRAG & DROP ↻), STREFY (✥) & RGB");
+            // SEKCJA 3: ZNACZNIKI, INSPEKTOR WSPÓŁRZĘDNYCH PO KLIKNIĘCIU, OBRACANIE (↻) & STREFY (✥)
+            var sec3 = CreateSectionCard("3. ZNACZNIKI, ODCZYT WSPÓŁRZĘDNYCH MARKERA & OBRACANIE (↻)");
             void UpdateToolButtonsVisual()
             {
                 void StyleTool(Button b, bool active)
@@ -417,7 +458,7 @@ namespace FieldTakHub.Builder.Services
                 StyleTool(_btnToolRoute, _activeTool == "ROUTE");
             }
 
-            _btnToolPan = MakeActionButton("✋ Przesuwaj Mapę / Przeciągaj i Obracaj Znaczniki (↻) oraz Strefy (✥)", true, () => { _activeTool = "PAN"; _activeDraftPoly = null; _fastOverlayRenderer?.InvalidateVisual(); UpdateToolButtonsVisual(); });
+            _btnToolPan = MakeActionButton("✋ Przesuwaj Mapę / Kliknij Marker = Odczytaj Współrzędne / Obracaj (↻)", true, () => { _activeTool = "PAN"; _activeDraftPoly = null; _fastOverlayRenderer?.InvalidateVisual(); UpdateToolButtonsVisual(); });
             _btnToolPan.Height = 30; _btnToolPan.Margin = new Thickness(0, 0, 0, 5);
             sec3.Children.Add(_btnToolPan);
 
@@ -440,6 +481,56 @@ namespace FieldTakHub.Builder.Services
             _btnToolRoute.Height = 26; _btnToolRoute.Margin = new Thickness(0, 0, 0, 6);
             sec3.Children.Add(_btnToolRoute);
             UpdateToolButtonsVisual();
+
+            // KARTA INSPEKTORA WSPÓŁRZĘDNYCH KLIKNIĘTEGO MARKERA (MGRS + KEYPAD/ĆWIARTKA + WGS84 + UTM)
+            var inspectorBorder = new Border
+            {
+                Background = TacticalConfigPanel.BrushInputBg,
+                BorderBrush = TacticalConfigPanel.BrushAccent,
+                BorderThickness = new Thickness(1.4),
+                CornerRadius = new CornerRadius(6),
+                Padding = new Thickness(8, 6, 8, 6),
+                Margin = new Thickness(0, 0, 0, 6)
+            };
+            var inspStack = new StackPanel();
+            var inspTopDock = new DockPanel { Margin = new Thickness(0, 0, 0, 3) };
+            var btnCopyCoords = MakeActionButton("📋 Kopiuj meldunek", false, CopySelectedMarkerCoordsToClipboard);
+            btnCopyCoords.Height = 20; btnCopyCoords.FontSize = 9; btnCopyCoords.Padding = new Thickness(7, 0, 7, 0); btnCopyCoords.BorderBrush = TacticalConfigPanel.BrushAccent;
+            DockPanel.SetDock(btnCopyCoords, Dock.Right);
+            inspTopDock.Children.Add(btnCopyCoords);
+
+            _inspectorTitleLabel = new TextBlock
+            {
+                Text = "📍 Kliknij dowolny znacznik na mapie, aby odczytać jego współrzędne",
+                Foreground = TacticalConfigPanel.BrushAccent,
+                FontSize = 10,
+                FontWeight = FontWeights.Bold,
+                VerticalAlignment = VerticalAlignment.Center,
+                TextTrimming = TextTrimming.CharacterEllipsis
+            };
+            inspTopDock.Children.Add(_inspectorTitleLabel);
+            inspStack.Children.Add(inspTopDock);
+
+            _inspectorMgrsLabel = new TextBlock
+            {
+                Text = "MGRS: —   |   Keypad / Ćwiartka: —",
+                Foreground = Brushes.White,
+                FontFamily = new FontFamily("Consolas"),
+                FontSize = 10,
+                FontWeight = FontWeights.Bold,
+                Margin = new Thickness(0, 1, 0, 2)
+            };
+            _inspectorWgsUtmLabel = new TextBlock
+            {
+                Text = "WGS84: —   |   UTM: —",
+                Foreground = TacticalConfigPanel.BrushMutedText,
+                FontFamily = new FontFamily("Consolas"),
+                FontSize = 9.2
+            };
+            inspStack.Children.Add(_inspectorMgrsLabel);
+            inspStack.Children.Add(_inspectorWgsUtmLabel);
+            inspectorBorder.Child = inspStack;
+            sec3.Children.Add(inspectorBorder);
 
             var aoMaskRow = new Grid { Margin = new Thickness(0, 0, 0, 4) };
             aoMaskRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1.3, GridUnitType.Star) });
@@ -513,8 +604,7 @@ namespace FieldTakHub.Builder.Services
                 Content = "Uchwyty obrotu (↻) na mapie",
                 IsChecked = _showRotationHandlesOnMap,
                 Foreground = Brushes.White,
-                FontSize = 9.5,
-                ToolTip = "Pokazuje nad każdym znacznikiem uchwyt ↻ do obracania myszą (Drag & Drop). Uchwyty są automatycznie ukrywane na wydruku PDF i KMZ."
+                FontSize = 9.5
             };
             chkRotHandles.Checked += (s, e) => { _showRotationHandlesOnMap = true; RedrawVectorsOnly(); };
             chkRotHandles.Unchecked += (s, e) => { _showRotationHandlesOnMap = false; RedrawVectorsOnly(); };
@@ -523,8 +613,8 @@ namespace FieldTakHub.Builder.Services
             lblTogglesGrid.Children.Add(chkRotHandles);
             sec3.Children.Add(lblTogglesGrid);
 
-            sec3.Children.Add(new TextBlock { Text = "Naniesione obiekty (suwak Wielkości, suwak Obrotu 0°–360°, kolor RGB i nazwa):", Foreground = TacticalConfigPanel.BrushMutedText, FontSize = 9.5, Margin = new Thickness(0, 0, 0, 3) });
-            var objListBorder = new Border { Background = TacticalConfigPanel.BrushInputBg, BorderBrush = TacticalConfigPanel.BrushInputBorder, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(4), MinHeight = 68, MaxHeight = 240, Padding = new Thickness(6) };
+            sec3.Children.Add(new TextBlock { Text = "Naniesione obiekty (kliknij 📍 lub marker na mapie, aby odczytać współrzędne):", Foreground = TacticalConfigPanel.BrushMutedText, FontSize = 9.5, Margin = new Thickness(0, 0, 0, 3) });
+            var objListBorder = new Border { Background = TacticalConfigPanel.BrushInputBg, BorderBrush = TacticalConfigPanel.BrushInputBorder, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(4), MinHeight = 68, MaxHeight = 230, Padding = new Thickness(6) };
             var objListScroll = new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
             _objectsListStack = new StackPanel();
             objListScroll.Content = _objectsListStack; objListBorder.Child = objListScroll;
@@ -703,7 +793,7 @@ namespace FieldTakHub.Builder.Services
             topBadgesStack.Children.Add(sheetBadgeBorder);
 
             var hudBorder = new Border { Background = new SolidColorBrush(Color.FromArgb(215, 8, 19, 22)), BorderBrush = TacticalConfigPanel.BrushTileBorder, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(5), Padding = new Thickness(10, 3, 10, 3), HorizontalAlignment = HorizontalAlignment.Center };
-            _coordsBadge = new TextBlock { Text = $"WGS84: {_centerLat:0.00000}, {_centerLon:0.00000}  |  Uchwyt ↻ = Obracaj kształt myszą  |  Uchwyt ✥ = Przesuń strefę", Foreground = Brushes.White, FontSize = 10 };
+            _coordsBadge = new TextBlock { Text = $"WGS84: {_centerLat:0.00000}, {_centerLon:0.00000}  |  Kliknij marker = Odczytaj współrzędne MGRS  |  ↻ = Obróć", Foreground = Brushes.White, FontSize = 10 };
             hudBorder.Child = _coordsBadge;
             topBadgesStack.Children.Add(hudBorder);
             _viewportHostGrid.Children.Add(topBadgesStack);
@@ -746,7 +836,7 @@ namespace FieldTakHub.Builder.Services
                 _currentHoverScreenPt = p;
                 var (hoverLat, hoverLon) = ScreenToLatLon(p.X, p.Y, w, h);
                 if (_coordsBadge != null)
-                    _coordsBadge.Text = $"WGS84: {hoverLat:0.00000}, {hoverLon:0.00000}  |  Skala 1:{_targetScaleDenominator:N0} (Kratka MGRS: {_effectiveMgrsStepMeters} m)  |  ↻ = Obracaj kształt  |  ✥ = Przesuń strefę";
+                    _coordsBadge.Text = $"WGS84: {hoverLat:0.00000}, {hoverLon:0.00000}  |  Skala 1:{_targetScaleDenominator:N0} (Kratka MGRS: {_effectiveMgrsStepMeters} m)  |  Kliknij marker = Współrzędne";
 
                 if (_draggedHudId != null && _draggedHudElement != null)
                 {
@@ -760,7 +850,6 @@ namespace FieldTakHub.Builder.Services
                     return;
                 }
 
-                // Obracanie kształtu / znacznika myszą na żywo (Drag & Drop za uchwyt ↻, _draggedVertexIndex == -3)
                 if (_draggedObject != null && _draggedVertexIndex == -3)
                 {
                     double rawAngle = Math.Atan2(p.Y - _rotationCenterScreenPt.Y, p.X - _rotationCenterScreenPt.X) * 180.0 / Math.PI + 90.0;
@@ -785,6 +874,7 @@ namespace FieldTakHub.Builder.Services
                             Math.Clamp(_wholeShapeOriginalPoints[i].Lon + dLon, -180.0, 180.0));
                     }
                     TacticalConfigPanel.MarkDirty();
+                    UpdateSelectedMarkerInspectorUI();
                     RedrawVectorsOnly();
                     return;
                 }
@@ -802,6 +892,7 @@ namespace FieldTakHub.Builder.Services
 
                     _draggedObject.Points[_draggedVertexIndex] = ScreenToLatLon(targetScreenPt.X, targetScreenPt.Y, w, h);
                     TacticalConfigPanel.MarkDirty();
+                    UpdateSelectedMarkerInspectorUI();
                     RedrawVectorsOnly();
                     return;
                 }
@@ -846,6 +937,7 @@ namespace FieldTakHub.Builder.Services
                     _wholeShapeOriginalPoints = null;
                     _interactiveCanvas.ReleaseMouseCapture();
                     if (wasRotating) RefreshObjectsListUI(win);
+                    UpdateSelectedMarkerInspectorUI();
                     RedrawVectorsOnly();
                     UpdateOfflineTileEstimateUI();
                     TacticalConfigPanel.SaveSessionStateAuto(win);
@@ -859,6 +951,7 @@ namespace FieldTakHub.Builder.Services
                 if ((endPt - _mouseDownPoint).Length < 5.0 && _activeTool != "PAN")
                 {
                     HandleMapClickToolAction(win, _mouseDownPoint);
+                    UpdateSelectedMarkerInspectorUI();
                     RedrawVectorsOnly();
                     UpdateOfflineTileEstimateUI();
                 }
@@ -891,7 +984,7 @@ namespace FieldTakHub.Builder.Services
             mainGrid.Children.Add(bodyGrid);
 
             var bottomBar = new Border { Background = TacticalConfigPanel.BrushInputBg, BorderBrush = TacticalConfigPanel.BrushCardBorder, BorderThickness = new Thickness(0, 1, 0, 0), Padding = new Thickness(16, 0, 16, 0) };
-            _statusText = new TextBlock { Text = "Gotowy. 8 nowych kształtów (Strzałka, Namiot, Krzyżyk, Koło, Kwadrat, Prostokąt, Romb, Trójkąt) z obracaniem Drag&Drop (↻) oraz Geoportal Multi-Sector.", Foreground = TacticalConfigPanel.BrushAccent, FontSize = 11, VerticalAlignment = VerticalAlignment.Center };
+            _statusText = new TextBlock { Text = "Gotowy. Numeracja kartograficzna na linii, stałe zakotwiczenie siatki MGRS/WGS84 (zero dryfu) oraz odczyt współrzędnych markera po kliknięciu.", Foreground = TacticalConfigPanel.BrushAccent, FontSize = 11, VerticalAlignment = VerticalAlignment.Center };
             bottomBar.Child = _statusText; Grid.SetRow(bottomBar, 1); mainGrid.Children.Add(bottomBar);
 
             UpdateOfflineTileEstimateUI();
@@ -1272,6 +1365,8 @@ namespace FieldTakHub.Builder.Services
                 };
                 item.Points.Add((clickLat, clickLon));
                 _mapObjects.Add(item);
+                _inspectedObject = item;
+                _inspectedVertexIndex = 0;
             }
             else if (_activeTool == "AO" || _activeTool == "SECTOR" || _activeTool == "ROUTE")
             {
@@ -1301,14 +1396,14 @@ namespace FieldTakHub.Builder.Services
 
                 var (ptLat, ptLon) = ScreenToLatLon(effectivePt.X, effectivePt.Y, w, h);
                 _activeDraftPoly.Points.Add((ptLat, ptLon));
+                _inspectedObject = _activeDraftPoly;
+                _inspectedVertexIndex = _activeDraftPoly.Points.Count - 1;
             }
             TacticalConfigPanel.MarkDirty();
+            UpdateSelectedMarkerInspectorUI();
             RefreshObjectsListUI(win);
         }
 
-        // =========================================================================
-        // LISTA NANIESIONYCH OBIEKTÓW: SUWAK WIELKOŚCI + SUWAK OBROTU (0°–360°) + KOLOR RGB
-        // =========================================================================
         private static string FormatObjectSizeLabel(TacticalMapObjectItem obj)
         {
             double m = obj.SizeMultiplier > 0.1 ? obj.SizeMultiplier : 1.0;
@@ -1338,8 +1433,8 @@ namespace FieldTakHub.Builder.Services
                 var itemCard = new Border
                 {
                     Background = TacticalConfigPanel.BrushItemBg,
-                    BorderBrush = TacticalConfigPanel.BrushTileBorder,
-                    BorderThickness = new Thickness(1),
+                    BorderBrush = (_inspectedObject == captured) ? TacticalConfigPanel.BrushAccent : TacticalConfigPanel.BrushTileBorder,
+                    BorderThickness = new Thickness((_inspectedObject == captured) ? 1.5 : 1.0),
                     CornerRadius = new CornerRadius(5),
                     Padding = new Thickness(6, 4, 6, 4),
                     Margin = new Thickness(0, 0, 0, 5)
@@ -1348,9 +1443,10 @@ namespace FieldTakHub.Builder.Services
                 var itemStack = new StackPanel();
 
                 var topRow = new Grid { Margin = new Thickness(0, 0, 0, 3) };
+                topRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(20) });
                 topRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(22) });
-                topRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(22) });
-                topRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(58) });
+                topRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(26) }); // Przycisk odczytu współrzędnych 📍
+                topRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(52) });
                 topRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
                 topRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(28) });
 
@@ -1391,10 +1487,35 @@ namespace FieldTakHub.Builder.Services
                 Grid.SetColumn(btnCol, 1);
                 topRow.Children.Add(btnCol);
 
+                var btnInspect = new Button
+                {
+                    Content = "📍",
+                    Width = 22,
+                    Height = 20,
+                    Padding = new Thickness(0),
+                    Background = TacticalConfigPanel.BrushInputBg,
+                    Foreground = TacticalConfigPanel.BrushAccent,
+                    BorderBrush = TacticalConfigPanel.BrushAccent,
+                    BorderThickness = new Thickness(1),
+                    FontSize = 10,
+                    Cursor = Cursors.Hand,
+                    ToolTip = "Pokaż współrzędne MGRS / Keypad / WGS84 tego znacznika na mapie"
+                };
+                btnInspect.Click += (s, e) =>
+                {
+                    _inspectedObject = captured;
+                    _inspectedVertexIndex = 0;
+                    UpdateSelectedMarkerInspectorUI();
+                    RefreshObjectsListUI(win);
+                    RedrawVectorsOnly();
+                };
+                Grid.SetColumn(btnInspect, 2);
+                topRow.Children.Add(btnInspect);
+
                 var natoOpt = NatoSymbols.FirstOrDefault(n => n.Code == captured.SymbolCode);
-                string badgeTxt = captured.Kind == "AO" ? "[AO]" : (captured.Kind == "Sector" ? "[SEKTOR]" : (natoOpt != null ? $"[{natoOpt.ShortBadge}]" : $"[{captured.SymbolCode}]"));
-                var kindLbl = new TextBlock { Text = badgeTxt, Foreground = TacticalConfigPanel.BrushAccent, FontSize = 8.5, FontWeight = FontWeights.Bold, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(2, 0, 4, 0) };
-                Grid.SetColumn(kindLbl, 2);
+                string badgeTxt = captured.Kind == "AO" ? "[AO]" : (captured.Kind == "Sector" ? "[SEK]" : (natoOpt != null ? $"[{natoOpt.ShortBadge}]" : $"[{captured.SymbolCode}]"));
+                var kindLbl = new TextBlock { Text = badgeTxt, Foreground = TacticalConfigPanel.BrushAccent, FontSize = 8.5, FontWeight = FontWeights.Bold, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(2, 0, 3, 0) };
+                Grid.SetColumn(kindLbl, 3);
                 topRow.Children.Add(kindLbl);
 
                 var editNameBox = new TextBox
@@ -1413,25 +1534,27 @@ namespace FieldTakHub.Builder.Services
                 {
                     captured.Name = editNameBox.Text;
                     TacticalConfigPanel.MarkDirty();
+                    UpdateSelectedMarkerInspectorUI();
                     RedrawVectorsOnly();
                 };
-                Grid.SetColumn(editNameBox, 3);
+                Grid.SetColumn(editNameBox, 4);
                 topRow.Children.Add(editNameBox);
 
                 var btnMinusDel = CreateRedMinusDeleteButton($"Usuń obiekt: {captured.Name}", () =>
                 {
                     _mapObjects.Remove(captured);
                     if (_activeDraftPoly == captured) _activeDraftPoly = null;
+                    if (_inspectedObject == captured) _inspectedObject = null;
                     TacticalConfigPanel.MarkDirty();
+                    UpdateSelectedMarkerInspectorUI();
                     RefreshObjectsListUI(win);
                     RedrawVectorsOnly();
                     UpdateOfflineTileEstimateUI();
                 });
-                Grid.SetColumn(btnMinusDel, 4);
+                Grid.SetColumn(btnMinusDel, 5);
                 topRow.Children.Add(btnMinusDel);
                 itemStack.Children.Add(topRow);
 
-                // Wiersz 2: Suwak wielkości
                 var sliderRow = new Grid { Margin = new Thickness(0, 0, 0, captured.Kind == "Marker" ? 2 : 0) };
                 sliderRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(58) });
                 sliderRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
@@ -1478,7 +1601,6 @@ namespace FieldTakHub.Builder.Services
                 sliderRow.Children.Add(sizeSlider);
                 itemStack.Children.Add(sliderRow);
 
-                // Wiersz 3 (dla Kształtów / Namiotu / NATO): Suwak obrotu 0°–360° (synchronizowany z uchwytem ↻ na mapie)
                 if (captured.Kind == "Marker")
                 {
                     var rotRow = new Grid();
@@ -1503,8 +1625,7 @@ namespace FieldTakHub.Builder.Services
                         SmallChange = 5.0,
                         LargeChange = 15.0,
                         Cursor = Cursors.Hand,
-                        VerticalAlignment = VerticalAlignment.Center,
-                        ToolTip = "Obróć kształt (0°–360°) lub złap za uchwyt ↻ bezpośrednio na mapie"
+                        VerticalAlignment = VerticalAlignment.Center
                     };
 
                     void SetRotSliderFromMouse(MouseEventArgs e)
@@ -1583,7 +1704,141 @@ namespace FieldTakHub.Builder.Services
             }
 
             DrawTacticalMarkersOverlay(w, h);
+            if (!_isExportingCleanMap)
+            {
+                DrawSelectedMarkerCoordsPopupOnCanvas(w, h);
+            }
             DrawDraggableCornerElements(w, h);
+        }
+
+        // Pływający dymek (Callout) ze współrzędnymi MGRS / Keypad / WGS84 wyświetlany bezpośrednio na mapie po kliknięciu na marker
+        private static void DrawSelectedMarkerCoordsPopupOnCanvas(double viewW, double viewH)
+        {
+            if (_inspectedObject == null || _inspectedObject.Points.Count == 0 || !_mapObjects.Contains(_inspectedObject))
+                return;
+
+            int idx = Math.Clamp(_inspectedVertexIndex, 0, _inspectedObject.Points.Count - 1);
+            var latLon = _inspectedObject.Points[idx];
+            Point screenPt = LatLonToScreen(latLon.Lat, latLon.Lon, viewW, viewH);
+            if (screenPt.X < -20 || screenPt.X > viewW + 20 || screenPt.Y < -20 || screenPt.Y > viewH + 20)
+                return;
+
+            var (fullMgrs, _, kpInfo, utmTxt, wgsTxt) = FormatTacticalPointCoordinates(latLon.Lat, latLon.Lon);
+            var strokeBrush = TacticalConfigPanel.BrushFromHex(_inspectedObject.ColorHex, Color.FromRgb(31, 224, 197));
+
+            // Pierścień podświetlenia wokół wybranego znacznika
+            var highlightRing = new Ellipse
+            {
+                Width = 34,
+                Height = 34,
+                Stroke = TacticalConfigPanel.BrushAccent,
+                StrokeThickness = 2.0,
+                StrokeDashArray = new DoubleCollection { 3, 2 },
+                IsHitTestVisible = false
+            };
+            Canvas.SetLeft(highlightRing, screenPt.X - 17);
+            Canvas.SetTop(highlightRing, screenPt.Y - 17);
+            _interactiveCanvas.Children.Add(highlightRing);
+
+            const double popW = 292.0, popH = 74.0;
+            double popX = Math.Clamp(screenPt.X - popW / 2.0, 8.0, Math.Max(10.0, viewW - popW - 8.0));
+            double popY = screenPt.Y - popH - 26.0;
+            if (popY < 8.0) popY = Math.Min(viewH - popH - 8.0, screenPt.Y + 24.0);
+
+            var popBorder = new Border
+            {
+                Width = popW,
+                Height = popH,
+                Background = new SolidColorBrush(Color.FromArgb(238, 6, 15, 19)),
+                BorderBrush = strokeBrush,
+                BorderThickness = new Thickness(1.6),
+                CornerRadius = new CornerRadius(6),
+                Padding = new Thickness(8, 5, 8, 5)
+            };
+
+            var stack = new StackPanel();
+            var hdrDock = new DockPanel { Margin = new Thickness(0, 0, 0, 2) };
+
+            var btnClosePop = new Border
+            {
+                Width = 18,
+                Height = 16,
+                CornerRadius = new CornerRadius(3),
+                Background = TacticalConfigPanel.BrushRedMinus,
+                Cursor = Cursors.Hand,
+                Margin = new Thickness(4, 0, 0, 0),
+                ToolTip = "Ukryj dymek współrzędnych",
+                Child = new TextBlock { Text = "✕", Foreground = Brushes.White, FontSize = 9, FontWeight = FontWeights.Bold, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center }
+            };
+            btnClosePop.MouseLeftButtonDown += (s, e) =>
+            {
+                e.Handled = true;
+                _inspectedObject = null;
+                UpdateSelectedMarkerInspectorUI();
+                RedrawVectorsOnly();
+            };
+            DockPanel.SetDock(btnClosePop, Dock.Right);
+            hdrDock.Children.Add(btnClosePop);
+
+            var btnCopyMini = new Border
+            {
+                Height = 16,
+                Padding = new Thickness(5, 0, 5, 0),
+                CornerRadius = new CornerRadius(3),
+                Background = TacticalConfigPanel.BrushItemBg,
+                BorderBrush = TacticalConfigPanel.BrushAccent,
+                BorderThickness = new Thickness(1),
+                Cursor = Cursors.Hand,
+                ToolTip = "Skopiuj współrzędne MGRS i WGS84 tego markera do schowka",
+                Child = new TextBlock { Text = "📋 Kopiuj", Foreground = TacticalConfigPanel.BrushAccent, FontSize = 8.5, FontWeight = FontWeights.Bold, VerticalAlignment = VerticalAlignment.Center }
+            };
+            btnCopyMini.MouseLeftButtonDown += (s, e) =>
+            {
+                e.Handled = true;
+                CopySelectedMarkerCoordsToClipboard();
+            };
+            DockPanel.SetDock(btnCopyMini, Dock.Right);
+            hdrDock.Children.Add(btnCopyMini);
+
+            string ptSuffix = _inspectedObject.Points.Count > 1 ? $" (#{idx + 1})" : "";
+            hdrDock.Children.Add(new TextBlock
+            {
+                Text = $"🎯 {_inspectedObject.Name}{ptSuffix}",
+                Foreground = strokeBrush,
+                FontSize = 10,
+                FontWeight = FontWeights.Bold,
+                TextTrimming = TextTrimming.CharacterEllipsis
+            });
+            stack.Children.Add(hdrDock);
+
+            stack.Children.Add(new TextBlock
+            {
+                Text = $"MGRS: {fullMgrs}",
+                Foreground = Brushes.White,
+                FontFamily = new FontFamily("Consolas"),
+                FontSize = 10,
+                FontWeight = FontWeights.Bold
+            });
+            stack.Children.Add(new TextBlock
+            {
+                Text = kpInfo,
+                Foreground = TacticalConfigPanel.BrushAccent,
+                FontFamily = new FontFamily("Consolas"),
+                FontSize = 9.2,
+                FontWeight = FontWeights.SemiBold
+            });
+            stack.Children.Add(new TextBlock
+            {
+                Text = $"WGS84: {wgsTxt}",
+                Foreground = TacticalConfigPanel.BrushMutedText,
+                FontFamily = new FontFamily("Consolas"),
+                FontSize = 8.8
+            });
+
+            popBorder.Child = stack;
+            Canvas.SetLeft(popBorder, popX);
+            Canvas.SetTop(popBorder, popY);
+            _interactiveCanvas.Children.Add(popBorder);
         }
 
         private static void DrawDraggableVertexAndWholeZoneHandles(TacticalMapObjectItem obj, List<Point> screenPts, Brush strokeBrush, double viewW, double viewH)
@@ -1600,16 +1855,20 @@ namespace FieldTakHub.Builder.Services
                     Stroke = strokeBrush,
                     StrokeThickness = 2.2,
                     Cursor = Cursors.Hand,
-                    ToolTip = $"Przeciągnij punkt krańcowy #{vIdx + 1} ({obj.Name})  |  Przytrzymaj SHIFT = kąt co 45°"
+                    ToolTip = $"Kliknij = Odczytaj współrzędne punktu #{vIdx + 1} ({obj.Name})  |  Przeciągnij = Zmień pozycję"
                 };
                 handle.MouseLeftButtonDown += (s, e) =>
                 {
                     e.Handled = true;
+                    _inspectedObject = obj;
+                    _inspectedVertexIndex = vIdx;
+                    UpdateSelectedMarkerInspectorUI();
                     _draggedObject = obj;
                     _draggedVertexIndex = vIdx;
                     Point mousePt = e.GetPosition(_interactiveCanvas);
                     _markerDragScreenOffset = new Point(mousePt.X - vPt.X, mousePt.Y - vPt.Y);
                     _interactiveCanvas.CaptureMouse();
+                    RedrawVectorsOnly();
                 };
                 Canvas.SetLeft(handle, vPt.X - 5.5);
                 Canvas.SetTop(handle, vPt.Y - 5.5);
@@ -1644,6 +1903,9 @@ namespace FieldTakHub.Builder.Services
                 moveAllBadge.MouseLeftButtonDown += (s, e) =>
                 {
                     e.Handled = true;
+                    _inspectedObject = obj;
+                    _inspectedVertexIndex = 0;
+                    UpdateSelectedMarkerInspectorUI();
                     _draggedObject = obj;
                     _draggedVertexIndex = -2;
                     Point p = e.GetPosition(_interactiveCanvas);
@@ -1676,21 +1938,24 @@ namespace FieldTakHub.Builder.Services
         {
             if (el is FrameworkElement fe)
             {
-                fe.Cursor = Cursors.SizeAll;
-                fe.ToolTip = $"Przeciągnij myszą, aby przesunąć: {obj.Name} ({tooltipSuffix})  |  Złap za ↻ powyżej, aby obrócić";
+                fe.Cursor = Cursors.Hand;
+                fe.ToolTip = $"Kliknij LPM = Odczytaj współrzędne MGRS/WGS84 ({obj.Name})  |  Przeciągnij = Przesuń ({tooltipSuffix})";
             }
             el.MouseLeftButtonDown += (s, e) =>
             {
                 e.Handled = true;
+                _inspectedObject = obj;
+                _inspectedVertexIndex = 0;
+                UpdateSelectedMarkerInspectorUI();
                 _draggedObject = obj;
                 _draggedVertexIndex = 0;
                 Point mousePt = e.GetPosition(_interactiveCanvas);
                 _markerDragScreenOffset = new Point(mousePt.X - exactMarkerAnchorScreenPt.X, mousePt.Y - exactMarkerAnchorScreenPt.Y);
                 _interactiveCanvas.CaptureMouse();
+                RedrawVectorsOnly();
             };
         }
 
-        // Rysuje interaktywny uchwyt obrotu (↻) nad znacznikiem (ukrywany podczas eksportu do PDF / KMZ)
         private static void DrawRotationDragHandleForMarker(Point anchorScreenPt, TacticalMapObjectItem obj, double scale, Brush strokeBrush)
         {
             if (_isExportingCleanMap || !_showRotationHandlesOnMap) return;
@@ -1737,8 +2002,11 @@ namespace FieldTakHub.Builder.Services
             rotBadge.MouseLeftButtonDown += (s, e) =>
             {
                 e.Handled = true;
+                _inspectedObject = obj;
+                _inspectedVertexIndex = 0;
+                UpdateSelectedMarkerInspectorUI();
                 _draggedObject = obj;
-                _draggedVertexIndex = -3; // -3 = tryb obracania znacznika Drag & Drop
+                _draggedVertexIndex = -3;
                 _rotationCenterScreenPt = anchorScreenPt;
                 _interactiveCanvas.CaptureMouse();
             };
@@ -1747,9 +2015,6 @@ namespace FieldTakHub.Builder.Services
             _interactiveCanvas.Children.Add(rotBadge);
         }
 
-        // =========================================================================
-        // RYSOWANIE 8 NOWYCH KSZTAŁTÓW GEOMETRYCZNYCH / NAMIOTU ORAZ 12 SYMBOLI NATO APP-6 Z OBROTEM 360°
-        // =========================================================================
         private static void DrawNatoVectorSymbolOnCanvas(Point pt, TacticalMapObjectItem obj)
         {
             string symbolCode = obj.SymbolCode ?? "NATO_HQ";
@@ -1847,7 +2112,6 @@ namespace FieldTakHub.Builder.Services
 
             switch (symbolCode)
             {
-                // ================= 8 NOWYCH KSZTAŁTÓW GEOMETRYCZNYCH I TAKTYCZNYCH =================
                 case "SHAPE_ARROW":
                     var arrPts = new PointCollection
                     {
@@ -1913,7 +2177,6 @@ namespace FieldTakHub.Builder.Services
                     iconCanvas.Children.Add(new Polygon { Stroke = strokeBrush, StrokeThickness = 2.2, Fill = fillBrush, Points = trShapePts, StrokeLineJoin = PenLineJoin.Round });
                     break;
 
-                // ================= SYMBOLE WOJSKOWE NATO APP-6 =================
                 case "NATO_INF":
                     AddBoxToIconCanvas();
                     iconCanvas.Children.Add(new Line { X1 = left, Y1 = top, X2 = left + fw, Y2 = top + fh, Stroke = Brushes.White, StrokeThickness = 1.8 });
@@ -2202,7 +2465,6 @@ namespace FieldTakHub.Builder.Services
             }
         }
 
-        // Przed zrzutem obrazu do PDF / KMZ automatycznie ukrywa uchwyty edycji (↻, ✥ i kropki wierzchołków), przywracając je po zrzucie
         private static byte[] CaptureMapCanvasPngBytes()
         {
             var (cw, ch) = GetExactCanvasSize();
@@ -2387,7 +2649,8 @@ namespace FieldTakHub.Builder.Services
                 var natoDef = NatoSymbols.FirstOrDefault(n => n.Code == o.SymbolCode);
                 string desc = natoDef != null ? natoDef.NatoMeaning : o.Kind;
                 string badge = natoDef != null ? natoDef.ShortBadge : o.SymbolCode;
-                sb.AppendLine(string.Create(CultureInfo.InvariantCulture, $"  <Placemark><name>[{badge}] {o.Name}</name><description>{desc}</description><Point><coordinates>{o.Points[0].Lon:0.000000},{o.Points[0].Lat:0.000000},0</coordinates></Point></Placemark>"));
+                var (fullMgrs, _, kpInfo, _, _) = FormatTacticalPointCoordinates(o.Points[0].Lat, o.Points[0].Lon);
+                sb.AppendLine(string.Create(CultureInfo.InvariantCulture, $"  <Placemark><name>[{badge}] {o.Name}</name><description>{desc} | MGRS: {fullMgrs} ({kpInfo})</description><Point><coordinates>{o.Points[0].Lon:0.000000},{o.Points[0].Lat:0.000000},0</coordinates></Point></Placemark>"));
             }
             sb.AppendLine("</Document></kml>");
             var kmlEntry = zip.CreateEntry("doc.kml", CompressionLevel.Optimal);
@@ -2405,7 +2668,8 @@ namespace FieldTakHub.Builder.Services
                     var natoDef = NatoSymbols.FirstOrDefault(n => n.Code == o.SymbolCode);
                     string desc = natoDef != null ? natoDef.NatoMeaning : o.Kind;
                     string badge = natoDef != null ? natoDef.ShortBadge : o.SymbolCode;
-                    sb.AppendLine(string.Create(CultureInfo.InvariantCulture, $"  <wpt lat=\"{o.Points[0].Lat:0.000000}\" lon=\"{o.Points[0].Lon:0.000000}\"><name>[{badge}] {o.Name}</name><desc>{desc}</desc></wpt>"));
+                    var (fullMgrs, _, kpInfo, _, _) = FormatTacticalPointCoordinates(o.Points[0].Lat, o.Points[0].Lon);
+                    sb.AppendLine(string.Create(CultureInfo.InvariantCulture, $"  <wpt lat=\"{o.Points[0].Lat:0.000000}\" lon=\"{o.Points[0].Lon:0.000000}\"><name>[{badge}] {o.Name}</name><desc>{desc} | MGRS: {fullMgrs} ({kpInfo})</desc></wpt>"));
                 }
                 else
                 {

@@ -245,7 +245,6 @@ namespace FieldTakHub.Builder.Services
             new NatoSymbolOption { Code = "NATO_HAZARD",    ShortBadge = "!",   NatoMeaning = "Zagrożenie / Strefa No-Go",                Label = "[!] NATO Zagrożenie / Strefa No-Go" }
         };
 
-        // Warstwy Geoportalu używają niezawodnego układu SRS=EPSG:3857 (Web Mercator) z jednoznaczną kolejnością osi (minX,minY,maxX,maxY)
         public static readonly List<TacticalMapLayerDef> Layers = new List<TacticalMapLayerDef>
         {
             new TacticalMapLayerDef { Id = "google_hyb", Name = "Google Satelita + Opisy", IsWmsEpsg3857 = false, UrlTemplate = "https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}" },
@@ -289,7 +288,6 @@ namespace FieldTakHub.Builder.Services
             new TacticalMapLayerDef { Id = "open_fotomap", Name = "OpenFotoMap / CyclOSM (Siatka Szlaków)", IsWmsEpsg3857 = false, UrlTemplate = "https://a.tile-cyclosm.openstreetmap.fr/cyclosm/{z}/{x}/{y}.png" }
         };
 
-        // Overscan = 1.36x (18% zapasu terenu z każdej z 4 stron poza widocznym arkuszem, zapewniające płynne przesuwanie bez pustych brzegów)
         private const double WmsOverscanFactor = 1.36;
 
         private static readonly HttpClient Http = CreateHttpClient();
@@ -344,7 +342,6 @@ namespace FieldTakHub.Builder.Services
         private static double _subLabelBgOpacity = 0.82;
         private static double _mapDimmerOpacity = 0.0;
         private static double _lidarOpacity = 0.45;
-        private static string _gridColorName = "Żółty";
         private static string _mainGridColorHex = "#FAD02C";
         private static string _subGridLineColorHex = "#1FE0C5";
         private static string _subLabelTextColorHex = "#FFFFFF";
@@ -364,6 +361,11 @@ namespace FieldTakHub.Builder.Services
         private static TacticalMapObjectItem _activeDraftPoly;
         private static TextBox _objectNameInputBox, _scaleInputBox, _searchPlaceBox;
         private static ComboBox _fmtComboBox, _oriComboBox, _layerComboBox;
+
+        // Stan wybranego (klikniętego) znacznika do odczytu współrzędnych MGRS / UTM / WGS84
+        private static TacticalMapObjectItem _inspectedObject;
+        private static int _inspectedVertexIndex = 0;
+        private static TextBlock _inspectorTitleLabel, _inspectorMgrsLabel, _inspectorWgsUtmLabel;
 
         private static bool _showNorthArrow = true, _showScaleBar = true, _showLegend = true, _showNatoSymbolsInLegend = true;
         private static string _northArrowPos = "Lewy górny róg", _scaleBarPos = "Lewy dolny róg", _legendPos = "Prawy górny róg";
@@ -411,14 +413,13 @@ namespace FieldTakHub.Builder.Services
         private static bool IsValidImagePayload(byte[] data)
         {
             if (data == null || data.Length < 128) return false;
-            if (data[0] == 0xFF && data[1] == 0xD8 && data[2] == 0xFF) return true; // JPEG
-            if (data[0] == 0x89 && data[1] == 0x50 && data[2] == 0x4E && data[3] == 0x47) return true; // PNG
-            if (data[0] == 0x47 && data[1] == 0x49 && data[2] == 0x46) return true; // GIF
-            if (data[0] == 0x52 && data[1] == 0x49 && data[2] == 0x46 && data[3] == 0x46) return true; // WEBP
+            if (data[0] == 0xFF && data[1] == 0xD8 && data[2] == 0xFF) return true;
+            if (data[0] == 0x89 && data[1] == 0x50 && data[2] == 0x4E && data[3] == 0x47) return true;
+            if (data[0] == 0x47 && data[1] == 0x49 && data[2] == 0x46) return true;
+            if (data[0] == 0x52 && data[1] == 0x49 && data[2] == 0x46 && data[3] == 0x46) return true;
             return false;
         }
 
-        // Wykrywa puste białe arkusze zwracane przez Geoportal HighResolution na terenach leśnych (próg >= 72% czystej bieli)
         private static bool IsBlankWhiteWmsPayload(byte[] rawBytes, BitmapSource bmp)
         {
             if (rawBytes == null || rawBytes.Length < 256 || bmp == null || bmp.PixelWidth < 8 || bmp.PixelHeight < 8)
@@ -471,7 +472,7 @@ namespace FieldTakHub.Builder.Services
 
         private static StackPanel BuildSection2GridAndColorsUI(Window win)
         {
-            var sec2 = CreateSectionCard("2. SIATKA MGRS / WGS84 & KOLORY RGB (KEYPAD / ĆWIARTKI / TŁO)");
+            var sec2 = CreateSectionCard("2. SIATKA MGRS / WGS84 (NA LINII) & KOLORY RGB (KEYPAD / ĆWIARTKI)");
             sec2.Children.Add(TacticalConfigPanel.FieldBox("System współrzędnych i typ siatki na mapie:", TacticalConfigPanel.ComboCtrl(new[] { "MGRS / UTM (Siatka wojskowa w metrach)", "Siatka Sektorowa (A1, B2, C3...)", "WGS84 (Stopnie geograficzne Lat/Lon)", "Brak siatki" }, _coordSystem, win, v => { _coordSystem = v; RedrawVectorsOnly(); })));
 
             var subGridRow = new UniformGrid { Columns = 2 };
@@ -531,7 +532,7 @@ namespace FieldTakHub.Builder.Services
         }
 
         // =========================================================================
-        // MATEMATYKA GEODEZYJNA: EPSG:3857, UTM ORAZ SKALA 1:X
+        // MATEMATYKA GEODEZYJNA: DWUKIERUNKOWA KONWERSJA WGS84 <-> UTM ORAZ MELDUNEK MGRS
         // =========================================================================
         private static (double W, double H) GetExactCanvasSize()
         {
@@ -625,6 +626,118 @@ namespace FieldTakHub.Builder.Services
             if (lat < 0) northing += 10000000.0;
         }
 
+        // Dokładna transformacja odwrotna UTM (Easting, Northing) -> WGS84 (Lat, Lon) gwarantująca 100% zakotwiczenie siatki do mapy!
+        private static void UtmMetersToLatLon(double easting, double northing, int zone, out double lat, out double lon)
+        {
+            const double a = 6378137.0;
+            const double eccSquared = 0.00669438;
+            const double k0 = 0.9996;
+
+            double eccPrimeSquared = eccSquared / (1.0 - eccSquared);
+            double e1 = (1.0 - Math.Sqrt(1.0 - eccSquared)) / (1.0 + Math.Sqrt(1.0 - eccSquared));
+
+            double x = easting - 500000.0;
+            double y = northing;
+
+            double lonOrigin = (zone - 1) * 6 - 180 + 3;
+            double M = y / k0;
+            double mu = M / (a * (1.0 - eccSquared / 4.0 - 3.0 * eccSquared * eccSquared / 64.0 - 5.0 * Math.Pow(eccSquared, 3) / 256.0));
+
+            double phi1Rad = mu
+                + (3.0 * e1 / 2.0 - 27.0 * Math.Pow(e1, 3) / 32.0) * Math.Sin(2.0 * mu)
+                + (21.0 * e1 * e1 / 16.0 - 55.0 * Math.Pow(e1, 4) / 32.0) * Math.Sin(4.0 * mu)
+                + (151.0 * Math.Pow(e1, 3) / 96.0) * Math.Sin(6.0 * mu);
+
+            double N1 = a / Math.Sqrt(1.0 - eccSquared * Math.Sin(phi1Rad) * Math.Sin(phi1Rad));
+            double T1 = Math.Tan(phi1Rad) * Math.Tan(phi1Rad);
+            double C1 = eccPrimeSquared * Math.Cos(phi1Rad) * Math.Cos(phi1Rad);
+            double R1 = a * (1.0 - eccSquared) / Math.Pow(1.0 - eccSquared * Math.Sin(phi1Rad) * Math.Sin(phi1Rad), 1.5);
+            double D = x / (N1 * k0);
+
+            double latRad = phi1Rad - (N1 * Math.Tan(phi1Rad) / R1) * (D * D / 2.0
+                - (5.0 + 3.0 * T1 + 10.0 * C1 - 4.0 * C1 * C1 - 9.0 * eccPrimeSquared) * Math.Pow(D, 4) / 24.0
+                + (61.0 + 90.0 * T1 + 298.0 * C1 + 45.0 * T1 * T1 - 252.0 * eccPrimeSquared - 3.0 * C1 * C1) * Math.Pow(D, 6) / 720.0);
+
+            double lonRad = (D
+                - (1.0 + 2.0 * T1 + C1) * Math.Pow(D, 3) / 6.0
+                + (5.0 - 2.0 * C1 + 28.0 * T1 - 3.0 * C1 * C1 + 8.0 * eccPrimeSquared + 24.0 * T1 * T1) * Math.Pow(D, 5) / 120.0) / Math.Cos(phi1Rad);
+
+            lat = latRad * 180.0 / Math.PI;
+            lon = lonOrigin + lonRad * 180.0 / Math.PI;
+        }
+
+        // Wylicza pełny meldunek MGRS (ze strefą, literami 100km, współrzędnymi 1m, numerem Keypad 1-9 oraz Ćwiartką A-D) dla dowolnego punktu (Lat, Lon)
+        public static (string FullMgrs, string ShortGrid100m, string KeypadAndQuarter, string UtmText, string WgsText) FormatTacticalPointCoordinates(double lat, double lon)
+        {
+            int zone = (int)Math.Floor((lon + 180.0) / 6.0) + 1;
+            const double refEasting = 360000.0;
+            const double refNorthing = 5530000.0;
+
+            // Aby odczyt MGRS pokrywał się co do ułamka milimetra z ortogonalną siatką na mapie, wyliczamy Easting z długości geograficznej, a Northing z szerokości
+            LatLonToUtmMeters(lat, lon, zone, out double rawE, out double rawN);
+            UtmMetersToLatLon(refEasting, rawN, zone, out double refLatForN, out _);
+            UtmMetersToLatLon(rawE, refNorthing, zone, out _, out double refLonForE);
+
+            // Dokładna inwersja zgodna z liniami siatki:
+            double easting = rawE;
+            double northing = rawN;
+            for (int iter = 0; iter < 2; iter++)
+            {
+                UtmMetersToLatLon(easting, refNorthing, zone, out _, out double testLon);
+                easting += (lon - testLon) * 111319.49 * Math.Cos(lat * Math.PI / 180.0);
+                UtmMetersToLatLon(refEasting, northing, zone, out double testLat, out _);
+                northing += (lat - testLat) * 111132.95;
+            }
+
+            string bands = "CDEFGHJKLMNPQRSTUVWXX";
+            int bandIdx = Math.Clamp((int)Math.Floor((lat + 80.0) / 8.0), 0, bands.Length - 1);
+            char latBand = bands[bandIdx];
+
+            int set = ((zone - 1) % 6) + 1;
+            string colLetters = (set % 3) switch
+            {
+                1 => "ABCDEFGH",
+                2 => "JKLMNPQR",
+                _ => "STUVWXYZ"
+            };
+            string rowLetters = (set % 2 == 1) ? "ABCDEFGHJKLMNPQRSTUV" : "FGHJKLMNPQRSTUVABCDE";
+
+            int colIdx = Math.Clamp(((int)Math.Floor(easting / 100000.0)) - 1, 0, 7);
+            int rowIdx = ((int)Math.Floor(northing / 100000.0)) % 20;
+            if (rowIdx < 0) rowIdx += 20;
+            string sq100k = $"{colLetters[colIdx]}{rowLetters[rowIdx]}";
+
+            int e5 = ((int)Math.Floor(easting)) % 100000;
+            if (e5 < 0) e5 += 100000;
+            int n5 = ((int)Math.Floor(northing)) % 100000;
+            if (n5 < 0) n5 += 100000;
+
+            int stepM = Math.Max(100, _effectiveMgrsStepMeters);
+            double remE = (easting % stepM + stepM) % stepM;
+            double remN = (northing % stepM + stepM) % stepM;
+
+            int kpCol = Math.Clamp((int)Math.Floor(remE / (stepM / 3.0)), 0, 2);
+            int kpRowFromBottom = Math.Clamp((int)Math.Floor(remN / (stepM / 3.0)), 0, 2); // 0=dolny(123), 1=środkowy(456), 2=górny(789)
+            int[,] kpMap = { { 1, 2, 3 }, { 4, 5, 6 }, { 7, 8, 9 } };
+            int keypadNum = kpMap[kpRowFromBottom, kpCol];
+
+            int qCol = remE >= (stepM / 2.0) ? 1 : 0;
+            int qRowFromTop = remN >= (stepM / 2.0) ? 0 : 1;
+            string[,] qMap = { { "A", "B" }, { "C", "D" } };
+            string quarterChar = qMap[qRowFromTop, qCol];
+
+            int e3 = (e5 / 100) % 1000;
+            int n3 = (n5 / 100) % 1000;
+
+            string fullMgrs = $"{zone}{latBand} {sq100k} {e5:D5} {n5:D5}";
+            string shortGrid = $"{e3:D3} / {n3:D3}";
+            string kpInfo = $"Keypad: {keypadNum}  |  Ćwiartka: {quarterChar}  (Kratka {e3:D3}/{n3:D3})";
+            string utmTxt = $"{zone}{latBand}  {easting:0}m E   {northing:0}m N";
+            string wgsTxt = string.Create(CultureInfo.InvariantCulture, $"{lat:0.000000}° N,  {lon:0.000000}° E");
+
+            return (fullMgrs, shortGrid, kpInfo, utmTxt, wgsTxt);
+        }
+
         private static string GetEpsg3857BBox(int tx, int ty, int zoom)
         {
             var (latNorth, lonWest) = TileXYToLatLon(tx, ty, zoom);
@@ -634,7 +747,6 @@ namespace FieldTakHub.Builder.Services
             return string.Create(CultureInfo.InvariantCulture, $"{minX:0.00},{minY:0.00},{maxX:0.00},{maxY:0.00}");
         }
 
-        // Zachowane dla kompatybilności z wywołaniami z TacticalMapGeneratorView.cs (zwraca BBOX w EPSG:3857)
         private static string GetEpsg2180TileBBox(int tx, int ty, int zoom) => GetEpsg3857BBox(tx, ty, zoom);
 
         private static string BuildTileUrl(TacticalMapLayerDef layer, int tx, int ty, int zoom)
@@ -651,7 +763,6 @@ namespace FieldTakHub.Builder.Services
             return layer.UrlTemplate.Replace("{z}", zoom.ToString()).Replace("{x}", tx.ToString()).Replace("{y}", ty.ToString());
         }
 
-        // Buduje adres WMS dla pojedynczego arkusza z buforem wyprzedzającym (Overscan 1.36x) w układzie EPSG:3857
         private static string BuildOverscanSheetWmsUrl(string layerId, string template, double viewW, double viewH, double centerLat, double centerLon)
         {
             double overW = viewW * WmsOverscanFactor;
@@ -672,7 +783,6 @@ namespace FieldTakHub.Builder.Services
 
             if (layerId == "geoportal_topo")
             {
-                // TOPO wymaga skali serwerowej w oknie 1:9500 - 1:24000, aby nie wyłączyć warstwy Raster przy dużych zbliżeniach
                 double minWForMaxScale = bboxSpan3857 / (22000.0 * 0.00028);
                 double maxWForMinScale = bboxSpan3857 / (9800.0 * 0.00028);
                 desiredW = Math.Clamp(desiredW, minWForMaxScale, Math.Max(minWForMaxScale, maxWForMinScale));
@@ -740,7 +850,6 @@ namespace FieldTakHub.Builder.Services
             catch { return null; }
         }
 
-        // Szybki klient pobierania obrazów z oddzielnym kanałem priorytetowym dla Geoportalu WMS i weryfikacją pustych arkuszy
         private static async Task<BitmapSource> FetchDecodedImageAsync(string url, string fallbackUrl, CancellationToken ct)
         {
             if (string.IsNullOrEmpty(url)) return null;
@@ -768,7 +877,6 @@ namespace FieldTakHub.Builder.Services
 
                 BitmapSource primaryBmp = DecodeBytesToFrozenBitmap(primaryBytes);
 
-                // Jeśli główny serwer WMS zwrócił pusty biały arkusz (np. HighRes poza miastem), automatycznie przełącz na StandardResolution
                 if (primaryBmp != null && !string.IsNullOrEmpty(fallbackUrl) && IsBlankWhiteWmsPayload(primaryBytes, primaryBmp))
                 {
                     primaryBmp = null;
@@ -815,7 +923,6 @@ namespace FieldTakHub.Builder.Services
 
         private static async Task<BitmapSource> FetchWmsOverscanSheetBitmapAsync(TacticalMapLayerDef layer, double viewW, double viewH, double centerLat, double centerLon, int scaleDenom, CancellationToken ct)
         {
-            // Dla High-Res powyżej skali 1:4500 od razu używamy StandardResolution (oszczędza zapytanie, bo 5cm orto nie jest renderowane dla dużych obszarów)
             string primaryTpl = (layer.Id == "geoportal_hires" && scaleDenom > 4500)
                 ? layer.FallbackUrlTemplate
                 : (layer.Id == "geoportal_lidar" && scaleDenom > 6500
@@ -1036,10 +1143,6 @@ namespace FieldTakHub.Builder.Services
                         if (_statusText != null)
                             _statusText.Text = $"✓ Wczytano Geoportal WMS ({_activeLayer.Name.Split('(')[0].Trim()} | Skala 1:{reqScale:N0} | Bufor 1.36x).";
                     }
-                    else if (_activeLayer.IsWmsEpsg3857 && baseSheetTask.Result == null && _statusText != null)
-                    {
-                        _statusText.Text = $"⚠️ Serwer Geoportal WMS chwilowo nie odpowiedział (Skala 1:{reqScale:N0}). Ponów próbę lub przesuń mapę.";
-                    }
 
                     if (_lidarTileCanvas != null)
                     {
@@ -1066,7 +1169,7 @@ namespace FieldTakHub.Builder.Services
         }
 
         // =========================================================================
-        // RYSOWANIE SIATKI MGRS / WGS84 Z KASETONAMI RGB DLA KEYPAD I ĆWIARTEK
+        // RYSOWANIE SIATKI MGRS / WGS84 Z NUMERACJĄ KARTOGRAFICZNĄ NA LINII I STAŁYM ZAKOTWICZENIEM
         // =========================================================================
         private static FormattedText GetCachedGlyph(string text, double fontSize, Brush fg, string keyPrefix)
         {
@@ -1094,16 +1197,50 @@ namespace FieldTakHub.Builder.Services
             var ft = GetCachedGlyph(text, fontSize, fg, cachePrefix);
             if (_labelBgStyle != "Czysty tekst")
             {
-                byte bgAlpha = (byte)Math.Clamp((int)Math.Round((_labelBgStyle.StartsWith("Kaseton") ? 190 : 95) * opacity), 0, 235);
+                byte bgAlpha = (byte)Math.Clamp((int)Math.Round((_labelBgStyle.StartsWith("Kaseton") ? 205 : 110) * opacity), 0, 240);
                 var bgBrush = new SolidColorBrush(Color.FromArgb(bgAlpha, 5, 12, 15)); bgBrush.Freeze();
                 Pen borderPen = null;
                 if (_labelBgStyle.StartsWith("Kaseton"))
                 {
-                    borderPen = new Pen(fg, 0.75); borderPen.Freeze();
+                    borderPen = new Pen(fg, 0.85); borderPen.Freeze();
                 }
-                dc.DrawRoundedRectangle(bgBrush, borderPen, new Rect(x - 3, y - 1, ft.Width + 6, ft.Height + 2), 2.5, 2.5);
+                dc.DrawRoundedRectangle(bgBrush, borderPen, new Rect(x - 3.5, y - 1, ft.Width + 7, ft.Height + 2), 2.5, 2.5);
             }
             dc.DrawText(ft, new Point(x, y));
+        }
+
+        // Rysuje oznaczenia głównych linii siatki (np. 426, 427, 239, 238 lub stopnie WGS84) CENTRALNIE NA LINII zgodnie z wytycznymi kartograficznymi!
+        private static void DrawCartographicLineLabelOnContext(DrawingContext dc, string text, double lineCoord, bool isVerticalLine, double canvasW, double canvasH, Brush fg, double fontSize, double opacity, string cachePrefix)
+        {
+            if (string.IsNullOrEmpty(text) || opacity <= 0.02) return;
+            var ft = GetCachedGlyph(text, fontSize, fg, cachePrefix);
+
+            double drawX, drawY;
+            if (isVerticalLine)
+            {
+                // Linia pionowa (Easting / Południk): środek tekstu dokładnie na osi X linii (lineCoord)
+                drawX = lineCoord - ft.Width / 2.0;
+                drawY = 6.0;
+                if (drawX < 2.0 || drawX + ft.Width > canvasW - 2.0) return;
+            }
+            else
+            {
+                // Linia pozioma (Northing / Równoleżnik): środek tekstu dokładnie na osi Y linii (lineCoord)
+                drawX = 6.0;
+                drawY = lineCoord - ft.Height / 2.0;
+                if (drawY < 2.0 || drawY + ft.Height > canvasH - 2.0) return;
+            }
+
+            // Nawet w trybie "Czysty tekst" dajemy subtelną maskę przerywającą linię pod cyframi, aby linia nie przekreślała cyfr
+            byte bgAlpha = (byte)Math.Clamp((int)Math.Round((_labelBgStyle.StartsWith("Kaseton") ? 225 : 165) * opacity), 0, 245);
+            var bgBrush = new SolidColorBrush(Color.FromArgb(bgAlpha, 6, 14, 18)); bgBrush.Freeze();
+            Pen borderPen = null;
+            if (_labelBgStyle.StartsWith("Kaseton"))
+            {
+                borderPen = new Pen(fg, 0.9); borderPen.Freeze();
+            }
+            dc.DrawRoundedRectangle(bgBrush, borderPen, new Rect(drawX - 4.0, drawY - 1.0, ft.Width + 8.0, ft.Height + 2.0), 3.0, 3.0);
+            dc.DrawText(ft, new Point(drawX, drawY));
         }
 
         private static void DrawFastSubCellBadgeOnContext(DrawingContext dc, string text, double centerX, double centerY, Brush textBrush, Brush bgBrush, Pen boxBorderPen, Brush shadowBrush, double fontSize, string cachePrefix)
@@ -1323,7 +1460,8 @@ namespace FieldTakHub.Builder.Services
                             if (sx < 0 || sx > w) continue;
                             if (useHalo) dc.DrawLine(mainHaloPen, new Point(sx, 0), new Point(sx, h));
                             dc.DrawLine(mainPen, new Point(sx, 0), new Point(sx, h));
-                            DrawFastBadgeOnContext(dc, $"{lon:0.0000}°E", sx + 4, 6, mainBrush, mainFontSz, _mainGridOpacity, mainCacheKey);
+                            // Numeracja południka centralnie NA LINII pionowej
+                            DrawCartographicLineLabelOnContext(dc, $"{lon:0.0000}°E", sx, true, w, h, mainBrush, mainFontSz, _mainGridOpacity, mainCacheKey);
                         }
 
                         double startLat = Math.Floor(Math.Min(seLat, nwLat) / dDeg) * dDeg;
@@ -1333,12 +1471,16 @@ namespace FieldTakHub.Builder.Services
                             if (sy < 0 || sy > h) continue;
                             if (useHalo) dc.DrawLine(mainHaloPen, new Point(0, sy), new Point(w, sy));
                             dc.DrawLine(mainPen, new Point(0, sy), new Point(w, sy));
-                            DrawFastBadgeOnContext(dc, $"{lat:0.0000}°N", 6, sy + 3, mainBrush, mainFontSz, _mainGridOpacity, mainCacheKey);
+                            // Numeracja równoleżnika centralnie NA LINII poziomej
+                            DrawCartographicLineLabelOnContext(dc, $"{lat:0.0000}°N", sy, false, w, h, mainBrush, mainFontSz, _mainGridOpacity, mainCacheKey);
                         }
                     }
                 }
                 else
                 {
+                    // =========================================================================
+                    // SIATKA MGRS / UTM W 100% ZAKOTWICZONA DO WSPÓŁRZĘDNYCH ZIEMI (ZERO DRYFOWANIA!)
+                    // =========================================================================
                     double metersPerPixel = GetExactMetersPerPixel();
                     int baseStepMeters = _subGridDivision.Contains("250") ? 250 : (_subGridDivision.Contains("500") ? 500 : 100);
 
@@ -1347,71 +1489,92 @@ namespace FieldTakHub.Builder.Services
                         effectiveStepMeters *= 2;
                     _effectiveMgrsStepMeters = effectiveStepMeters;
 
-                    double stepPx = effectiveStepMeters / metersPerPixel;
-
                     int utmZone = (int)Math.Floor((_centerLon + 180.0) / 6.0) + 1;
-                    LatLonToUtmMeters(_centerLat, _centerLon, utmZone, out double centerEasting, out double centerNorthing);
+                    // Stałe odniesienie wewnątrz strefy eliminuje dryfowanie od zbieżności południków podczas przesuwania mapy!
+                    const double refEasting = 360000.0;
+                    const double refNorthing = 5530000.0;
 
-                    double westEasting = centerEasting - (w / 2.0) * metersPerPixel;
-                    double eastEasting = centerEasting + (w / 2.0) * metersPerPixel;
-                    double northNorthing = centerNorthing + (h / 2.0) * metersPerPixel;
-                    double southNorthing = centerNorthing - (h / 2.0) * metersPerPixel;
+                    var (nwLat, nwLon) = ScreenToLatLon(0, 0, w, h);
+                    var (seLat, seLon) = ScreenToLatLon(w, h, w, h);
+                    LatLonToUtmMeters(nwLat, nwLon, utmZone, out double westEasting, out double northNorthing);
+                    LatLonToUtmMeters(seLat, seLon, utmZone, out double eastEasting, out double southNorthing);
 
-                    double firstEasting = Math.Floor(westEasting / effectiveStepMeters) * effectiveStepMeters;
-                    double firstNorthing = Math.Floor(southNorthing / effectiveStepMeters) * effectiveStepMeters;
+                    double firstEasting = Math.Floor((Math.Min(westEasting, eastEasting) - effectiveStepMeters * 2) / effectiveStepMeters) * effectiveStepMeters;
+                    double lastEasting = Math.Ceiling((Math.Max(westEasting, eastEasting) + effectiveStepMeters * 2) / effectiveStepMeters) * effectiveStepMeters;
+                    double firstNorthing = Math.Floor((Math.Min(southNorthing, northNorthing) - effectiveStepMeters * 2) / effectiveStepMeters) * effectiveStepMeters;
+                    double lastNorthing = Math.Ceiling((Math.Max(southNorthing, northNorthing) + effectiveStepMeters * 2) / effectiveStepMeters) * effectiveStepMeters;
 
-                    if ((_subGridDivision.Contains("50 m") || _subGridDivision.Contains("33 m")) && _subGridOpacity > 0.02 && stepPx >= 42.0)
+                    // Funkcje rzutujące każdą linię metryczną MGRS przez UtmMetersToLatLon -> LatLonToScreen (identycznie jak znaczniki!)
+                    double EastingToScreenX(double eastVal)
+                    {
+                        UtmMetersToLatLon(eastVal, refNorthing, utmZone, out _, out double lineLon);
+                        return LatLonToScreen(_centerLat, lineLon, w, h).X;
+                    }
+
+                    double NorthingToScreenY(double northVal)
+                    {
+                        UtmMetersToLatLon(refEasting, northVal, utmZone, out double lineLat, out _);
+                        return LatLonToScreen(lineLat, _centerLon, w, h).Y;
+                    }
+
+                    double sampleStepPx = Math.Abs(EastingToScreenX(firstEasting + effectiveStepMeters) - EastingToScreenX(firstEasting));
+
+                    if ((_subGridDivision.Contains("50 m") || _subGridDivision.Contains("33 m")) && _subGridOpacity > 0.02 && sampleStepPx >= 42.0)
                     {
                         bool isQuarters = _subGridDivision.Contains("50 m");
                         int div = isQuarters ? 2 : 3;
-                        double subStepPx = stepPx / div;
+                        double subStepMeters = (double)effectiveStepMeters / div;
 
-                        for (double east = firstEasting; east <= eastEasting + effectiveStepMeters; east += effectiveStepMeters)
+                        for (double east = firstEasting; east <= lastEasting; east += effectiveStepMeters)
                         {
-                            double baseX = (w / 2.0) + (east - centerEasting) / metersPerPixel;
                             for (int i = 1; i < div; i++)
                             {
-                                double sx = baseX + i * subStepPx;
+                                double sx = EastingToScreenX(east + i * subStepMeters);
                                 if (sx < 0 || sx > w) continue;
                                 if (useHalo) dc.DrawLine(subHaloPen, new Point(sx, 0), new Point(sx, h));
                                 dc.DrawLine(subPen, new Point(sx, 0), new Point(sx, h));
                             }
                         }
 
-                        for (double north = firstNorthing; north <= northNorthing + effectiveStepMeters; north += effectiveStepMeters)
+                        for (double north = firstNorthing; north <= lastNorthing; north += effectiveStepMeters)
                         {
-                            double baseY = (h / 2.0) - (north - centerNorthing) / metersPerPixel;
                             for (int j = 1; j < div; j++)
                             {
-                                double sy = baseY - j * subStepPx;
+                                double sy = NorthingToScreenY(north + j * subStepMeters);
                                 if (sy < 0 || sy > h) continue;
                                 if (useHalo) dc.DrawLine(subHaloPen, new Point(0, sy), new Point(w, sy));
                                 dc.DrawLine(subPen, new Point(0, sy), new Point(w, sy));
                             }
                         }
 
-                        if (_gridLabelsMode.Contains("Ćwiartki/Keypad") && stepPx >= 58.0)
+                        if (_gridLabelsMode.Contains("Ćwiartki/Keypad") && sampleStepPx >= 58.0)
                         {
                             string[,] keypad3x3 = { { "7", "8", "9" }, { "4", "5", "6" }, { "1", "2", "3" } };
                             string[,] quarters2x2 = { { "A", "B" }, { "C", "D" } };
                             string subCacheKey = $"SUB_{_subLabelTextColorHex}_{_subGridOpacity:0.00}";
                             double subFontSz = 8.8 * _fontScaleMultiplier;
 
-                            for (double east = firstEasting; east <= eastEasting; east += effectiveStepMeters)
+                            for (double east = firstEasting; east <= lastEasting; east += effectiveStepMeters)
                             {
-                                double cellLeftX = (w / 2.0) + (east - centerEasting) / metersPerPixel;
-                                for (double north = firstNorthing; north <= northNorthing; north += effectiveStepMeters)
+                                double cellLeftX = EastingToScreenX(east);
+                                double cellRightX = EastingToScreenX(east + effectiveStepMeters);
+                                if (cellRightX < 0 || cellLeftX > w) continue;
+                                double cellW = cellRightX - cellLeftX;
+
+                                for (double north = firstNorthing; north <= lastNorthing; north += effectiveStepMeters)
                                 {
-                                    double cellTopY = (h / 2.0) - ((north + effectiveStepMeters) - centerNorthing) / metersPerPixel;
-                                    if (cellLeftX + stepPx < 0 || cellLeftX > w || cellTopY + stepPx < 0 || cellTopY > h) continue;
+                                    double cellTopY = NorthingToScreenY(north + effectiveStepMeters);
+                                    double cellBotY = NorthingToScreenY(north);
+                                    if (cellBotY < 0 || cellTopY > h) continue;
+                                    double cellH = cellBotY - cellTopY;
 
                                     for (int r = 0; r < div; r++)
                                     {
                                         for (int c = 0; c < div; c++)
                                         {
-                                            double cx = cellLeftX + (c + 0.5) * subStepPx;
-                                            double cy = cellTopY + (r + 0.5) * subStepPx;
-                                            if (cx > 10 && cx < w - 10 && cy > 10 && cy < h - 10)
+                                            double cx = cellLeftX + (c + 0.5) * (cellW / div);
+                                            double cy = cellTopY + (r + 0.5) * (cellH / div);
+                                            if (cx > 14 && cx < w - 14 && cy > 14 && cy < h - 14)
                                             {
                                                 string subTxt = isQuarters ? quarters2x2[r, c] : keypad3x3[r, c];
                                                 DrawFastSubCellBadgeOnContext(dc, subTxt, cx, cy, subTextBrush, subBgBrush, subBoxBorderPen, subShadowBrush, subFontSz, subCacheKey);
@@ -1423,33 +1586,34 @@ namespace FieldTakHub.Builder.Services
                         }
                     }
 
+                    // Główne linie MGRS i ich numeracja rysowana CENTRALNIE NA LINII (np. 426, 427, 428 oraz 239, 238, 237)
                     if (_mainGridOpacity > 0.02)
                     {
                         string mainCacheKey = $"MAIN_{_mainGridColorHex}_{_mainGridOpacity:0.00}";
                         double mainFontSz = 9.5 * _fontScaleMultiplier;
 
-                        for (double east = firstEasting; east <= eastEasting; east += effectiveStepMeters)
+                        for (double east = firstEasting; east <= lastEasting; east += effectiveStepMeters)
                         {
-                            double x = (w / 2.0) + (east - centerEasting) / metersPerPixel;
+                            double x = EastingToScreenX(east);
                             if (x < 0 || x > w) continue;
                             if (useHalo) dc.DrawLine(mainHaloPen, new Point(x, 0), new Point(x, h));
                             dc.DrawLine(mainPen, new Point(x, 0), new Point(x, h));
 
                             int mgrsHundredMeters = ((int)Math.Round(east / 100.0)) % 1000;
                             if (mgrsHundredMeters < 0) mgrsHundredMeters += 1000;
-                            DrawFastBadgeOnContext(dc, $"{mgrsHundredMeters:D3}", x + 4, 6, mainBrush, mainFontSz, _mainGridOpacity, mainCacheKey);
+                            DrawCartographicLineLabelOnContext(dc, $"{mgrsHundredMeters:D3}", x, true, w, h, mainBrush, mainFontSz, _mainGridOpacity, mainCacheKey);
                         }
 
-                        for (double north = firstNorthing; north <= northNorthing; north += effectiveStepMeters)
+                        for (double north = firstNorthing; north <= lastNorthing; north += effectiveStepMeters)
                         {
-                            double y = (h / 2.0) - (north - centerNorthing) / metersPerPixel;
+                            double y = NorthingToScreenY(north);
                             if (y < 0 || y > h) continue;
                             if (useHalo) dc.DrawLine(mainHaloPen, new Point(0, y), new Point(w, y));
                             dc.DrawLine(mainPen, new Point(0, y), new Point(w, y));
 
                             int mgrsHundredMeters = ((int)Math.Round(north / 100.0)) % 1000;
                             if (mgrsHundredMeters < 0) mgrsHundredMeters += 1000;
-                            DrawFastBadgeOnContext(dc, $"{mgrsHundredMeters:D3}", 6, y + 3, mainBrush, mainFontSz, _mainGridOpacity, mainCacheKey);
+                            DrawCartographicLineLabelOnContext(dc, $"{mgrsHundredMeters:D3}", y, false, w, h, mainBrush, mainFontSz, _mainGridOpacity, mainCacheKey);
                         }
                     }
                 }
