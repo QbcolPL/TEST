@@ -19,6 +19,7 @@ using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Shapes;
 using System.Windows.Threading;
+using Path = System.IO.Path;
 
 namespace FieldTakHub.Builder.Services
 {
@@ -452,35 +453,11 @@ namespace FieldTakHub.Builder.Services
         private static (double X, double Y) LatLonToEpsg3857(double lat, double lon) => GeoportalLidarEngine.LatLonToEpsg3857(lat, lon);
         private static (double Easting, double Northing) LatLonToEpsg2180(double lat, double lon) => GeoportalLidarEngine.LatLonToEpsg2180(lat, lon);
 
-        private static void LatLonToUtmMeters(double lat, double lon, int forcedZone, out double easting, out double northing) =>
-            UtmGrid2DProjector.LatLonToUtm(lat, lon, forcedZone, out easting, out northing);
-
-        private static void UtmMetersToLatLon(double easting, double northing, int zone, out double lat, out double lon) =>
-            UtmGrid2DProjector.UtmToLatLon(easting, northing, zone, out lat, out lon);
-
-        // Wspólna transformacja kalibrująca względem południka odniesienia (360000 E, 5530000 N):
-        // Gwarantuje 100% zgodności z pierwotną mapą (Infil = 241, Parking = 243, pionowe 421–433) oraz brak ucinania linii na dole!
-        private static void LatLonToCalibratedGridMeters(double lat, double lon, int zone, out double easting, out double northing)
-        {
-            const double refEasting = 360000.0;
-            const double refNorthing = 5530000.0;
-
-            LatLonToUtmMeters(lat, lon, zone, out double rawE, out double rawN);
-            easting = rawE;
-            northing = rawN;
-            for (int iter = 0; iter < 2; iter++)
-            {
-                UtmMetersToLatLon(easting, refNorthing, zone, out _, out double testLon);
-                easting += (lon - testLon) * 111319.49 * Math.Cos(lat * Math.PI / 180.0);
-                UtmMetersToLatLon(refEasting, northing, zone, out double testLat, out _);
-                northing += (lat - testLat) * 111132.95;
-            }
-        }
-
+        // PRAWDZIWE WSPÓŁRZĘDNE NATO MGRS / UTM (100% zgodności z ATAK-CIV i odbiornikami Garmin!)
         public static (string FullMgrs, string ShortGrid100m, string KeypadAndQuarter, string UtmText, string WgsText) FormatTacticalPointCoordinates(double lat, double lon)
         {
             int zone = (int)Math.Floor((lon + 180.0) / 6.0) + 1;
-            LatLonToCalibratedGridMeters(lat, lon, zone, out double easting, out double northing);
+            UtmGrid2DProjector.LatLonToUtm(lat, lon, zone, out double easting, out double northing);
 
             string bands = "CDEFGHJKLMNPQRSTUVWXX";
             char latBand = bands[Math.Clamp((int)Math.Floor((lat + 80.0) / 8.0), 0, bands.Length - 1)];
@@ -858,7 +835,6 @@ namespace FieldTakHub.Builder.Services
 
                     var bInfo = BuildGeoportalSheetUrls(reqLayer, w, h, reqLat, reqLon, reqScale);
 
-                    // POTOK 1: Warstwa bazowa WMS (z automatycznym łataniem białych dziur na warstwie HIGH-RES!)
                     Task basePipeline = Task.CompletedTask;
                     if (reqLayer.IsWmsEpsg3857)
                     {
@@ -919,7 +895,6 @@ namespace FieldTakHub.Builder.Services
                         }, ct);
                     }
 
-                    // POTOK 2: Wielosektorowa nakładka LiDAR ISOK (EVRF2007 + KRON86 + Auto-Kontrast 3D)
                     Task lidarPipeline = Task.CompletedTask;
                     if (reqLidarOverlay)
                     {
@@ -1183,40 +1158,23 @@ namespace FieldTakHub.Builder.Services
                 }
                 else
                 {
-                    // SKALIBROWANA SIATKA PROSTOKĄTNA MGRS (100% zgodna z Twoim projektem: Infil=241, Parking=243, pionowe 421-433 + zero ucinania na dole!)
+                    // PRAWDZIWA SIATKA 2D UTM / MGRS ZGODNA 1:1 Z ATAK-CIV I ODBIORNIKAMI GARMIN (UtmGrid2DProjector)
                     double metersPerPixel = GetExactMetersPerPixel();
                     int effectiveStepMeters = _subGridDivision.Contains("250") ? 250 : (_subGridDivision.Contains("500") ? 500 : 100);
                     while (effectiveStepMeters / metersPerPixel < 32.0 && effectiveStepMeters < 10000) effectiveStepMeters *= 2;
                     _effectiveMgrsStepMeters = effectiveStepMeters;
 
                     int utmZone = (int)Math.Floor((_centerLon + 180.0) / 6.0) + 1;
-                    const double refEasting = 360000.0;
-                    const double refNorthing = 5530000.0;
+                    UtmGrid2DProjector.ComputeSheetUtmEnvelope((sx, sy) => ScreenToLatLon(sx, sy, w, h), w, h, utmZone, effectiveStepMeters, out double firstEasting, out double lastEasting, out double firstNorthing, out double lastNorthing);
 
-                    var (nwLat, nwLon) = ScreenToLatLon(0, 0, w, h);
-                    var (seLat, seLon) = ScreenToLatLon(w, h, w, h);
-                    LatLonToCalibratedGridMeters(nwLat, nwLon, utmZone, out double westEasting, out double northNorthing);
-                    LatLonToCalibratedGridMeters(seLat, seLon, utmZone, out double eastEasting, out double southNorthing);
-
-                    int padMeters = Math.Max(600, effectiveStepMeters * 6);
-                    double firstEasting  = Math.Floor((Math.Min(westEasting, eastEasting) - padMeters) / effectiveStepMeters) * effectiveStepMeters;
-                    double lastEasting   = Math.Ceiling((Math.Max(westEasting, eastEasting) + padMeters) / effectiveStepMeters) * effectiveStepMeters;
-                    double firstNorthing = Math.Floor((Math.Min(southNorthing, northNorthing) - padMeters) / effectiveStepMeters) * effectiveStepMeters;
-                    double lastNorthing  = Math.Ceiling((Math.Max(southNorthing, northNorthing) + padMeters) / effectiveStepMeters) * effectiveStepMeters;
-
-                    double EastingToScreenX(double eastVal)
+                    Point UtmToScreenPt(double eastVal, double northVal)
                     {
-                        UtmMetersToLatLon(eastVal, refNorthing, utmZone, out _, out double lineLon);
-                        return LatLonToScreen(_centerLat, lineLon, w, h).X;
+                        UtmGrid2DProjector.UtmToLatLon(eastVal, northVal, utmZone, out double ptLat, out double ptLon);
+                        return LatLonToScreen(ptLat, ptLon, w, h);
                     }
 
-                    double NorthingToScreenY(double northVal)
-                    {
-                        UtmMetersToLatLon(refEasting, northVal, utmZone, out double lineLat, out _);
-                        return LatLonToScreen(lineLat, _centerLon, w, h).Y;
-                    }
-
-                    double sampleStepPx = Math.Abs(EastingToScreenX(firstEasting + effectiveStepMeters) - EastingToScreenX(firstEasting));
+                    double midE = (firstEasting + lastEasting) * 0.5, midN = (firstNorthing + lastNorthing) * 0.5;
+                    double sampleStepPx = (UtmToScreenPt(midE + effectiveStepMeters, midN) - UtmToScreenPt(midE, midN)).Length;
 
                     if ((_subGridDivision.Contains("50 m") || _subGridDivision.Contains("33 m")) && _subGridOpacity > 0.02 && sampleStepPx >= 42.0)
                     {
@@ -1227,19 +1185,19 @@ namespace FieldTakHub.Builder.Services
                         for (double east = firstEasting; east <= lastEasting; east += effectiveStepMeters)
                             for (int i = 1; i < div; i++)
                             {
-                                double sx = EastingToScreenX(east + i * subStepMeters);
-                                if (sx < 0 || sx > w) continue;
-                                if (useHalo) dc.DrawLine(subHaloPen, new Point(sx, 0), new Point(sx, h));
-                                dc.DrawLine(subPen, new Point(sx, 0), new Point(sx, h));
+                                Point pTop = UtmToScreenPt(east + i * subStepMeters, lastNorthing), pBot = UtmToScreenPt(east + i * subStepMeters, firstNorthing);
+                                if (Math.Max(pTop.X, pBot.X) < -20 || Math.Min(pTop.X, pBot.X) > w + 20) continue;
+                                if (useHalo) dc.DrawLine(subHaloPen, pTop, pBot);
+                                dc.DrawLine(subPen, pTop, pBot);
                             }
 
                         for (double north = firstNorthing; north <= lastNorthing; north += effectiveStepMeters)
                             for (int j = 1; j < div; j++)
                             {
-                                double sy = NorthingToScreenY(north + j * subStepMeters);
-                                if (sy < 0 || sy > h) continue;
-                                if (useHalo) dc.DrawLine(subHaloPen, new Point(0, sy), new Point(w, sy));
-                                dc.DrawLine(subPen, new Point(0, sy), new Point(w, sy));
+                                Point pLeft = UtmToScreenPt(firstEasting, north + j * subStepMeters), pRight = UtmToScreenPt(lastEasting, north + j * subStepMeters);
+                                if (Math.Max(pLeft.Y, pRight.Y) < -20 || Math.Min(pLeft.Y, pRight.Y) > h + 20) continue;
+                                if (useHalo) dc.DrawLine(subHaloPen, pLeft, pRight);
+                                dc.DrawLine(subPen, pLeft, pRight);
                             }
 
                         if (_gridLabelsMode.Contains("Ćwiartki/Keypad") && sampleStepPx >= 58.0)
@@ -1249,27 +1207,22 @@ namespace FieldTakHub.Builder.Services
                             string subCacheKey = $"SUB_{_subLabelTextColorHex}_{_subGridOpacity:0.00}";
                             double subFontSz = 8.8 * _fontScaleMultiplier;
 
-                            for (double east = firstEasting; east <= lastEasting; east += effectiveStepMeters)
-                            {
-                                double cellLeftX = EastingToScreenX(east), cellRightX = EastingToScreenX(east + effectiveStepMeters);
-                                if (cellRightX < 0 || cellLeftX > w) continue;
-                                double cellW = cellRightX - cellLeftX;
-
-                                for (double north = firstNorthing; north <= lastNorthing; north += effectiveStepMeters)
+                            for (double east = firstEasting; east < lastEasting; east += effectiveStepMeters)
+                                for (double north = firstNorthing; north < lastNorthing; north += effectiveStepMeters)
                                 {
-                                    double cellTopY = NorthingToScreenY(north + effectiveStepMeters), cellBotY = NorthingToScreenY(north);
-                                    if (cellBotY < 0 || cellTopY > h) continue;
-                                    double cellH = cellBotY - cellTopY;
-
+                                    Point cPt = UtmToScreenPt(east + effectiveStepMeters * 0.5, north + effectiveStepMeters * 0.5);
+                                    if (cPt.X < -sampleStepPx || cPt.X > w + sampleStepPx || cPt.Y < -sampleStepPx || cPt.Y > h + sampleStepPx) continue;
                                     for (int r = 0; r < div; r++)
+                                    {
+                                        double subN = north + (div - 0.5 - r) * subStepMeters;
                                         for (int c = 0; c < div; c++)
                                         {
-                                            double cx = cellLeftX + (c + 0.5) * (cellW / div), cy = cellTopY + (r + 0.5) * (cellH / div);
-                                            if (cx > 14 && cx < w - 14 && cy > 14 && cy < h - 14)
-                                                DrawFastSubCellBadgeOnContext(dc, isQuarters ? quarters2x2[r, c] : keypad3x3[r, c], cx, cy, subTextBrush, subBgBrush, subBoxBorderPen, subShadowBrush, subFontSz, subCacheKey);
+                                            Point subPt = UtmToScreenPt(east + (c + 0.5) * subStepMeters, subN);
+                                            if (subPt.X > 14 && subPt.X < w - 14 && subPt.Y > 14 && subPt.Y < h - 14)
+                                                DrawFastSubCellBadgeOnContext(dc, isQuarters ? quarters2x2[r, c] : keypad3x3[r, c], subPt.X, subPt.Y, subTextBrush, subBgBrush, subBoxBorderPen, subShadowBrush, subFontSz, subCacheKey);
                                         }
+                                    }
                                 }
-                            }
                         }
                     }
 
@@ -1280,22 +1233,28 @@ namespace FieldTakHub.Builder.Services
 
                         for (double east = firstEasting; east <= lastEasting; east += effectiveStepMeters)
                         {
-                            double x = EastingToScreenX(east);
-                            if (x < 0 || x > w) continue;
-                            if (useHalo) dc.DrawLine(mainHaloPen, new Point(x, 0), new Point(x, h));
-                            dc.DrawLine(mainPen, new Point(x, 0), new Point(x, h));
-                            int mgrsH = (((int)Math.Round(east / 100.0)) % 1000 + 1000) % 1000;
-                            DrawCartographicLineLabelOnContext(dc, $"{mgrsH:D3}", x, true, w, h, mainBrush, mainFontSz, _mainGridOpacity, mainCacheKey);
+                            Point pTop = UtmToScreenPt(east, lastNorthing), pBot = UtmToScreenPt(east, firstNorthing);
+                            if (Math.Max(pTop.X, pBot.X) < -20 || Math.Min(pTop.X, pBot.X) > w + 20) continue;
+                            if (useHalo) dc.DrawLine(mainHaloPen, pTop, pBot);
+                            dc.DrawLine(mainPen, pTop, pBot);
+                            if (UtmGrid2DProjector.TryGetVerticalLineLabelPoint(pTop, pBot, 14.0, w, out double labelX))
+                            {
+                                int mgrsH = (((int)Math.Round(east / 100.0)) % 1000 + 1000) % 1000;
+                                DrawCartographicLineLabelOnContext(dc, $"{mgrsH:D3}", labelX, true, w, h, mainBrush, mainFontSz, _mainGridOpacity, mainCacheKey);
+                            }
                         }
 
                         for (double north = firstNorthing; north <= lastNorthing; north += effectiveStepMeters)
                         {
-                            double y = NorthingToScreenY(north);
-                            if (y < 0 || y > h) continue;
-                            if (useHalo) dc.DrawLine(mainHaloPen, new Point(0, y), new Point(w, y));
-                            dc.DrawLine(mainPen, new Point(0, y), new Point(w, y));
-                            int mgrsH = (((int)Math.Round(north / 100.0)) % 1000 + 1000) % 1000;
-                            DrawCartographicLineLabelOnContext(dc, $"{mgrsH:D3}", y, false, w, h, mainBrush, mainFontSz, _mainGridOpacity, mainCacheKey);
+                            Point pLeft = UtmToScreenPt(firstEasting, north), pRight = UtmToScreenPt(lastEasting, north);
+                            if (Math.Max(pLeft.Y, pRight.Y) < -20 || Math.Min(pLeft.Y, pRight.Y) > h + 20) continue;
+                            if (useHalo) dc.DrawLine(mainHaloPen, pLeft, pRight);
+                            dc.DrawLine(mainPen, pLeft, pRight);
+                            if (UtmGrid2DProjector.TryGetHorizontalLineLabelPoint(pLeft, pRight, 18.0, h, out double labelY))
+                            {
+                                int mgrsH = (((int)Math.Round(north / 100.0)) % 1000 + 1000) % 1000;
+                                DrawCartographicLineLabelOnContext(dc, $"{mgrsH:D3}", labelY, false, w, h, mainBrush, mainFontSz, _mainGridOpacity, mainCacheKey);
+                            }
                         }
                     }
                 }
