@@ -11,11 +11,144 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Windows;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 
 namespace FieldTakHub.Builder.Services
 {
+    // Precyzyjny dwuwymiarowy projektor siatki wojskowej UTM / MGRS (bez sztucznego punktu refEasting/refNorthing)
+    internal static class UtmGrid2DProjector
+    {
+        public static void LatLonToUtm(double lat, double lon, int forcedZone, out double easting, out double northing)
+        {
+            const double a = 6378137.0;
+            const double eccSquared = 0.00669438;
+            const double k0 = 0.9996;
+
+            double latRad = lat * Math.PI / 180.0;
+            double lonRad = lon * Math.PI / 180.0;
+            double lonOriginRad = ((forcedZone - 1) * 6 - 180 + 3) * Math.PI / 180.0;
+
+            double eccPrimeSquared = eccSquared / (1.0 - eccSquared);
+            double N = a / Math.Sqrt(1.0 - eccSquared * Math.Sin(latRad) * Math.Sin(latRad));
+            double T = Math.Tan(latRad) * Math.Tan(latRad);
+            double C = eccPrimeSquared * Math.Cos(latRad) * Math.Cos(latRad);
+            double A = Math.Cos(latRad) * (lonRad - lonOriginRad);
+
+            double M = a * ((1.0 - eccSquared / 4.0 - 3.0 * eccSquared * eccSquared / 64.0) * latRad
+                - (3.0 * eccSquared / 8.0 + 3.0 * eccSquared * eccSquared / 32.0) * Math.Sin(2.0 * latRad)
+                + (15.0 * eccSquared * eccSquared / 256.0) * Math.Sin(4.0 * latRad));
+
+            easting = k0 * N * (A + (1.0 - T + C) * A * A * A / 6.0
+                + (5.0 - 18.0 * T + T * T + 72.0 * C - 58.0 * eccPrimeSquared) * Math.Pow(A, 5) / 120.0) + 500000.0;
+
+            northing = k0 * (M + N * Math.Tan(latRad) * (A * A / 2.0
+                + (5.0 - T + 9.0 * C + 4.0 * C * C) * Math.Pow(A, 4) / 24.0
+                + (61.0 - 58.0 * T + T * T + 600.0 * C - 330.0 * eccPrimeSquared) * Math.Pow(A, 6) / 720.0));
+            if (lat < 0) northing += 10000000.0;
+        }
+
+        public static void UtmToLatLon(double easting, double northing, int zone, out double lat, out double lon)
+        {
+            const double a = 6378137.0;
+            const double eccSquared = 0.00669438;
+            const double k0 = 0.9996;
+
+            double eccPrimeSquared = eccSquared / (1.0 - eccSquared);
+            double e1 = (1.0 - Math.Sqrt(1.0 - eccSquared)) / (1.0 + Math.Sqrt(1.0 - eccSquared));
+
+            double x = easting - 500000.0;
+            double y = northing;
+
+            double lonOrigin = (zone - 1) * 6 - 180 + 3;
+            double M = y / k0;
+            double mu = M / (a * (1.0 - eccSquared / 4.0 - 3.0 * eccSquared * eccSquared / 64.0 - 5.0 * Math.Pow(eccSquared, 3) / 256.0));
+
+            double phi1Rad = mu
+                + (3.0 * e1 / 2.0 - 27.0 * Math.Pow(e1, 3) / 32.0) * Math.Sin(2.0 * mu)
+                + (21.0 * e1 * e1 / 16.0 - 55.0 * Math.Pow(e1, 4) / 32.0) * Math.Sin(4.0 * mu)
+                + (151.0 * Math.Pow(e1, 3) / 96.0) * Math.Sin(6.0 * mu);
+
+            double N1 = a / Math.Sqrt(1.0 - eccSquared * Math.Sin(phi1Rad) * Math.Sin(phi1Rad));
+            double T1 = Math.Tan(phi1Rad) * Math.Tan(phi1Rad);
+            double C1 = eccPrimeSquared * Math.Cos(phi1Rad) * Math.Cos(phi1Rad);
+            double R1 = a * (1.0 - eccSquared) / Math.Pow(1.0 - eccSquared * Math.Sin(phi1Rad) * Math.Sin(phi1Rad), 1.5);
+            double D = x / (N1 * k0);
+
+            double latRad = phi1Rad - (N1 * Math.Tan(phi1Rad) / R1) * (D * D / 2.0
+                - (5.0 + 3.0 * T1 + 10.0 * C1 - 4.0 * C1 * C1 - 9.0 * eccPrimeSquared) * Math.Pow(D, 4) / 24.0
+                + (61.0 + 90.0 * T1 + 298.0 * C1 + 45.0 * T1 * T1 - 252.0 * eccPrimeSquared - 3.0 * C1 * C1) * Math.Pow(D, 6) / 720.0);
+
+            double lonRad = (D
+                - (1.0 + 2.0 * T1 + C1) * Math.Pow(D, 3) / 6.0
+                + (5.0 - 2.0 * C1 + 28.0 * T1 - 3.0 * C1 * C1 + 8.0 * eccPrimeSquared + 24.0 * T1 * T1) * Math.Pow(D, 5) / 120.0) / Math.Cos(phi1Rad);
+
+            lat = latRad * 180.0 / Math.PI;
+            lon = lonOrigin + lonRad * 180.0 / Math.PI;
+        }
+
+        // Wylicza pełny zakres siatki UTM z WSZYSTKICH 4 narożników arkusza (NW, NE, SW, SE), gwarantując 100% pokrycia ekranu bez urywania linii!
+        public static void ComputeSheetUtmEnvelope(
+            Func<double, double, (double Lat, double Lon)> screenToLatLon,
+            double viewW,
+            double viewH,
+            int utmZone,
+            int stepMeters,
+            out double firstEasting,
+            out double lastEasting,
+            out double firstNorthing,
+            out double lastNorthing)
+        {
+            var nw = screenToLatLon(0, 0);
+            var ne = screenToLatLon(viewW, 0);
+            var sw = screenToLatLon(0, viewH);
+            var se = screenToLatLon(viewW, viewH);
+
+            LatLonToUtm(nw.Lat, nw.Lon, utmZone, out double eNW, out double nNW);
+            LatLonToUtm(ne.Lat, ne.Lon, utmZone, out double eNE, out double nNE);
+            LatLonToUtm(sw.Lat, sw.Lon, utmZone, out double eSW, out double nSW);
+            LatLonToUtm(se.Lat, se.Lon, utmZone, out double eSE, out double nSE);
+
+            double minE = Math.Min(Math.Min(eNW, eNE), Math.Min(eSW, eSE));
+            double maxE = Math.Max(Math.Max(eNW, eNE), Math.Max(eSW, eSE));
+            double minN = Math.Min(Math.Min(nNW, nNE), Math.Min(nSW, nSE));
+            double maxN = Math.Max(Math.Max(nNW, nNE), Math.Max(nSW, nSE));
+
+            int pad = Math.Max(100, stepMeters) * 4;
+            firstEasting  = Math.Floor((minE - pad) / stepMeters) * stepMeters;
+            lastEasting   = Math.Ceiling((maxE + pad) / stepMeters) * stepMeters;
+            firstNorthing = Math.Floor((minN - pad) / stepMeters) * stepMeters;
+            lastNorthing  = Math.Ceiling((maxN + pad) / stepMeters) * stepMeters;
+        }
+
+        // Wyznacza dokładny punkt X przecięcia linii pionowej UTM z poziomym pasem etykiet przy górnej krawędzi (y = targetY)
+        public static bool TryGetVerticalLineLabelPoint(Point pTop, Point pBot, double targetY, double canvasW, out double intersectX)
+        {
+            intersectX = pTop.X;
+            double dy = pBot.Y - pTop.Y;
+            if (Math.Abs(dy) > 0.01)
+            {
+                double t = (targetY - pTop.Y) / dy;
+                intersectX = pTop.X + t * (pBot.X - pTop.X);
+            }
+            return intersectX >= 10.0 && intersectX <= canvasW - 10.0;
+        }
+
+        // Wyznacza dokładny punkt Y przecięcia linii poziomej UTM z pionowym pasem etykiet przy lewej krawędzi (x = targetX)
+        public static bool TryGetHorizontalLineLabelPoint(Point pLeft, Point pRight, double targetX, double canvasH, out double intersectY)
+        {
+            intersectY = pLeft.Y;
+            double dx = pRight.X - pLeft.X;
+            if (Math.Abs(dx) > 0.01)
+            {
+                double t = (targetX - pLeft.X) / dx;
+                intersectY = pLeft.Y + t * (pRight.Y - pLeft.Y);
+            }
+            return intersectY >= 10.0 && intersectY <= canvasH - 10.0;
+        }
+    }
+
     internal static class GeoportalLidarEngine
     {
         private static readonly ConcurrentDictionary<string, byte[]> RawBgraSectorCache = new ConcurrentDictionary<string, byte[]>();
@@ -42,7 +175,6 @@ namespace FieldTakHub.Builder.Services
             }
         }
 
-        // Czysty klient HTTP/1.1: brak zawieszających się strumieni HTTP/2 na serwerach GUGiK oraz szybki recykling połączeń (45 s)
         private static HttpClient CreateCleanHttp11Client()
         {
             try
@@ -75,7 +207,6 @@ namespace FieldTakHub.Builder.Services
             }
         }
 
-        // Wymusza natychmiastowe utworzenie nowej puli gniazd TCP (bez konieczności wyłączania programu!)
         public static void ResetHttpConnectionPool()
         {
             try
@@ -182,10 +313,10 @@ namespace FieldTakHub.Builder.Services
         public static bool IsValidImageBytes(byte[] data)
         {
             if (data == null || data.Length < 128) return false;
-            if (data[0] == 0xFF && data[1] == 0xD8 && data[2] == 0xFF) return true; // JPEG
-            if (data[0] == 0x89 && data[1] == 0x50 && data[2] == 0x4E && data[3] == 0x47) return true; // PNG
-            if (data[0] == 0x47 && data[1] == 0x49 && data[2] == 0x46) return true; // GIF
-            if (data[0] == 0x52 && data[1] == 0x49 && data[2] == 0x46 && data[3] == 0x46) return true; // WEBP
+            if (data[0] == 0xFF && data[1] == 0xD8 && data[2] == 0xFF) return true;
+            if (data[0] == 0x89 && data[1] == 0x50 && data[2] == 0x4E && data[3] == 0x47) return true;
+            if (data[0] == 0x47 && data[1] == 0x49 && data[2] == 0x46) return true;
+            if (data[0] == 0x52 && data[1] == 0x49 && data[2] == 0x46 && data[3] == 0x46) return true;
             return false;
         }
 
@@ -459,7 +590,6 @@ namespace FieldTakHub.Builder.Services
             int wmsW = Math.Clamp((int)Math.Round(spanMeters / (3400.0 * 0.00028)), 380, 1180);
             int wmsH = Math.Clamp((int)Math.Round(wmsW / aspect), 300, 1180);
 
-            // Dla dużych obszarów (> 3.6 km szerokości) najpierw odpytaj lekką warstwę GRID5, a dla zbliżeń taktycznych — GRID1
             if (spanMeters > 3600.0)
             {
                 return new (string Label, string Url)[]
@@ -495,7 +625,6 @@ namespace FieldTakHub.Builder.Services
         public static string[] BuildLidarCandidateUrls(double northLat, double southLat, double eastLon, double westLon, int reqW, int reqH) =>
             BuildLidarCandidateUrlsWithLabels(northLat, southLat, eastLon, westLon, reqW, reqH).Select(x => x.Url).ToArray();
 
-        // Pojedyncze, sekwencyjne pobranie z krótkim timeoutem 4.5s (ZERO równoległych wyścigów zapychających serwer GUGiK!)
         private static async Task<byte[]> FetchSingleLidarSheetPixelsAsync(double northLat, double southLat, double eastLon, double westLon, int targetW, int targetH, CancellationToken ct)
         {
             string cacheKey = string.Create(CultureInfo.InvariantCulture, $"LIDAR_SINGLE_{northLat:0.0000}_{southLat:0.0000}_{eastLon:0.0000}_{westLon:0.0000}_{targetW}x{targetH}");
@@ -523,7 +652,7 @@ namespace FieldTakHub.Builder.Services
                 try
                 {
                     using var reqCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-                    reqCts.CancelAfter(4500); // Sztywny limit 4.5s na pojedynczy serwer — nigdy nie zawiesi aplikacji!
+                    reqCts.CancelAfter(4500);
 
                     byte[] bytes = await FastHttp.GetByteArrayAsync(rawCandidates[cIdx].Url, reqCts.Token);
                     if (bytes != null && TryDecodeToBgra32Pixels(bytes, targetW, targetH, out byte[] bgraPx) && HasValidHillshadeSignal(bgraPx, targetW, targetH))
@@ -546,7 +675,6 @@ namespace FieldTakHub.Builder.Services
             return null;
         }
 
-        // Zawsze 1 lekki arkusz (1x1) zamiast 4 lub 9 sektorów — 4-krotnie mniejsze obciążenie sieci i pamięci!
         public static async Task<BitmapSource> FetchCompositeLidarSheetAsync(
             HttpClient http,
             double northLat,
