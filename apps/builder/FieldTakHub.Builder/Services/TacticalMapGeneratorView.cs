@@ -17,9 +17,10 @@ using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
-using System.Windows.Shapes; using Path = System.IO.Path;
+using System.Windows.Shapes;
 using System.Windows.Threading;
 using Microsoft.Win32;
+using Path = System.IO.Path;
 
 namespace FieldTakHub.Builder.Services
 {
@@ -103,7 +104,7 @@ namespace FieldTakHub.Builder.Services
             if (_inspectorTitleLabel == null || _inspectorMgrsLabel == null || _inspectorWgsUtmLabel == null) return;
             if (_inspectedObject == null || _inspectedObject.Points.Count == 0 || !_mapObjects.Contains(_inspectedObject))
             {
-                _inspectorTitleLabel.Text = "📍 Kliknij dowolny znacznik na mapie, aby odczytać jego współrzędne";
+                _inspectorTitleLabel.Text = "📍 Kliknij dowolny znacznik lub wierzchołek na mapie, aby odczytać współrzędne";
                 _inspectorMgrsLabel.Text = "MGRS: —   |   Keypad / Ćwiartka: —";
                 _inspectorWgsUtmLabel.Text = "WGS84: —   |   UTM: —";
                 return;
@@ -111,7 +112,7 @@ namespace FieldTakHub.Builder.Services
             int idx = Math.Clamp(_inspectedVertexIndex, 0, _inspectedObject.Points.Count - 1);
             var pt = _inspectedObject.Points[idx];
             var (fullMgrs, _, kpInfo, utmTxt, wgsTxt) = FormatTacticalPointCoordinates(pt.Lat, pt.Lon);
-            string ptSuffix = _inspectedObject.Points.Count > 1 ? $" (Punkt #{idx + 1})" : "";
+            string ptSuffix = _inspectedObject.Points.Count > 1 ? $" (Wierzchołek #{idx + 1}/{_inspectedObject.Points.Count})" : "";
             _inspectorTitleLabel.Text = $"🎯 {_inspectedObject.Name}{ptSuffix}  [{_inspectedObject.SymbolCode.Replace("NATO_", "").Replace("SHAPE_", "")}]";
             _inspectorMgrsLabel.Text = $"MGRS: {fullMgrs}   •   {kpInfo}";
             _inspectorWgsUtmLabel.Text = $"WGS84: {wgsTxt}   •   UTM: {utmTxt}";
@@ -216,6 +217,25 @@ namespace FieldTakHub.Builder.Services
                     var navDock = new DockPanel();
 
                     var draftBtnsStack = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+
+                    // Nienachalny przycisk wsparcia twórcy (identyczny z aplikacją Android: Kod QR + link buycoffee.to)
+                    var btnSupportCoffee = new Button
+                    {
+                        Content = "☕ Wesprzyj twórcę",
+                        Height = 28,
+                        Padding = new Thickness(11, 0, 11, 0),
+                        Margin = new Thickness(0, 0, 8, 0),
+                        Background = TacticalConfigPanel.BrushItemBg,
+                        Foreground = new SolidColorBrush(Color.FromRgb(245, 184, 46)),
+                        BorderBrush = new SolidColorBrush(Color.FromRgb(245, 184, 46)),
+                        BorderThickness = new Thickness(1.2),
+                        FontWeight = FontWeights.Bold,
+                        FontSize = 10.5,
+                        Cursor = Cursors.Hand,
+                        ToolTip = "Postaw kawę twórcy Field TAK Hub (Kod QR i link buycoffee.to)"
+                    };
+                    btnSupportCoffee.Click += (s, e) => CreatorSupportModal.ShowCreatorSupportDialog(win);
+
                     var btnSaveDraft = MakeActionButton("💾 Zapisz projekt roboczy (.fthproj)", false, () =>
                     {
                         if (TacticalConfigPanel.SaveDraftProjectDialog(win) && _statusText != null)
@@ -229,7 +249,10 @@ namespace FieldTakHub.Builder.Services
                             _statusText.Text = $"✓ Wczytano wersję roboczą projektu: {TacticalConfigPanel.CurrentDraftProjectPath}";
                     });
                     btnLoadDraft.Height = 28; btnLoadDraft.Padding = new Thickness(12, 0, 12, 0);
-                    draftBtnsStack.Children.Add(btnSaveDraft); draftBtnsStack.Children.Add(btnLoadDraft);
+
+                    draftBtnsStack.Children.Add(btnSupportCoffee);
+                    draftBtnsStack.Children.Add(btnSaveDraft);
+                    draftBtnsStack.Children.Add(btnLoadDraft);
                     DockPanel.SetDock(draftBtnsStack, Dock.Right); navDock.Children.Add(draftBtnsStack);
 
                     var tabsStack = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
@@ -302,7 +325,6 @@ namespace FieldTakHub.Builder.Services
             }
         }
 
-        // Bezpośrednie wywołanie RenderMapTilesAsync() gwarantuje niezawodne doczytywanie przy klikaniu skal i wczytywaniu projektu!
         private static void ApplyScaleDenominator(int scaleDenom)
         {
             _wheelZoomDebounceTimer?.Stop();
@@ -452,11 +474,11 @@ namespace FieldTakHub.Builder.Services
                 Grid.SetColumn(btnReloadTiles, 1);
                 layerRow.Children.Add(btnReloadTiles);
 
-                sec1.Children.Add(TacticalConfigPanel.FieldBox("Podkład bazowy (Geoportal WMS / LiDAR Multi-Sector 2x2 / Google / OSM):", layerRow));
+                sec1.Children.Add(TacticalConfigPanel.FieldBox("Podkład bazowy (Geoportal WMS / LiDAR NMT GRID1 / Google / OSM):", layerRow));
 
                 var lidarBox = new Border { Background = TacticalConfigPanel.BrushInputBg, BorderBrush = TacticalConfigPanel.BrushAccent, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(6), Padding = new Thickness(8, 6, 8, 6) };
                 var lidarStack = new StackPanel();
-                var chkLidar = new CheckBox { Content = "Nałóż rzeźbę LiDAR ISOK (Multi-Sector 2x2 EVRF2007/KRON86 + Auto-Kontrast 3D)", IsChecked = _showLidarSingleWms, Foreground = TacticalConfigPanel.BrushAccent, FontWeight = FontWeights.SemiBold, FontSize = 10 };
+                var chkLidar = new CheckBox { Content = "Nałóż rzeźbę LiDAR ISOK (GUGiK NMT GRID1 PNG + Auto-Kontrast 3D)", IsChecked = _showLidarSingleWms, Foreground = TacticalConfigPanel.BrushAccent, FontWeight = FontWeights.SemiBold, FontSize = 10 };
                 chkLidar.Checked += (s, e) =>
                 {
                     _showLidarSingleWms = true;
@@ -484,7 +506,7 @@ namespace FieldTakHub.Builder.Services
 
                 leftStack.Children.Add(WrapCard(BuildSection2GridAndColorsUI(win)));
 
-                var sec3 = CreateSectionCard("3. ZNACZNIKI, ODCZYT WSPÓŁRZĘDNYCH MARKERA & OBRACANIE (↻)");
+                var sec3 = CreateSectionCard("3. EDYTOR .KMZ / .GPX, ZNACZNIKI, ODCZYT MGRS & OBRACANIE (↻)");
                 void UpdateToolButtonsVisual()
                 {
                     void StyleTool(Button b, bool active)
@@ -502,7 +524,7 @@ namespace FieldTakHub.Builder.Services
                     StyleTool(_btnToolRoute, _activeTool == "ROUTE");
                 }
 
-                _btnToolPan = MakeActionButton("✋ Przesuwaj Mapę / Kliknij Marker = Odczytaj Współrzędne / Obracaj (↻)", true, () => { _activeTool = "PAN"; _activeDraftPoly = null; _fastOverlayRenderer?.InvalidateVisual(); UpdateToolButtonsVisual(); });
+                _btnToolPan = MakeActionButton("✋ Przesuwaj Mapę / Kliknij Marker = Współrzędne / Przeciągnij Wierzchołek", true, () => { _activeTool = "PAN"; _activeDraftPoly = null; _fastOverlayRenderer?.InvalidateVisual(); UpdateToolButtonsVisual(); });
                 _btnToolPan.Height = 30; _btnToolPan.Margin = new Thickness(0, 0, 0, 5);
                 sec3.Children.Add(_btnToolPan);
 
@@ -534,7 +556,7 @@ namespace FieldTakHub.Builder.Services
                 DockPanel.SetDock(btnCopyCoords, Dock.Right);
                 inspTopDock.Children.Add(btnCopyCoords);
 
-                _inspectorTitleLabel = new TextBlock { Text = "📍 Kliknij dowolny znacznik na mapie, aby odczytać jego współrzędne", Foreground = TacticalConfigPanel.BrushAccent, FontSize = 10, FontWeight = FontWeights.Bold, VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis };
+                _inspectorTitleLabel = new TextBlock { Text = "📍 Kliknij dowolny znacznik lub wierzchołek na mapie, aby odczytać współrzędne", Foreground = TacticalConfigPanel.BrushAccent, FontSize = 10, FontWeight = FontWeights.Bold, VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis };
                 inspTopDock.Children.Add(_inspectorTitleLabel);
                 inspStack.Children.Add(inspTopDock);
 
@@ -609,8 +631,39 @@ namespace FieldTakHub.Builder.Services
                 lblTogglesGrid.Children.Add(chkGlobalLabels); lblTogglesGrid.Children.Add(chkRotHandles);
                 sec3.Children.Add(lblTogglesGrid);
 
-                sec3.Children.Add(new TextBlock { Text = "Naniesione obiekty (kliknij 📍 lub marker na mapie, aby odczytać współrzędne):", Foreground = TacticalConfigPanel.BrushMutedText, FontSize = 9.5, Margin = new Thickness(0, 0, 0, 3) });
-                var objListBorder = new Border { Background = TacticalConfigPanel.BrushInputBg, BorderBrush = TacticalConfigPanel.BrushInputBorder, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(4), MinHeight = 68, MaxHeight = 230, Padding = new Thickness(6) };
+                // PASEK SZYBKIEGO IMPORTU I EDYCJI PLIKÓW WEKTOROWYCH (.KMZ / .KML / .GPX)
+                var vectorIoBar = new Grid { Margin = new Thickness(0, 0, 0, 5) };
+                vectorIoBar.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1.65, GridUnitType.Star) });
+                vectorIoBar.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+
+                var btnImportVector = MakeActionButton("📂 Wczytaj i edytuj .KMZ / .KML / .GPX", true, () => LoadMapProjectJsonOrKml(win));
+                btnImportVector.Height = 27;
+                btnImportVector.Margin = new Thickness(0, 0, 4, 0);
+                btnImportVector.ToolTip = "Otwiera plik .KMZ (ZIP), .KML lub .GPX i zamienia wielokąty, ślady GPS oraz punkty na edytowalne obiekty na mapie";
+
+                var btnClearObjects = MakeActionButton("🧹 Wyczyść listę", false, () =>
+                {
+                    if (_mapObjects.Count == 0) return;
+                    _mapObjects.Clear();
+                    _activeDraftPoly = null;
+                    _inspectedObject = null;
+                    TacticalConfigPanel.MarkDirty();
+                    UpdateSelectedMarkerInspectorUI();
+                    RefreshObjectsListUI(win);
+                    RedrawVectorsOnly();
+                    UpdateOfflineTileEstimateUI();
+                });
+                btnClearObjects.Height = 27;
+                btnClearObjects.Margin = new Thickness(4, 0, 0, 0);
+
+                Grid.SetColumn(btnImportVector, 0);
+                Grid.SetColumn(btnClearObjects, 1);
+                vectorIoBar.Children.Add(btnImportVector);
+                vectorIoBar.Children.Add(btnClearObjects);
+                sec3.Children.Add(vectorIoBar);
+
+                sec3.Children.Add(new TextBlock { Text = "Naniesione i zaimportowane obiekty (🔄 Typ = zmień AO/Sektor/Trasę, ✂️ Uprość = redukuj ślad GPS):", Foreground = TacticalConfigPanel.BrushMutedText, FontSize = 9.2, Margin = new Thickness(0, 0, 0, 3) });
+                var objListBorder = new Border { Background = TacticalConfigPanel.BrushInputBg, BorderBrush = TacticalConfigPanel.BrushInputBorder, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(4), MinHeight = 68, MaxHeight = 245, Padding = new Thickness(6) };
                 var objListScroll = new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
                 _objectsListStack = new StackPanel();
                 objListScroll.Content = _objectsListStack; objListBorder.Child = objListScroll;
@@ -638,7 +691,7 @@ namespace FieldTakHub.Builder.Services
                 posGrid.Children.Add(TacticalConfigPanel.FieldBox("Pozycja Północy (lub przeciągnij):", TacticalConfigPanel.ComboCtrl(corners, _northArrowPos, win, v => { _northArrowPos = v; _northNormX = null; _northNormY = null; RedrawVectorsOnly(); })));
                 posGrid.Children.Add(TacticalConfigPanel.FieldBox("Pozycja Podziałki (lub przeciągnij):", TacticalConfigPanel.ComboCtrl(corners, _scaleBarPos, win, v => { _scaleBarPos = v; _scaleNormX = null; _scaleNormY = null; RedrawVectorsOnly(); })));
                 posGrid.Children.Add(TacticalConfigPanel.FieldBox("Pozycja Legendy (lub przeciągnij):", TacticalConfigPanel.ComboCtrl(corners, _legendPos, win, v => { _legendPos = v; _legendNormX = null; _legendNormY = null; RedrawVectorsOnly(); })));
-                posGrid.Children.Add(TacticalConfigPanel.FieldBox("Tryb GRG w pliku .KMZ:", TacticalConfigPanel.ComboCtrl(new[] { "Przezroczysta siatka", "Pełny podkład + siatka", "Tylko podkład" }, _kmzGrgMode, win, v => _kmzGrgMode = v)));
+                posGrid.Children.Add(TacticalConfigPanel.FieldBox("Tryb GRG w pliku .KMZ:", TacticalConfigPanel.ComboCtrl(new[] { "Przezroczysta siatka", "Pełny podkład + siatka", "Tylko podkład", "Tylko wektory KML (Bez obrazu)" }, _kmzGrgMode, win, v => _kmzGrgMode = v)));
                 sec4.Children.Add(posGrid);
 
                 var expRow1 = new UniformGrid { Columns = 2, Margin = new Thickness(0, 0, 0, 6) };
@@ -652,7 +705,7 @@ namespace FieldTakHub.Builder.Services
                 var expRow2 = new UniformGrid { Columns = 3, Margin = new Thickness(0, 0, 0, 6) };
                 var btnPdf = MakeActionButton("🖨️ Zapisz PDF jako...", false, async () => await ExportTacticalMapPdfAsync(win));
                 var btnSaveJson = MakeActionButton("💾 Zapisz projekt", false, () => SaveMapProjectJson(win));
-                var btnLoadJson = MakeActionButton("📂 Wczytaj", false, () => LoadMapProjectJsonOrKml(win));
+                var btnLoadJson = MakeActionButton("📂 Wczytaj KMZ/GPX", false, () => LoadMapProjectJsonOrKml(win));
                 btnPdf.Height = 28; btnPdf.Margin = new Thickness(0, 0, 3, 0); btnPdf.BorderBrush = TacticalConfigPanel.BrushAccent;
                 btnSaveJson.Height = 28; btnSaveJson.Margin = new Thickness(2, 0, 2, 0);
                 btnLoadJson.Height = 28; btnLoadJson.Margin = new Thickness(3, 0, 0, 0);
@@ -985,7 +1038,7 @@ namespace FieldTakHub.Builder.Services
             mainGrid.Children.Add(bodyGrid);
 
             var bottomBar = new Border { Background = TacticalConfigPanel.BrushInputBg, BorderBrush = TacticalConfigPanel.BrushCardBorder, BorderThickness = new Thickness(0, 1, 0, 0), Padding = new Thickness(16, 0, 16, 0) };
-            _statusText = new TextBlock { Text = "Gotowy. Skalibrowana siatka MGRS (241/243) + LiDAR Multi-Sector 2x2 (EVRF2007/KRON86) + Auto-Fallback HIGH-RES.", Foreground = TacticalConfigPanel.BrushAccent, FontSize = 11, VerticalAlignment = VerticalAlignment.Center };
+            _statusText = new TextBlock { Text = "Gotowy. Edytor dwukierunkowy .KMZ / .KML / .GPX + Siatka 1:1 ATAK MGRS + Rozjaśnianie lasu Gamma + LiDAR NMT.", Foreground = TacticalConfigPanel.BrushAccent, FontSize = 11, VerticalAlignment = VerticalAlignment.Center };
             bottomBar.Child = _statusText; Grid.SetRow(bottomBar, 1); mainGrid.Children.Add(bottomBar);
 
             UpdateOfflineTileEstimateUI();
@@ -1053,7 +1106,8 @@ namespace FieldTakHub.Builder.Services
                 var dv = new DrawingVisual();
                 using (DrawingContext dc = dv.RenderOpen())
                 {
-                    BitmapSource liftedBase = _mapBrightnessBoost > 0.01 ? (GeoportalLidarEngine.ApplyGammaAndBrightnessToBitmap(bmpBase, _mapBrightnessBoost) ?? bmpBase) : bmpBase; dc.DrawImage(liftedBase, new Rect(0, 0, 256, 256));
+                    BitmapSource liftedBase = _mapBrightnessBoost > 0.01 ? (GeoportalLidarEngine.ApplyGammaAndBrightnessToBitmap(bmpBase, _mapBrightnessBoost) ?? bmpBase) : bmpBase;
+                    dc.DrawImage(liftedBase, new Rect(0, 0, 256, 256));
                     dc.PushOpacity(lidarAlpha);
                     dc.DrawImage(alphaLidar, new Rect(0, 0, 256, 256));
                     dc.Pop();
@@ -1126,7 +1180,7 @@ namespace FieldTakHub.Builder.Services
                 if (!saveDirectlyToFtakSource)
                 {
                     string initDir = !string.IsNullOrWhiteSpace(TacticalConfigPanel.LastExportDirectory) && Directory.Exists(TacticalConfigPanel.LastExportDirectory)
-                        ? TacticalConfigPanel.LastExportDirectory : (System.IO.Path.GetDirectoryName(System.IO.Path.TrimEndingDirectorySeparator(sourceDir)) ?? AppDomain.CurrentDomain.BaseDirectory);
+                        ? TacticalConfigPanel.LastExportDirectory : (Path.GetDirectoryName(Path.TrimEndingDirectorySeparator(sourceDir)) ?? AppDomain.CurrentDomain.BaseDirectory);
 
                     var dlg = new SaveFileDialog
                     {
@@ -1137,7 +1191,7 @@ namespace FieldTakHub.Builder.Services
                     };
                     if (dlg.ShowDialog(win) != true) return;
                     standaloneTargetFile = dlg.FileName;
-                    TacticalConfigPanel.LastExportDirectory = System.IO.Path.GetDirectoryName(standaloneTargetFile) ?? initDir;
+                    TacticalConfigPanel.LastExportDirectory = Path.GetDirectoryName(standaloneTargetFile) ?? initDir;
                     TacticalConfigPanel.SaveSessionStateAuto(win);
                 }
 
@@ -1185,16 +1239,16 @@ namespace FieldTakHub.Builder.Services
                             foreach (var fac in targetFacs)
                             {
                                 string sl = TacticalConfigPanel.SanitizeFileName(fac.Name).ToLowerInvariant();
-                                string facDir = System.IO.Path.Combine(sourceDir, "factions", sl); Directory.CreateDirectory(facDir);
-                                if (writeMbtiles) NativeSqliteWriter.WriteMbTilesDatabase(System.IO.Path.Combine(facDir, $"mapa_offline_{sl}.mbtiles"), $"{eventName}_{fac.Name}", _offlineMinZoom, _offlineMaxZoom, north, south, east, west, finalTilesList);
-                                if (writeSqlite) NativeSqliteWriter.WriteAtakMobacSqliteDatabase(System.IO.Path.Combine(facDir, $"mapa_offline_{sl}.sqlite"), _offlineMinZoom, _offlineMaxZoom, finalTilesList);
+                                string facDir = Path.Combine(sourceDir, "factions", sl); Directory.CreateDirectory(facDir);
+                                if (writeMbtiles) NativeSqliteWriter.WriteMbTilesDatabase(Path.Combine(facDir, $"mapa_offline_{sl}.mbtiles"), $"{eventName}_{fac.Name}", _offlineMinZoom, _offlineMaxZoom, north, south, east, west, finalTilesList);
+                                if (writeSqlite) NativeSqliteWriter.WriteAtakMobacSqliteDatabase(Path.Combine(facDir, $"mapa_offline_{sl}.sqlite"), _offlineMinZoom, _offlineMaxZoom, finalTilesList);
                             }
                         }
                         else
                         {
-                            string mapsDir = System.IO.Path.Combine(sourceDir, "maps"); Directory.CreateDirectory(mapsDir);
-                            if (writeMbtiles) NativeSqliteWriter.WriteMbTilesDatabase(System.IO.Path.Combine(mapsDir, $"{baseFileName}.mbtiles"), eventName, _offlineMinZoom, _offlineMaxZoom, north, south, east, west, finalTilesList);
-                            if (writeSqlite) NativeSqliteWriter.WriteAtakMobacSqliteDatabase(System.IO.Path.Combine(mapsDir, $"{baseFileName}.sqlite"), _offlineMinZoom, _offlineMaxZoom, finalTilesList);
+                            string mapsDir = Path.Combine(sourceDir, "maps"); Directory.CreateDirectory(mapsDir);
+                            if (writeMbtiles) NativeSqliteWriter.WriteMbTilesDatabase(Path.Combine(mapsDir, $"{baseFileName}.mbtiles"), eventName, _offlineMinZoom, _offlineMaxZoom, north, south, east, west, finalTilesList);
+                            if (writeSqlite) NativeSqliteWriter.WriteAtakMobacSqliteDatabase(Path.Combine(mapsDir, $"{baseFileName}.sqlite"), _offlineMinZoom, _offlineMaxZoom, finalTilesList);
                         }
                     });
 
@@ -1206,11 +1260,11 @@ namespace FieldTakHub.Builder.Services
                 }
                 else
                 {
-                    string outDir = System.IO.Path.GetDirectoryName(standaloneTargetFile) ?? AppDomain.CurrentDomain.BaseDirectory;
-                    string stem = System.IO.Path.Combine(outDir, System.IO.Path.GetFileNameWithoutExtension(standaloneTargetFile));
+                    string outDir = Path.GetDirectoryName(standaloneTargetFile) ?? AppDomain.CurrentDomain.BaseDirectory;
+                    string stem = Path.Combine(outDir, Path.GetFileNameWithoutExtension(standaloneTargetFile));
                     await Task.Run(() =>
                     {
-                        if (writeMbtiles) NativeSqliteWriter.WriteMbTilesDatabase($"{stem}.mbtiles", System.IO.Path.GetFileNameWithoutExtension(standaloneTargetFile), _offlineMinZoom, _offlineMaxZoom, north, south, east, west, finalTilesList);
+                        if (writeMbtiles) NativeSqliteWriter.WriteMbTilesDatabase($"{stem}.mbtiles", Path.GetFileNameWithoutExtension(standaloneTargetFile), _offlineMinZoom, _offlineMaxZoom, north, south, east, west, finalTilesList);
                         if (writeSqlite) NativeSqliteWriter.WriteAtakMobacSqliteDatabase($"{stem}.sqlite", _offlineMinZoom, _offlineMaxZoom, finalTilesList);
                     });
                     TacticalConfigPanel.TryOpenFolderInExplorer(outDir);
@@ -1314,7 +1368,7 @@ namespace FieldTakHub.Builder.Services
             _objectsListStack.Children.Clear();
             if (_mapObjects.Count == 0)
             {
-                _objectsListStack.Children.Add(new TextBlock { Text = "Brak naniesionych obiektów", Foreground = TacticalConfigPanel.BrushMutedText, FontSize = 10, HorizontalAlignment = HorizontalAlignment.Center, Margin = new Thickness(0, 8, 0, 8) });
+                _objectsListStack.Children.Add(new TextBlock { Text = "Brak naniesionych obiektów — kliknij na mapie lub wczytaj plik .KMZ / .GPX", Foreground = TacticalConfigPanel.BrushMutedText, FontSize = 9.5, HorizontalAlignment = HorizontalAlignment.Center, Margin = new Thickness(0, 8, 0, 8) });
                 return;
             }
 
@@ -1322,6 +1376,7 @@ namespace FieldTakHub.Builder.Services
             {
                 var captured = obj;
                 if (captured.SizeMultiplier <= 0.1) captured.SizeMultiplier = 1.0;
+                bool isMultiPt = captured.Kind == "AO" || captured.Kind == "Sector" || captured.Kind == "Route";
 
                 var itemCard = new Border
                 {
@@ -1336,8 +1391,9 @@ namespace FieldTakHub.Builder.Services
                 topRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(20) });
                 topRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(22) });
                 topRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(26) });
-                topRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(52) });
+                topRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(54) });
                 topRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+                topRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
                 topRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(28) });
 
                 var chkShowLbl = new CheckBox { IsChecked = captured.ShowLabel, VerticalAlignment = VerticalAlignment.Center, HorizontalAlignment = HorizontalAlignment.Center, Cursor = Cursors.Hand, ToolTip = "Pokaż / ukryj etykietę tekstową tego obiektu na mapie" };
@@ -1353,18 +1409,96 @@ namespace FieldTakHub.Builder.Services
                 };
                 Grid.SetColumn(btnCol, 1); topRow.Children.Add(btnCol);
 
-                var btnInspect = new Button { Content = "📍", Width = 22, Height = 20, Padding = new Thickness(0), Background = TacticalConfigPanel.BrushInputBg, Foreground = TacticalConfigPanel.BrushAccent, BorderBrush = TacticalConfigPanel.BrushAccent, BorderThickness = new Thickness(1), FontSize = 10, Cursor = Cursors.Hand, ToolTip = "Pokaż współrzędne MGRS / Keypad / WGS84 tego znacznika na mapie" };
-                btnInspect.Click += (s, e) => { _inspectedObject = captured; _inspectedVertexIndex = 0; UpdateSelectedMarkerInspectorUI(); RefreshObjectsListUI(win); RedrawVectorsOnly(); };
+                var btnInspect = new Button { Content = "📍", Width = 22, Height = 20, Padding = new Thickness(0), Background = TacticalConfigPanel.BrushInputBg, Foreground = TacticalConfigPanel.BrushAccent, BorderBrush = TacticalConfigPanel.BrushAccent, BorderThickness = new Thickness(1), FontSize = 10, Cursor = Cursors.Hand, ToolTip = "Wyśrodkuj widok / pokaż współrzędne MGRS tego obiektu" };
+                btnInspect.Click += (s, e) =>
+                {
+                    _inspectedObject = captured;
+                    _inspectedVertexIndex = 0;
+                    if (captured.Points.Count > 0)
+                    {
+                        _centerLat = captured.Points.Average(p => p.Lat);
+                        _centerLon = captured.Points.Average(p => p.Lon);
+                        _ = RenderMapTilesAsync();
+                    }
+                    UpdateSelectedMarkerInspectorUI();
+                    RefreshObjectsListUI(win);
+                    RedrawVectorsOnly();
+                };
                 Grid.SetColumn(btnInspect, 2); topRow.Children.Add(btnInspect);
 
                 var natoOpt = NatoSymbols.FirstOrDefault(n => n.Code == captured.SymbolCode);
-                string badgeTxt = captured.Kind == "AO" ? "[AO]" : (captured.Kind == "Sector" ? "[SEK]" : (natoOpt != null ? $"[{natoOpt.ShortBadge}]" : $"[{captured.SymbolCode}]"));
-                var kindLbl = new TextBlock { Text = badgeTxt, Foreground = TacticalConfigPanel.BrushAccent, FontSize = 8.5, FontWeight = FontWeights.Bold, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(2, 0, 3, 0) };
+                string badgeTxt = captured.Kind == "AO" ? $"[AO·{captured.Points.Count}]" : (captured.Kind == "Sector" ? $"[SEK·{captured.Points.Count}]" : (captured.Kind == "Route" ? $"[TR·{captured.Points.Count}]" : (natoOpt != null ? $"[{natoOpt.ShortBadge}]" : $"[{captured.SymbolCode}]")));
+                var kindLbl = new TextBlock { Text = badgeTxt, Foreground = TacticalConfigPanel.BrushAccent, FontSize = 8.2, FontWeight = FontWeights.Bold, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(2, 0, 3, 0) };
                 Grid.SetColumn(kindLbl, 3); topRow.Children.Add(kindLbl);
 
                 var editNameBox = new TextBox { Text = captured.Name, Height = 22, FontSize = 10, Padding = new Thickness(4, 0, 4, 0), VerticalContentAlignment = VerticalAlignment.Center, Background = TacticalConfigPanel.BrushInputBg, Foreground = Brushes.White, BorderBrush = TacticalConfigPanel.BrushInputBorder, BorderThickness = new Thickness(1) };
                 editNameBox.TextChanged += (s, e) => { captured.Name = editNameBox.Text; if (!_isRebuildingMapControls) TacticalConfigPanel.MarkDirty(); UpdateSelectedMarkerInspectorUI(); RedrawVectorsOnly(); };
                 Grid.SetColumn(editNameBox, 4); topRow.Children.Add(editNameBox);
+
+                // Narzędzia konwersji wielokątów/śladów KMZ i GPX: (🔄 Typ: AO <-> Sektor <-> Trasa) oraz (✂️ Uprość ślad GPS)
+                if (isMultiPt)
+                {
+                    var polyToolsStack = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(3, 0, 0, 0) };
+                    var btnCycleKind = new Button
+                    {
+                        Content = "🔄 Typ",
+                        Height = 20,
+                        Padding = new Thickness(4, 0, 4, 0),
+                        Background = TacticalConfigPanel.BrushInputBg,
+                        Foreground = TacticalConfigPanel.BrushAccent,
+                        BorderBrush = TacticalConfigPanel.BrushAccent,
+                        BorderThickness = new Thickness(1),
+                        FontSize = 8.5,
+                        FontWeight = FontWeights.Bold,
+                        Cursor = Cursors.Hand,
+                        ToolTip = "Przełącz typ geometrii: Trasa (Linia) ↔ Granica Terenu Gry (AO) ↔ Sektor (Strefa)"
+                    };
+                    btnCycleKind.Click += (s, e) =>
+                    {
+                        captured.Kind = captured.Kind == "Route" ? "AO" : (captured.Kind == "AO" ? "Sector" : "Route");
+                        captured.SymbolCode = captured.Kind;
+                        TacticalConfigPanel.MarkDirty();
+                        RefreshObjectsListUI(win);
+                        RedrawVectorsOnly();
+                        UpdateOfflineTileEstimateUI();
+                    };
+                    polyToolsStack.Children.Add(btnCycleKind);
+
+                    if (captured.Points.Count > 5)
+                    {
+                        var btnSimplify = new Button
+                        {
+                            Content = "✂️",
+                            Width = 22,
+                            Height = 20,
+                            Margin = new Thickness(2, 0, 0, 0),
+                            Background = TacticalConfigPanel.BrushInputBg,
+                            Foreground = Brushes.White,
+                            BorderBrush = TacticalConfigPanel.BrushInputBorder,
+                            BorderThickness = new Thickness(1),
+                            FontSize = 9,
+                            Cursor = Cursors.Hand,
+                            ToolTip = $"Uprość gęsty ślad GPS / wielokąt (Teraz: {captured.Points.Count} wierzchołków)"
+                        };
+                        btnSimplify.Click += (s, e) =>
+                        {
+                            int before = captured.Points.Count;
+                            var simp = TacticalVectorFileIoEngine.SimplifyTrackPoints(captured.Points, 10.0);
+                            if (simp.Count >= (captured.Kind == "Route" ? 2 : 3))
+                            {
+                                captured.Points = simp;
+                                TacticalConfigPanel.MarkDirty();
+                                if (_statusText != null) _statusText.Text = $"✂️ Uproszczono geometrię '{captured.Name}': {before} -> {simp.Count} wierzchołków.";
+                                RefreshObjectsListUI(win);
+                                RedrawVectorsOnly();
+                            }
+                        };
+                        polyToolsStack.Children.Add(btnSimplify);
+                    }
+
+                    Grid.SetColumn(polyToolsStack, 5);
+                    topRow.Children.Add(polyToolsStack);
+                }
 
                 var btnMinusDel = CreateRedMinusDeleteButton($"Usuń obiekt: {captured.Name}", () =>
                 {
@@ -1377,7 +1511,7 @@ namespace FieldTakHub.Builder.Services
                     RedrawVectorsOnly();
                     UpdateOfflineTileEstimateUI();
                 });
-                Grid.SetColumn(btnMinusDel, 5); topRow.Children.Add(btnMinusDel);
+                Grid.SetColumn(btnMinusDel, 6); topRow.Children.Add(btnMinusDel);
                 itemStack.Children.Add(topRow);
 
                 var sliderRow = new Grid { Margin = new Thickness(0, 0, 0, captured.Kind == "Marker" ? 2 : 0) };
@@ -1530,7 +1664,7 @@ namespace FieldTakHub.Builder.Services
             for (int i = 0; i < screenPts.Count; i++)
             {
                 int vIdx = i; Point vPt = screenPts[i];
-                var handle = new Ellipse { Width = 11, Height = 11, Fill = Brushes.White, Stroke = strokeBrush, StrokeThickness = 2.2, Cursor = Cursors.Hand, ToolTip = $"Kliknij = Odczytaj współrzędne punktu #{vIdx + 1} ({obj.Name})  |  Przeciągnij = Zmień pozycję" };
+                var handle = new Ellipse { Width = 11, Height = 11, Fill = Brushes.White, Stroke = strokeBrush, StrokeThickness = 2.2, Cursor = Cursors.Hand, ToolTip = $"Kliknij LPM = Współrzędne punktu #{vIdx + 1} ({obj.Name})  |  Przeciągnij = Zmień pozycję  |  PPM = Usuń wierzchołek" };
                 handle.MouseLeftButtonDown += (s, e) =>
                 {
                     e.Handled = true; _inspectedObject = obj; _inspectedVertexIndex = vIdx; UpdateSelectedMarkerInspectorUI();
@@ -1538,6 +1672,20 @@ namespace FieldTakHub.Builder.Services
                     Point mousePt = e.GetPosition(_interactiveCanvas);
                     _markerDragScreenOffset = new Point(mousePt.X - vPt.X, mousePt.Y - vPt.Y);
                     _interactiveCanvas.CaptureMouse(); RedrawVectorsOnly();
+                };
+                handle.MouseRightButtonDown += (s, e) =>
+                {
+                    e.Handled = true;
+                    int minPts = obj.Kind == "Route" ? 2 : 3;
+                    if (obj.Points.Count > minPts && vIdx < obj.Points.Count)
+                    {
+                        obj.Points.RemoveAt(vIdx);
+                        _inspectedVertexIndex = 0;
+                        TacticalConfigPanel.MarkDirty();
+                        if (_hostWindow != null) RefreshObjectsListUI(_hostWindow);
+                        UpdateSelectedMarkerInspectorUI();
+                        RedrawVectorsOnly();
+                    }
                 };
                 Canvas.SetLeft(handle, vPt.X - 5.5); Canvas.SetTop(handle, vPt.Y - 5.5);
                 _interactiveCanvas.Children.Add(handle);
@@ -1933,6 +2081,59 @@ namespace FieldTakHub.Builder.Services
             catch { }
         }
 
+        private static int ShowVectorMergeOrReplaceDialog(Window owner, string fileName, int importedCount)
+        {
+            int result = 1; // 1 = Scal, 2 = Zastąp, 0 = Anuluj
+            var dlg = new Window
+            {
+                Title = "Import warstw wektorowych (.KMZ / .KML / .GPX)",
+                Width = 440,
+                Height = 215,
+                WindowStartupLocation = WindowStartupLocation.CenterOwner,
+                Owner = owner,
+                Background = TacticalConfigPanel.BrushCardBg,
+                Foreground = Brushes.White,
+                ResizeMode = ResizeMode.NoResize,
+                WindowStyle = WindowStyle.ToolWindow
+            };
+
+            var root = new StackPanel { Margin = new Thickness(18) };
+            root.Children.Add(new TextBlock
+            {
+                Text = $"📂 Wczytano {importedCount} obiektów z pliku: {fileName}",
+                Foreground = TacticalConfigPanel.BrushAccent,
+                FontSize = 12.5,
+                FontWeight = FontWeights.Bold,
+                Margin = new Thickness(0, 0, 0, 6)
+            });
+            root.Children.Add(new TextBlock
+            {
+                Text = $"Na mapie znajduje się obecnie {_mapObjects.Count} obiektów. Czy chcesz dołączyć nowe obiekty z pliku do bieżącej mapy, czy zastąpić dotychczasowe obiekty?",
+                Foreground = Brushes.White,
+                FontSize = 10.5,
+                TextWrapping = TextWrapping.Wrap,
+                Margin = new Thickness(0, 0, 0, 16)
+            });
+
+            var btnGrid = new UniformGrid { Columns = 3 };
+            var btnMerge = MakeActionButton("➕ Dołącz (Scal)", true, () => { result = 1; dlg.Close(); });
+            var btnReplace = MakeActionButton("🔄 Zastąp obecne", false, () => { result = 2; dlg.Close(); });
+            var btnCancel = MakeActionButton("Anuluj", false, () => { result = 0; dlg.Close(); });
+
+            btnMerge.Height = 30; btnMerge.Margin = new Thickness(0, 0, 4, 0);
+            btnReplace.Height = 30; btnReplace.Margin = new Thickness(2, 0, 2, 0); btnReplace.BorderBrush = TacticalConfigPanel.BrushAccent;
+            btnCancel.Height = 30; btnCancel.Margin = new Thickness(4, 0, 0, 0);
+
+            btnGrid.Children.Add(btnMerge);
+            btnGrid.Children.Add(btnReplace);
+            btnGrid.Children.Add(btnCancel);
+            root.Children.Add(btnGrid);
+            dlg.Content = root;
+            dlg.ShowDialog();
+            return result;
+        }
+
+        // Pełny import plików .KMZ (ZIP), .KML, .GPX oraz projektów .fthproj / .json z automatycznym wyśrodkowaniem na terenie gry
         private static void LoadMapProjectJsonOrKml(Window win)
         {
             try
@@ -1940,34 +2141,64 @@ namespace FieldTakHub.Builder.Services
                 string initDir = !string.IsNullOrWhiteSpace(TacticalConfigPanel.LastExportDirectory) && Directory.Exists(TacticalConfigPanel.LastExportDirectory)
                     ? TacticalConfigPanel.LastExportDirectory : Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
 
-                var dlg = new OpenFileDialog { Title = "Wczytaj projekt roboczy (.fthproj / .json) lub punkty (.kml / .gpx)", Filter = "Pliki projektu i mapy (*.fthproj;*.json;*.kml;*.gpx)|*.fthproj;*.json;*.kml;*.gpx", InitialDirectory = initDir };
+                var dlg = new OpenFileDialog
+                {
+                    Title = "Wczytaj i edytuj plik .KMZ / .KML / .GPX lub projekt (.fthproj / .json)",
+                    Filter = "Wszystkie obsługiwane pliki map (*.kmz;*.kml;*.gpx;*.fthproj;*.json)|*.kmz;*.kml;*.gpx;*.fthproj;*.json|Mapy i nakładki KMZ/KML (*.kmz;*.kml)|*.kmz;*.kml|Ślady i punkty Garmin GPX (*.gpx)|*.gpx|Projekt Field TAK Hub (*.fthproj;*.json)|*.fthproj;*.json",
+                    InitialDirectory = initDir
+                };
                 if (dlg.ShowDialog(win) != true) return;
-                TacticalConfigPanel.LastExportDirectory = System.IO.Path.GetDirectoryName(dlg.FileName) ?? initDir;
+                TacticalConfigPanel.LastExportDirectory = Path.GetDirectoryName(dlg.FileName) ?? initDir;
 
-                string txt = File.ReadAllText(dlg.FileName, Encoding.UTF8);
-                if ((dlg.FileName.EndsWith(".json", StringComparison.OrdinalIgnoreCase) || dlg.FileName.EndsWith(".fthproj", StringComparison.OrdinalIgnoreCase)) &&
-                    JsonNode.Parse(txt) is JsonObject root)
+                string ext = Path.GetExtension(dlg.FileName).ToLowerInvariant();
+                if (ext == ".json" || ext == ".fthproj")
                 {
-                    if (root["mapState"] is JsonObject) TacticalConfigPanel.ApplyFullWorkspaceStateJson(win, root);
-                    else ImportMapStateFromJson(root);
-                    TacticalConfigPanel.SaveSessionStateAuto(win);
-                    if (_statusText != null) _statusText.Text = $"✓ Wczytano projekt z pliku: {dlg.FileName}";
+                    string txt = File.ReadAllText(dlg.FileName, Encoding.UTF8);
+                    if (JsonNode.Parse(txt) is JsonObject root)
+                    {
+                        if (root["mapState"] is JsonObject) TacticalConfigPanel.ApplyFullWorkspaceStateJson(win, root);
+                        else ImportMapStateFromJson(root);
+                        TacticalConfigPanel.SaveSessionStateAuto(win);
+                        if (_statusText != null) _statusText.Text = $"✓ Wczytano projekt z pliku: {dlg.FileName}";
+                    }
+                    return;
                 }
-                else
+
+                var imported = TacticalVectorFileIoEngine.ImportAnyVectorFile(dlg.FileName, 6.0, out string summary);
+                if (imported.Count == 0)
                 {
-                    foreach (Match m in Regex.Matches(txt, @"<wpt[^>]*lat=""([0-9\.\-]+)""[^>]*lon=""([0-9\.\-]+)""", RegexOptions.IgnoreCase))
-                        if (double.TryParse(m.Groups[1].Value, NumberStyles.Any, CultureInfo.InvariantCulture, out double la) &&
-                            double.TryParse(m.Groups[2].Value, NumberStyles.Any, CultureInfo.InvariantCulture, out double lo))
-                        {
-                            var it = new TacticalMapObjectItem { Kind = "Marker", SymbolCode = _selectedNatoSymbolCode, Name = $"GPX-{_mapObjects.Count + 1}", ColorHex = _selectedObjectColorHex, ShowLabel = _newObjectShowLabelDefault, SizeMultiplier = 1.0 };
-                            it.Points.Add((la, lo)); _mapObjects.Add(it);
-                        }
-                    RefreshObjectsListUI(win);
-                    ApplyScaleDenominator(_targetScaleDenominator);
-                    TacticalConfigPanel.MarkDirty();
+                    if (_statusText != null) _statusText.Text = $"⚠️ Nie znaleziono obiektów wektorowych w pliku: {Path.GetFileName(dlg.FileName)}";
+                    return;
                 }
+
+                if (_mapObjects.Count > 0)
+                {
+                    int choice = ShowVectorMergeOrReplaceDialog(win, Path.GetFileName(dlg.FileName), imported.Count);
+                    if (choice == 0) return;
+                    if (choice == 2) _mapObjects.Clear();
+                }
+
+                _mapObjects.AddRange(imported);
+                _inspectedObject = imported[0];
+                _inspectedVertexIndex = 0;
+
+                var allPts = imported.SelectMany(o => o.Points).ToList();
+                if (allPts.Count > 0)
+                {
+                    _centerLat = (allPts.Min(p => p.Lat) + allPts.Max(p => p.Lat)) * 0.5;
+                    _centerLon = (allPts.Min(p => p.Lon) + allPts.Max(p => p.Lon)) * 0.5;
+                }
+
+                RefreshObjectsListUI(win);
+                UpdateSelectedMarkerInspectorUI();
+                ApplyScaleDenominator(_targetScaleDenominator);
+                TacticalConfigPanel.MarkDirty();
+                if (_statusText != null) _statusText.Text = $"✓ {summary}";
             }
-            catch { }
+            catch (Exception ex)
+            {
+                if (_statusText != null) _statusText.Text = $"⚠️ Błąd importu pliku: {ex.Message}";
+            }
         }
 
         private static async Task ExportMapToFtakSourceAsync(Window win)
@@ -1978,10 +2209,16 @@ namespace FieldTakHub.Builder.Services
                 var allConfigured = TacticalConfigPanel.GetConfiguredFactions();
                 var targetFacs = GetActiveMapFactions();
 
+                bool vectorOnlyKmz = _kmzGrgMode.StartsWith("Tylko wektory");
                 bool grgTransparent = _kmzGrgMode.StartsWith("Przezroczysta");
-                if (grgTransparent) await RenderMapTilesAsync(true); else await RenderMapTilesAsync(false);
-                byte[] pngBytes = CaptureMapCanvasPngBytes();
-                if (grgTransparent) await RenderMapTilesAsync(false);
+
+                byte[] pngBytes = null;
+                if (!vectorOnlyKmz)
+                {
+                    if (grgTransparent) await RenderMapTilesAsync(true); else await RenderMapTilesAsync(false);
+                    pngBytes = CaptureMapCanvasPngBytes();
+                    if (grgTransparent) await RenderMapTilesAsync(false);
+                }
 
                 var (w, h) = GetExactCanvasSize();
                 var (north, west) = ScreenToLatLon(0, 0, w, h); var (south, east) = ScreenToLatLon(w, h, w, h);
@@ -1993,22 +2230,22 @@ namespace FieldTakHub.Builder.Services
                         foreach (var fac in targetFacs)
                         {
                             string sl = TacticalConfigPanel.SanitizeFileName(fac.Name).ToLowerInvariant();
-                            string facDir = System.IO.Path.Combine(sourceDir, "factions", sl); Directory.CreateDirectory(facDir);
-                            WriteKmzGroundOverlayArchive(System.IO.Path.Combine(facDir, $"grg_map_{sl}.kmz"), $"Mapa_GRG_{fac.Name}", pngBytes, north, south, east, west);
-                            WriteGpxFile(System.IO.Path.Combine(facDir, $"punkty_{sl}.gpx"));
+                            string facDir = Path.Combine(sourceDir, "factions", sl); Directory.CreateDirectory(facDir);
+                            WriteKmzGroundOverlayArchive(Path.Combine(facDir, $"grg_map_{sl}.kmz"), $"Mapa_GRG_{fac.Name}", pngBytes, north, south, east, west);
+                            WriteGpxFile(Path.Combine(facDir, $"punkty_{sl}.gpx"));
                         }
                     }
                     else
                     {
-                        string mapsDir = System.IO.Path.Combine(sourceDir, "maps"), atakDir = System.IO.Path.Combine(sourceDir, "atak");
+                        string mapsDir = Path.Combine(sourceDir, "maps"), atakDir = Path.Combine(sourceDir, "atak");
                         Directory.CreateDirectory(mapsDir); Directory.CreateDirectory(atakDir);
-                        WriteKmzGroundOverlayArchive(System.IO.Path.Combine(mapsDir, "grg_map_overlay.kmz"), "Mapa_GRG_ATAK", pngBytes, north, south, east, west);
-                        WriteGpxFile(System.IO.Path.Combine(atakDir, "punkty_taktyczne.gpx"));
+                        WriteKmzGroundOverlayArchive(Path.Combine(mapsDir, "grg_map_overlay.kmz"), "Mapa_GRG_ATAK", pngBytes, north, south, east, west);
+                        WriteGpxFile(Path.Combine(atakDir, "punkty_taktyczne.gpx"));
                     }
                 });
                 TacticalConfigPanel.SaveSessionStateAuto(win);
                 await TacticalConfigPanel.RefreshSourceSizeFromExternalAsync(win);
-                if (_statusText != null) _statusText.Text = $"✓ Zapisano mapę .KMZ oraz punkty .GPX w folderze source dla stron: {string.Join(", ", targetFacs.Select(f => f.Name))}!";
+                if (_statusText != null) _statusText.Text = $"✓ Zapisano mapę .KMZ oraz punkty/trasy .GPX w folderze source dla stron: {string.Join(", ", targetFacs.Select(f => f.Name))}!";
             }
             catch { }
         }
@@ -2019,33 +2256,37 @@ namespace FieldTakHub.Builder.Services
             {
                 string sourceDir = TacticalConfigPanel.GetPrimarySourceDirectory(win);
                 string defaultDir = !string.IsNullOrWhiteSpace(TacticalConfigPanel.LastExportDirectory) && Directory.Exists(TacticalConfigPanel.LastExportDirectory)
-                    ? TacticalConfigPanel.LastExportDirectory : (System.IO.Path.GetDirectoryName(System.IO.Path.TrimEndingDirectorySeparator(sourceDir)) ?? AppDomain.CurrentDomain.BaseDirectory);
+                    ? TacticalConfigPanel.LastExportDirectory : (Path.GetDirectoryName(Path.TrimEndingDirectorySeparator(sourceDir)) ?? AppDomain.CurrentDomain.BaseDirectory);
 
                 string facSuffix = string.Join("_", GetActiveMapFactions().Select(f => TacticalConfigPanel.SanitizeFileName(f.Name)));
                 var dlg = new SaveFileDialog
                 {
-                    Title = format == "kmz" ? "Zapisz warstwę mapy .KMZ (GRG ATAK) jako..." : "Zapisz punkty i trasy .GPX (Garmin / ATAK) jako...",
+                    Title = format == "kmz" ? "Zapisz warstwę mapy i obiektów .KMZ (GRG / KML ATAK) jako..." : "Zapisz punkty, strefy i trasy .GPX (Garmin / ATAK) jako...",
                     Filter = format == "kmz" ? "Archiwum mapy KMZ (*.kmz)|*.kmz" : "Plik nawigacyjny GPX (*.gpx)|*.gpx",
                     InitialDirectory = defaultDir,
                     FileName = format == "kmz" ? $"Mapa_Taktyczna_ATAK_{facSuffix}_1_{_targetScaleDenominator}.kmz" : $"Punkty_Taktyczne_Garmin_{facSuffix}.gpx"
                 };
                 if (dlg.ShowDialog(win) != true) return;
 
-                string chosenPath = dlg.FileName, chosenDir = System.IO.Path.GetDirectoryName(chosenPath) ?? defaultDir;
+                string chosenPath = dlg.FileName, chosenDir = Path.GetDirectoryName(chosenPath) ?? defaultDir;
                 TacticalConfigPanel.LastExportDirectory = chosenDir;
                 TacticalConfigPanel.SaveSessionStateAuto(win);
 
-                bool grgTransparent = (format == "kmz" && _kmzGrgMode.StartsWith("Przezroczysta"));
-                if (grgTransparent) await RenderMapTilesAsync(true); else await RenderMapTilesAsync(false);
-                byte[] pngBytes = CaptureMapCanvasPngBytes();
-                if (grgTransparent) await RenderMapTilesAsync(false);
+                byte[] pngBytes = null;
+                if (format == "kmz" && !_kmzGrgMode.StartsWith("Tylko wektory"))
+                {
+                    bool grgTransparent = _kmzGrgMode.StartsWith("Przezroczysta");
+                    if (grgTransparent) await RenderMapTilesAsync(true); else await RenderMapTilesAsync(false);
+                    pngBytes = CaptureMapCanvasPngBytes();
+                    if (grgTransparent) await RenderMapTilesAsync(false);
+                }
 
                 var (w, h) = GetExactCanvasSize();
                 var (north, west) = ScreenToLatLon(0, 0, w, h); var (south, east) = ScreenToLatLon(w, h, w, h);
 
                 await Task.Run(() =>
                 {
-                    if (format == "kmz") WriteKmzGroundOverlayArchive(chosenPath, System.IO.Path.GetFileNameWithoutExtension(chosenPath), pngBytes, north, south, east, west);
+                    if (format == "kmz") WriteKmzGroundOverlayArchive(chosenPath, Path.GetFileNameWithoutExtension(chosenPath), pngBytes, north, south, east, west);
                     else if (format == "gpx") WriteGpxFile(chosenPath);
                 });
                 if (_statusText != null) _statusText.Text = $"✓ Zapisano plik: {chosenPath}";
@@ -2054,53 +2295,11 @@ namespace FieldTakHub.Builder.Services
             catch { }
         }
 
-        private static void WriteKmzGroundOverlayArchive(string kmzPath, string title, byte[] mapPngBytes, double north, double south, double east, double west)
-        {
-            if (File.Exists(kmzPath)) File.Delete(kmzPath);
-            using var fs = new FileStream(kmzPath, FileMode.CreateNew, FileAccess.Write);
-            using var zip = new ZipArchive(fs, ZipArchiveMode.Create, false, Encoding.UTF8);
-            var imgEntry = zip.CreateEntry("files/grg_overlay.png", CompressionLevel.Optimal);
-            using (var s = imgEntry.Open()) s.Write(mapPngBytes, 0, mapPngBytes.Length);
+        private static void WriteKmzGroundOverlayArchive(string kmzPath, string title, byte[] mapPngBytes, double north, double south, double east, double west) =>
+            TacticalVectorFileIoEngine.WriteFullKmzArchive(kmzPath, title, mapPngBytes, north, south, east, west, _mapObjects);
 
-            var sb = new StringBuilder();
-            sb.AppendLine(@"<?xml version=""1.0"" encoding=""UTF-8""?><kml xmlns=""http://www.opengis.net/kml/2.2""><Document>");
-            sb.AppendLine($"  <name>{title}</name><GroundOverlay><name>{title}</name><Icon><href>files/grg_overlay.png</href></Icon>");
-            sb.AppendLine(string.Create(CultureInfo.InvariantCulture, $"    <LatLonBox><north>{north:0.000000}</north><south>{south:0.000000}</south><east>{east:0.000000}</east><west>{west:0.000000}</west></LatLonBox></GroundOverlay>"));
-            foreach (var o in _mapObjects.Where(x => x.Points.Count > 0))
-            {
-                var natoDef = NatoSymbols.FirstOrDefault(n => n.Code == o.SymbolCode);
-                string desc = natoDef != null ? natoDef.NatoMeaning : o.Kind, badge = natoDef != null ? natoDef.ShortBadge : o.SymbolCode;
-                var (fullMgrs, _, kpInfo, _, _) = FormatTacticalPointCoordinates(o.Points[0].Lat, o.Points[0].Lon);
-                sb.AppendLine(string.Create(CultureInfo.InvariantCulture, $"  <Placemark><name>[{badge}] {o.Name}</name><description>{desc} | MGRS: {fullMgrs} ({kpInfo})</description><Point><coordinates>{o.Points[0].Lon:0.000000},{o.Points[0].Lat:0.000000},0</coordinates></Point></Placemark>"));
-            }
-            sb.AppendLine("</Document></kml>");
-            var kmlEntry = zip.CreateEntry("doc.kml", CompressionLevel.Optimal);
-            using var sw = new StreamWriter(kmlEntry.Open(), Encoding.UTF8); sw.Write(sb.ToString());
-        }
-
-        private static void WriteGpxFile(string gpxPath)
-        {
-            var sb = new StringBuilder();
-            sb.AppendLine(@"<?xml version=""1.0"" encoding=""UTF-8""?><gpx version=""1.1"" creator=""Field TAK Hub Builder 2.4"" xmlns=""http://www.topografix.com/GPX/1/1"">");
-            foreach (var o in _mapObjects.Where(x => x.Points.Count > 0))
-            {
-                if (o.Points.Count == 1)
-                {
-                    var natoDef = NatoSymbols.FirstOrDefault(n => n.Code == o.SymbolCode);
-                    string desc = natoDef != null ? natoDef.NatoMeaning : o.Kind, badge = natoDef != null ? natoDef.ShortBadge : o.SymbolCode;
-                    var (fullMgrs, _, kpInfo, _, _) = FormatTacticalPointCoordinates(o.Points[0].Lat, o.Points[0].Lon);
-                    sb.AppendLine(string.Create(CultureInfo.InvariantCulture, $"  <wpt lat=\"{o.Points[0].Lat:0.000000}\" lon=\"{o.Points[0].Lon:0.000000}\"><name>[{badge}] {o.Name}</name><desc>{desc} | MGRS: {fullMgrs} ({kpInfo})</desc></wpt>"));
-                }
-                else
-                {
-                    sb.AppendLine($"  <rte><name>{o.Name}</name>");
-                    foreach (var pt in o.Points) sb.AppendLine(string.Create(CultureInfo.InvariantCulture, $"    <rtept lat=\"{pt.Lat:0.000000}\" lon=\"{pt.Lon:0.000000}\" />"));
-                    sb.AppendLine("  </rte>");
-                }
-            }
-            sb.AppendLine("</gpx>");
-            File.WriteAllText(gpxPath, sb.ToString(), Encoding.UTF8);
-        }
+        private static void WriteGpxFile(string gpxPath) =>
+            TacticalVectorFileIoEngine.WriteFullGpxFile(gpxPath, _mapObjects);
 
         private static async Task ExportTacticalMapPdfAsync(Window win)
         {
@@ -2108,7 +2307,7 @@ namespace FieldTakHub.Builder.Services
             {
                 string sourceDir = TacticalConfigPanel.GetPrimarySourceDirectory(win);
                 string defaultDir = !string.IsNullOrWhiteSpace(TacticalConfigPanel.LastExportDirectory) && Directory.Exists(TacticalConfigPanel.LastExportDirectory)
-                    ? TacticalConfigPanel.LastExportDirectory : (System.IO.Path.GetDirectoryName(System.IO.Path.TrimEndingDirectorySeparator(sourceDir)) ?? AppDomain.CurrentDomain.BaseDirectory);
+                    ? TacticalConfigPanel.LastExportDirectory : (Path.GetDirectoryName(Path.TrimEndingDirectorySeparator(sourceDir)) ?? AppDomain.CurrentDomain.BaseDirectory);
 
                 bool landscape = _sheetOrientation == "Poziomo";
                 var (wMm, hMm) = GetActiveSheetDimensionsMm();
@@ -2124,7 +2323,7 @@ namespace FieldTakHub.Builder.Services
                 };
                 if (dlg.ShowDialog(win) != true) return;
 
-                string pdfPath = dlg.FileName, outDir = System.IO.Path.GetDirectoryName(pdfPath) ?? defaultDir;
+                string pdfPath = dlg.FileName, outDir = Path.GetDirectoryName(pdfPath) ?? defaultDir;
                 TacticalConfigPanel.LastExportDirectory = outDir;
                 TacticalConfigPanel.SaveSessionStateAuto(win);
 

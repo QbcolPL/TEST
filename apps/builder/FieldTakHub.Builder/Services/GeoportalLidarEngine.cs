@@ -2,22 +2,952 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Globalization;
 using System.IO;
+using System.IO.Compression;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
+using System.Xml.Linq;
 using Path = System.IO.Path;
 
 namespace FieldTakHub.Builder.Services
 {
+    // =========================================================================
+    // MODUŁ DWUKIERUNKOWEJ EDYCJI PLIKÓW .KMZ / .KML / .GPX + DOUGLAS-PEUCKER
+    // =========================================================================
+    internal static class TacticalVectorFileIoEngine
+    {
+        // Algorytm Ramer-Douglas-Peucker redukujący gęste ślady GPS (np. z zegarka Garmin / ATAK) do kluczowych wierzchołków edycyjnych
+        public static List<(double Lat, double Lon)> SimplifyTrackPoints(List<(double Lat, double Lon)> points, double toleranceMeters = 8.0)
+        {
+            if (points == null || points.Count <= 4 || toleranceMeters <= 0.1)
+                return points != null ? new List<(double Lat, double Lon)>(points) : new List<(double Lat, double Lon)>();
+
+            int n = points.Count;
+            bool[] keep = new bool[n];
+            keep[0] = true;
+            keep[n - 1] = true;
+
+            double midLatRad = points[n / 2].Lat * Math.PI / 180.0;
+            double metersPerDegLat = 111132.95;
+            double metersPerDegLon = 111319.49 * Math.Cos(midLatRad);
+
+            var stack = new Stack<(int First, int Last)>();
+            stack.Push((0, n - 1));
+
+            while (stack.Count > 0)
+            {
+                var (first, last) = stack.Pop();
+                if (last - first <= 1) continue;
+
+                double x1 = points[first].Lon * metersPerDegLon;
+                double y1 = points[first].Lat * metersPerDegLat;
+                double x2 = points[last].Lon * metersPerDegLon;
+                double y2 = points[last].Lat * metersPerDegLat;
+
+                double dx = x2 - x1;
+                double dy = y2 - y1;
+                double lenSq = dx * dx + dy * dy;
+
+                double maxDist = -1.0;
+                int index = first;
+
+                for (int i = first + 1; i < last; i++)
+                {
+                    double px = points[i].Lon * metersPerDegLon;
+                    double py = points[i].Lat * metersPerDegLat;
+                    double dist;
+
+                    if (lenSq < 1e-6)
+                    {
+                        double ex = px - x1, ey = py - y1;
+                        dist = Math.Sqrt(ex * ex + ey * ey);
+                    }
+                    else
+                    {
+                        double t = Math.Clamp(((px - x1) * dx + (py - y1) * dy) / lenSq, 0.0, 1.0);
+                        double projX = x1 + t * dx;
+                        double projY = y1 + t * dy;
+                        double ex = px - projX, ey = py - projY;
+                        dist = Math.Sqrt(ex * ex + ey * ey);
+                    }
+
+                    if (dist > maxDist)
+                    {
+                        maxDist = dist;
+                        index = i;
+                    }
+                }
+
+                if (maxDist > toleranceMeters && index != first && index != last)
+                {
+                    keep[index] = true;
+                    stack.Push((first, index));
+                    stack.Push((index, last));
+                }
+            }
+
+            var simplified = new List<(double Lat, double Lon)>();
+            for (int i = 0; i < n; i++)
+                if (keep[i]) simplified.Add(points[i]);
+
+            return simplified;
+        }
+
+        // Konwertuje format koloru KML (aabbggrr) na standardowy #RRGGBB
+        private static string KmlColorToHexRgb(string kmlColor, string defaultHex = "#2684FF")
+        {
+            if (string.IsNullOrWhiteSpace(kmlColor)) return defaultHex;
+            string clean = kmlColor.Trim().TrimStart('#');
+            if (clean.Length == 8)
+            {
+                string bb = clean.Substring(2, 2);
+                string gg = clean.Substring(4, 2);
+                string rr = clean.Substring(6, 2);
+                if (rr.Equals("ff", StringComparison.OrdinalIgnoreCase) &&
+                    gg.Equals("ff", StringComparison.OrdinalIgnoreCase) &&
+                    bb.Equals("ff", StringComparison.OrdinalIgnoreCase))
+                    return defaultHex;
+                return $"#{rr}{gg}{bb}".ToUpperInvariant();
+            }
+            if (clean.Length == 6)
+                return $"#{clean}".ToUpperInvariant();
+            return defaultHex;
+        }
+
+        // Konwertuje #RRGGBB na format KML aabbggrr
+        public static string HexRgbToKmlColor(string hexRgb, byte alpha = 235)
+        {
+            Color c = Color.FromRgb(38, 132, 255);
+            try { if (!string.IsNullOrWhiteSpace(hexRgb)) c = (Color)ColorConverter.ConvertFromString(hexRgb.Trim()); } catch { }
+            return $"{alpha:X2}{c.B:X2}{c.G:X2}{c.R:X2}";
+        }
+
+        private static List<(double Lat, double Lon)> ParseKmlCoordinatesString(string rawCoords)
+        {
+            var list = new List<(double Lat, double Lon)>();
+            if (string.IsNullOrWhiteSpace(rawCoords)) return list;
+
+            string[] tokens = rawCoords.Trim().Split(new[] { ' ', '\t', '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
+            foreach (string tok in tokens)
+            {
+                string[] parts = tok.Split(',');
+                if (parts.Length >= 2 &&
+                    double.TryParse(parts[0], NumberStyles.Any, CultureInfo.InvariantCulture, out double lon) &&
+                    double.TryParse(parts[1], NumberStyles.Any, CultureInfo.InvariantCulture, out double lat))
+                {
+                    if (lat >= -85.5 && lat <= 85.5 && lon >= -180.5 && lon <= 180.5)
+                        list.Add((lat, lon));
+                }
+            }
+
+            // Usuń duplikat ostatniego punktu zamykającego wielokąt KML (edytor automatycznie domyka wielokąty AO i Sector)
+            if (list.Count > 3)
+            {
+                var first = list[0];
+                var last = list[list.Count - 1];
+                if (Math.Abs(first.Lat - last.Lat) < 1e-6 && Math.Abs(first.Lon - last.Lon) < 1e-6)
+                    list.RemoveAt(list.Count - 1);
+            }
+            return list;
+        }
+
+        private static (string CleanName, string SymbolCode, string Kind, string SuggestedColor) ClassifyImportedPointName(string rawName, string existingColor)
+        {
+            string name = string.IsNullOrWhiteSpace(rawName) ? "Punkt" : rawName.Trim();
+            string symCode = "DOT";
+            string kind = "Dot";
+            string color = existingColor;
+
+            // Sprawdź czy nazwa ma prefiks [BADGE] (np. [HQ] Sztab, [⛺] Respawn)
+            var m = Regex.Match(name, @"^\[([^\]]+)\]\s*(.+)$");
+            if (m.Success)
+            {
+                string badge = m.Groups[1].Value.Trim();
+                name = m.Groups[2].Value.Trim();
+
+                var foundSym = TacticalMapGeneratorView.NatoSymbols.FirstOrDefault(s =>
+                    s.ShortBadge.Equals(badge, StringComparison.OrdinalIgnoreCase) ||
+                    s.Code.Equals(badge, StringComparison.OrdinalIgnoreCase));
+
+                if (foundSym != null)
+                {
+                    kind = "Marker";
+                    symCode = foundSym.Code;
+                }
+                else if (badge.Equals("DOT", StringComparison.OrdinalIgnoreCase) || badge == "●")
+                {
+                    kind = "Dot";
+                    symCode = "DOT";
+                }
+            }
+
+            if (string.IsNullOrEmpty(color) || color == "#2684FF")
+            {
+                if (name.Contains("Infil", StringComparison.OrdinalIgnoreCase) || name.Contains("Resp", StringComparison.OrdinalIgnoreCase))
+                    color = "#2ECC71";
+                else if (name.Contains("Kod", StringComparison.OrdinalIgnoreCase) || name.Contains("Cel", StringComparison.OrdinalIgnoreCase) || name.Contains("OBJ", StringComparison.OrdinalIgnoreCase))
+                    color = "#EB4034";
+                else if (name.Contains("Update", StringComparison.OrdinalIgnoreCase) || name.Contains("CP", StringComparison.OrdinalIgnoreCase))
+                    color = "#F5B82E";
+                else
+                    color = "#2684FF";
+            }
+
+            return (name, symCode, kind, color);
+        }
+
+        public static List<TacticalMapObjectItem> ParseKmlContentToObjects(string kmlXml, double simplifyToleranceMeters = 6.0)
+        {
+            var results = new List<TacticalMapObjectItem>();
+            if (string.IsNullOrWhiteSpace(kmlXml)) return results;
+
+            try
+            {
+                var doc = XDocument.Parse(kmlXml);
+                var styleColors = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                var styleMaps = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+                foreach (var st in doc.Descendants().Where(e => e.Name.LocalName == "Style"))
+                {
+                    string id = st.Attribute("id")?.Value;
+                    if (string.IsNullOrEmpty(id)) continue;
+
+                    var colEl = st.Descendants().FirstOrDefault(e => e.Name.LocalName == "color");
+                    if (colEl != null && !string.IsNullOrWhiteSpace(colEl.Value))
+                        styleColors["#" + id] = KmlColorToHexRgb(colEl.Value);
+                }
+
+                foreach (var sm in doc.Descendants().Where(e => e.Name.LocalName == "StyleMap"))
+                {
+                    string id = sm.Attribute("id")?.Value;
+                    if (string.IsNullOrEmpty(id)) continue;
+                    var urlEl = sm.Descendants().FirstOrDefault(e => e.Name.LocalName == "styleUrl");
+                    if (urlEl != null && !string.IsNullOrWhiteSpace(urlEl.Value))
+                        styleMaps["#" + id] = urlEl.Value.Trim();
+                }
+
+                bool hasAoAlready = false;
+
+                foreach (var pm in doc.Descendants().Where(e => e.Name.LocalName == "Placemark"))
+                {
+                    string rawName = pm.Elements().FirstOrDefault(e => e.Name.LocalName == "name")?.Value?.Trim() ?? $"Obiekt-{results.Count + 1}";
+                    string styleUrl = pm.Elements().FirstOrDefault(e => e.Name.LocalName == "styleUrl")?.Value?.Trim() ?? "";
+
+                    string resolvedColor = "";
+                    if (!string.IsNullOrEmpty(styleUrl))
+                    {
+                        if (styleMaps.TryGetValue(styleUrl, out string mappedUrl))
+                            styleUrl = mappedUrl;
+                        if (styleColors.TryGetValue(styleUrl, out string sc))
+                            resolvedColor = sc;
+                    }
+
+                    var inlineCol = pm.Descendants().FirstOrDefault(e => e.Name.LocalName == "color");
+                    if (inlineCol != null && !string.IsNullOrWhiteSpace(inlineCol.Value))
+                        resolvedColor = KmlColorToHexRgb(inlineCol.Value, resolvedColor);
+
+                    // 1. Wielokąty (<Polygon>) -> AO lub Sector
+                    var polyEls = pm.Descendants().Where(e => e.Name.LocalName == "Polygon").ToList();
+                    if (polyEls.Count > 0)
+                    {
+                        foreach (var poly in polyEls)
+                        {
+                            var coordEl = poly.Descendants().FirstOrDefault(e => e.Name.LocalName == "coordinates");
+                            var pts = ParseKmlCoordinatesString(coordEl?.Value);
+                            if (pts.Count >= 3)
+                            {
+                                if (pts.Count > 60) pts = SimplifyTrackPoints(pts, simplifyToleranceMeters);
+
+                                bool isAo = !hasAoAlready && (
+                                    rawName.Contains("AO", StringComparison.OrdinalIgnoreCase) ||
+                                    rawName.Contains("Teren", StringComparison.OrdinalIgnoreCase) ||
+                                    rawName.Contains("Granica", StringComparison.OrdinalIgnoreCase) ||
+                                    rawName.Contains("Border", StringComparison.OrdinalIgnoreCase));
+
+                                if (isAo) hasAoAlready = true;
+
+                                var item = new TacticalMapObjectItem
+                                {
+                                    Kind = isAo ? "AO" : "Sector",
+                                    SymbolCode = isAo ? "AO" : "Sector",
+                                    Name = rawName.Replace("[AO]", "").Replace("[SEK]", "").Trim(),
+                                    ColorHex = !string.IsNullOrEmpty(resolvedColor) ? resolvedColor : (isAo ? "#FFFFFF" : "#F5B82E"),
+                                    ShowLabel = !isAo,
+                                    SizeMultiplier = 1.0
+                                };
+                                item.Points.AddRange(pts);
+                                results.Add(item);
+                            }
+                        }
+                        continue;
+                    }
+
+                    // 2. Linie i trasy (<LineString> / <gx:Track>) -> Route lub AO
+                    var lineEls = pm.Descendants().Where(e => e.Name.LocalName == "LineString" || e.Name.LocalName == "Track").ToList();
+                    if (lineEls.Count > 0)
+                    {
+                        foreach (var ln in lineEls)
+                        {
+                            List<(double Lat, double Lon)> pts;
+                            var coordEl = ln.Descendants().FirstOrDefault(e => e.Name.LocalName == "coordinates");
+                            if (coordEl != null)
+                            {
+                                pts = ParseKmlCoordinatesString(coordEl.Value);
+                            }
+                            else
+                            {
+                                pts = new List<(double Lat, double Lon)>();
+                                foreach (var gxCoord in ln.Descendants().Where(e => e.Name.LocalName == "coord"))
+                                {
+                                    string[] p = gxCoord.Value.Trim().Split(new[] { ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries);
+                                    if (p.Length >= 2 &&
+                                        double.TryParse(p[0], NumberStyles.Any, CultureInfo.InvariantCulture, out double lo) &&
+                                        double.TryParse(p[1], NumberStyles.Any, CultureInfo.InvariantCulture, out double la))
+                                        pts.Add((la, lo));
+                                }
+                            }
+
+                            if (pts.Count >= 2)
+                            {
+                                if (pts.Count > 45) pts = SimplifyTrackPoints(pts, simplifyToleranceMeters);
+
+                                bool isAoLine = !hasAoAlready && pts.Count >= 3 && (
+                                    rawName.Contains("AO", StringComparison.OrdinalIgnoreCase) ||
+                                    rawName.Contains("Granica Terenu", StringComparison.OrdinalIgnoreCase));
+                                if (isAoLine) hasAoAlready = true;
+
+                                var item = new TacticalMapObjectItem
+                                {
+                                    Kind = isAoLine ? "AO" : "Route",
+                                    SymbolCode = isAoLine ? "AO" : "Route",
+                                    Name = rawName.Replace("[AO]", "").Replace("[───]", "").Trim(),
+                                    ColorHex = !string.IsNullOrEmpty(resolvedColor) ? resolvedColor : (isAoLine ? "#FFFFFF" : "#1FE0C5"),
+                                    ShowLabel = !isAoLine,
+                                    SizeMultiplier = 1.0
+                                };
+                                item.Points.AddRange(pts);
+                                results.Add(item);
+                            }
+                        }
+                        continue;
+                    }
+
+                    // 3. Punkty (<Point>) -> Marker lub Dot
+                    var ptEl = pm.Descendants().FirstOrDefault(e => e.Name.LocalName == "Point");
+                    if (ptEl != null)
+                    {
+                        var coordEl = ptEl.Descendants().FirstOrDefault(e => e.Name.LocalName == "coordinates");
+                        var pts = ParseKmlCoordinatesString(coordEl?.Value);
+                        if (pts.Count > 0)
+                        {
+                            var (cleanName, symCode, kind, suggestedCol) = ClassifyImportedPointName(rawName, resolvedColor);
+                            var item = new TacticalMapObjectItem
+                            {
+                                Kind = kind,
+                                SymbolCode = symCode,
+                                Name = cleanName,
+                                ColorHex = suggestedCol,
+                                ShowLabel = true,
+                                SizeMultiplier = cleanName.Contains("Infil", StringComparison.OrdinalIgnoreCase) || cleanName.Contains("Parking", StringComparison.OrdinalIgnoreCase) ? 1.38 : 1.0
+                            };
+                            item.Points.Add(pts[0]);
+                            results.Add(item);
+                        }
+                    }
+                }
+            }
+            catch { }
+
+            return results;
+        }
+
+        public static List<TacticalMapObjectItem> ParseGpxContentToObjects(string gpxXml, double simplifyToleranceMeters = 8.0)
+        {
+            var results = new List<TacticalMapObjectItem>();
+            if (string.IsNullOrWhiteSpace(gpxXml)) return results;
+
+            try
+            {
+                var doc = XDocument.Parse(gpxXml);
+
+                // 1. Punkty (<wpt>)
+                foreach (var wpt in doc.Descendants().Where(e => e.Name.LocalName == "wpt"))
+                {
+                    if (double.TryParse(wpt.Attribute("lat")?.Value, NumberStyles.Any, CultureInfo.InvariantCulture, out double lat) &&
+                        double.TryParse(wpt.Attribute("lon")?.Value, NumberStyles.Any, CultureInfo.InvariantCulture, out double lon))
+                    {
+                        string rawName = wpt.Elements().FirstOrDefault(e => e.Name.LocalName == "name")?.Value?.Trim() ?? $"WPT-{results.Count + 1}";
+                        string colorAttr = wpt.Descendants().FirstOrDefault(e => e.Name.LocalName == "color")?.Value?.Trim() ?? "";
+                        var (cleanName, symCode, kind, suggestedCol) = ClassifyImportedPointName(rawName, colorAttr);
+
+                        var item = new TacticalMapObjectItem
+                        {
+                            Kind = kind,
+                            SymbolCode = symCode,
+                            Name = cleanName,
+                            ColorHex = suggestedCol,
+                            ShowLabel = true,
+                            SizeMultiplier = cleanName.Contains("Infil", StringComparison.OrdinalIgnoreCase) || cleanName.Contains("Parking", StringComparison.OrdinalIgnoreCase) ? 1.38 : 1.0
+                        };
+                        item.Points.Add((lat, lon));
+                        results.Add(item);
+                    }
+                }
+
+                // 2. Trasy (<rte>) i zapisane w GPX strefy (<type>AO</type> / <type>Sector</type>)
+                foreach (var rte in doc.Descendants().Where(e => e.Name.LocalName == "rte"))
+                {
+                    string rawName = rte.Elements().FirstOrDefault(e => e.Name.LocalName == "name")?.Value?.Trim() ?? $"Trasa-{results.Count + 1}";
+                    string rteType = rte.Elements().FirstOrDefault(e => e.Name.LocalName == "type")?.Value?.Trim() ?? "";
+
+                    var pts = new List<(double Lat, double Lon)>();
+                    foreach (var rpt in rte.Elements().Where(e => e.Name.LocalName == "rtept"))
+                    {
+                        if (double.TryParse(rpt.Attribute("lat")?.Value, NumberStyles.Any, CultureInfo.InvariantCulture, out double lat) &&
+                            double.TryParse(rpt.Attribute("lon")?.Value, NumberStyles.Any, CultureInfo.InvariantCulture, out double lon))
+                            pts.Add((lat, lon));
+                    }
+
+                    if (pts.Count >= 2)
+                    {
+                        if (pts.Count > 50) pts = SimplifyTrackPoints(pts, simplifyToleranceMeters);
+
+                        bool isAo = rteType.Equals("AO", StringComparison.OrdinalIgnoreCase) ||
+                                    rawName.Contains("Granica Terenu", StringComparison.OrdinalIgnoreCase) ||
+                                    rawName.StartsWith("[AO]", StringComparison.OrdinalIgnoreCase);
+                        bool isSector = rteType.Equals("Sector", StringComparison.OrdinalIgnoreCase) ||
+                                        rawName.StartsWith("[SEK]", StringComparison.OrdinalIgnoreCase);
+
+                        string kind = isAo ? "AO" : (isSector ? "Sector" : "Route");
+                        var item = new TacticalMapObjectItem
+                        {
+                            Kind = kind,
+                            SymbolCode = kind,
+                            Name = rawName.Replace("[AO]", "").Replace("[SEK]", "").Trim(),
+                            ColorHex = isAo ? "#FFFFFF" : (isSector ? "#F5B82E" : "#1FE0C5"),
+                            ShowLabel = !isAo,
+                            SizeMultiplier = 1.0
+                        };
+                        item.Points.AddRange(pts);
+                        results.Add(item);
+                    }
+                }
+
+                // 3. Ślady GPS z zegarków Garmin / ATAK (<trk>) -> automatyczna redukcja punktów Douglas-Peucker
+                foreach (var trk in doc.Descendants().Where(e => e.Name.LocalName == "trk"))
+                {
+                    string rawName = trk.Elements().FirstOrDefault(e => e.Name.LocalName == "name")?.Value?.Trim() ?? $"Ślad-GPS-{results.Count + 1}";
+                    var pts = new List<(double Lat, double Lon)>();
+                    foreach (var tpt in trk.Descendants().Where(e => e.Name.LocalName == "trkpt"))
+                    {
+                        if (double.TryParse(tpt.Attribute("lat")?.Value, NumberStyles.Any, CultureInfo.InvariantCulture, out double lat) &&
+                            double.TryParse(tpt.Attribute("lon")?.Value, NumberStyles.Any, CultureInfo.InvariantCulture, out double lon))
+                            pts.Add((lat, lon));
+                    }
+
+                    if (pts.Count >= 2)
+                    {
+                        var simplified = SimplifyTrackPoints(pts, simplifyToleranceMeters);
+                        var item = new TacticalMapObjectItem
+                        {
+                            Kind = "Route",
+                            SymbolCode = "Route",
+                            Name = rawName,
+                            ColorHex = "#2ECC71",
+                            ShowLabel = true,
+                            SizeMultiplier = 1.0
+                        };
+                        item.Points.AddRange(simplified);
+                        results.Add(item);
+                    }
+                }
+            }
+            catch { }
+
+            return results;
+        }
+
+        public static List<TacticalMapObjectItem> ImportAnyVectorFile(string filePath, double simplifyToleranceMeters, out string summaryText)
+        {
+            summaryText = "";
+            var imported = new List<TacticalMapObjectItem>();
+            if (string.IsNullOrWhiteSpace(filePath) || !File.Exists(filePath)) return imported;
+
+            string ext = Path.GetExtension(filePath).ToLowerInvariant();
+            try
+            {
+                if (ext == ".kmz")
+                {
+                    using var fs = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+                    using var zip = new ZipArchive(fs, ZipArchiveMode.Read);
+                    foreach (var entry in zip.Entries.Where(e => e.FullName.EndsWith(".kml", StringComparison.OrdinalIgnoreCase)))
+                    {
+                        using var sr = new StreamReader(entry.Open(), Encoding.UTF8);
+                        string kmlTxt = sr.ReadToEnd();
+                        imported.AddRange(ParseKmlContentToObjects(kmlTxt, simplifyToleranceMeters));
+                    }
+                }
+                else if (ext == ".kml")
+                {
+                    string kmlTxt = File.ReadAllText(filePath, Encoding.UTF8);
+                    imported.AddRange(ParseKmlContentToObjects(kmlTxt, simplifyToleranceMeters));
+                }
+                else if (ext == ".gpx")
+                {
+                    string gpxTxt = File.ReadAllText(filePath, Encoding.UTF8);
+                    imported.AddRange(ParseGpxContentToObjects(gpxTxt, simplifyToleranceMeters));
+                }
+
+                int cntAo = imported.Count(o => o.Kind == "AO");
+                int cntSec = imported.Count(o => o.Kind == "Sector");
+                int cntRt = imported.Count(o => o.Kind == "Route");
+                int cntPt = imported.Count(o => o.Kind == "Marker" || o.Kind == "Dot");
+                summaryText = $"Wczytano z {Path.GetFileName(filePath)}: {imported.Count} obiektów (Strefy AO: {cntAo}, Sektory: {cntSec}, Trasy/Ślady: {cntRt}, Punkty: {cntPt})";
+            }
+            catch (Exception ex)
+            {
+                summaryText = $"Błąd odczytu pliku {Path.GetFileName(filePath)}: {ex.Message}";
+            }
+
+            return imported;
+        }
+
+        // Pełny zapis archiwum .KMZ zachowujący GroundOverlay + wszystkie wielokąty AO/Sektory + Trasy + Punkty
+        public static void WriteFullKmzArchive(
+            string kmzPath,
+            string title,
+            byte[] mapPngBytes,
+            double north,
+            double south,
+            double east,
+            double west,
+            IEnumerable<TacticalMapObjectItem> objects)
+        {
+            if (File.Exists(kmzPath)) File.Delete(kmzPath);
+            using var fs = new FileStream(kmzPath, FileMode.CreateNew, FileAccess.Write);
+            using var zip = new ZipArchive(fs, ZipArchiveMode.Create, false, Encoding.UTF8);
+
+            if (mapPngBytes != null && mapPngBytes.Length > 0)
+            {
+                var imgEntry = zip.CreateEntry("files/grg_overlay.png", CompressionLevel.Optimal);
+                using var s = imgEntry.Open();
+                s.Write(mapPngBytes, 0, mapPngBytes.Length);
+            }
+
+            var sb = new StringBuilder();
+            sb.AppendLine(@"<?xml version=""1.0"" encoding=""UTF-8""?>");
+            sb.AppendLine(@"<kml xmlns=""http://www.opengis.net/kml/2.2""><Document>");
+            sb.AppendLine($"  <name>{SecurityElementText(title)}</name>");
+
+            if (mapPngBytes != null && mapPngBytes.Length > 0)
+            {
+                sb.AppendLine($"  <GroundOverlay><name>{SecurityElementText(title)}</name><Icon><href>files/grg_overlay.png</href></Icon>");
+                sb.AppendLine(string.Create(CultureInfo.InvariantCulture, $"    <LatLonBox><north>{north:0.000000}</north><south>{south:0.000000}</south><east>{east:0.000000}</east><west>{west:0.000000}</west></LatLonBox></GroundOverlay>"));
+            }
+
+            if (objects != null)
+            {
+                foreach (var o in objects.Where(x => x.Points != null && x.Points.Count > 0))
+                {
+                    string safeName = SecurityElementText(o.Name);
+                    string kmlStroke = HexRgbToKmlColor(o.ColorHex, 240);
+                    string kmlFill = HexRgbToKmlColor(o.ColorHex, o.Kind == "AO" ? (byte)35 : (byte)85);
+
+                    if ((o.Kind == "AO" || o.Kind == "Sector") && o.Points.Count >= 3)
+                    {
+                        string prefix = o.Kind == "AO" ? "[AO] " : "[SEK] ";
+                        sb.AppendLine("  <Placemark>");
+                        sb.AppendLine($"    <name>{prefix}{safeName}</name>");
+                        sb.AppendLine($"    <Style><LineStyle><color>{kmlStroke}</color><width>3</width></LineStyle><PolyStyle><color>{kmlFill}</color></PolyStyle></Style>");
+                        sb.AppendLine("    <Polygon><outerBoundaryIs><LinearRing><coordinates>");
+                        var coordBuilder = new StringBuilder("      ");
+                        foreach (var pt in o.Points)
+                            coordBuilder.Append(string.Create(CultureInfo.InvariantCulture, $"{pt.Lon:0.000000},{pt.Lat:0.000000},0 "));
+                        var first = o.Points[0];
+                        coordBuilder.Append(string.Create(CultureInfo.InvariantCulture, $"{first.Lon:0.000000},{first.Lat:0.000000},0"));
+                        sb.AppendLine(coordBuilder.ToString());
+                        sb.AppendLine("    </coordinates></LinearRing></outerBoundaryIs></Polygon>");
+                        sb.AppendLine("  </Placemark>");
+                    }
+                    else if (o.Kind == "Route" && o.Points.Count >= 2)
+                    {
+                        sb.AppendLine("  <Placemark>");
+                        sb.AppendLine($"    <name>{safeName}</name>");
+                        sb.AppendLine($"    <Style><LineStyle><color>{kmlStroke}</color><width>3.2</width></LineStyle></Style>");
+                        sb.AppendLine("    <LineString><tessellate>1</tessellate><coordinates>");
+                        var coordBuilder = new StringBuilder("      ");
+                        foreach (var pt in o.Points)
+                            coordBuilder.Append(string.Create(CultureInfo.InvariantCulture, $"{pt.Lon:0.000000},{pt.Lat:0.000000},0 "));
+                        sb.AppendLine(coordBuilder.ToString().TrimEnd());
+                        sb.AppendLine("    </coordinates></LineString>");
+                        sb.AppendLine("  </Placemark>");
+                    }
+                    else
+                    {
+                        var natoDef = TacticalMapGeneratorView.NatoSymbols.FirstOrDefault(n => n.Code == o.SymbolCode);
+                        string desc = natoDef != null ? natoDef.NatoMeaning : o.Kind;
+                        string badge = o.Kind == "Dot" ? "DOT" : (natoDef != null ? natoDef.ShortBadge : o.SymbolCode);
+                        var (fullMgrs, _, kpInfo, _, _) = TacticalMapGeneratorView.FormatTacticalPointCoordinates(o.Points[0].Lat, o.Points[0].Lon);
+
+                        sb.AppendLine("  <Placemark>");
+                        sb.AppendLine($"    <name>[{SecurityElementText(badge)}] {safeName}</name>");
+                        sb.AppendLine($"    <description>{SecurityElementText(desc)} | MGRS: {fullMgrs} ({kpInfo})</description>");
+                        sb.AppendLine($"    <Style><IconStyle><color>{kmlStroke}</color></IconStyle><LabelStyle><color>{kmlStroke}</color></LabelStyle></Style>");
+                        sb.AppendLine(string.Create(CultureInfo.InvariantCulture, $"    <Point><coordinates>{o.Points[0].Lon:0.000000},{o.Points[0].Lat:0.000000},0</coordinates></Point>"));
+                        sb.AppendLine("  </Placemark>");
+                    }
+                }
+            }
+
+            sb.AppendLine("</Document></kml>");
+            var kmlEntry = zip.CreateEntry("doc.kml", CompressionLevel.Optimal);
+            using var sw = new StreamWriter(kmlEntry.Open(), Encoding.UTF8);
+            sw.Write(sb.ToString());
+        }
+
+        // Pełny zapis pliku .GPX zachowujący punkty (<wpt>), trasy (<rte>) oraz wielokąty AO/Sektory (<rte><type>AO</type>)
+        public static void WriteFullGpxFile(string gpxPath, IEnumerable<TacticalMapObjectItem> objects)
+        {
+            var sb = new StringBuilder();
+            sb.AppendLine(@"<?xml version=""1.0"" encoding=""UTF-8""?>");
+            sb.AppendLine(@"<gpx version=""1.1"" creator=""Field TAK Hub Builder 2.4"" xmlns=""http://www.topografix.com/GPX/1/1"">");
+
+            if (objects != null)
+            {
+                foreach (var o in objects.Where(x => x.Points != null && x.Points.Count > 0))
+                {
+                    string safeName = SecurityElementText(o.Name);
+                    if (o.Points.Count == 1 && o.Kind != "AO" && o.Kind != "Sector" && o.Kind != "Route")
+                    {
+                        var natoDef = TacticalMapGeneratorView.NatoSymbols.FirstOrDefault(n => n.Code == o.SymbolCode);
+                        string desc = natoDef != null ? natoDef.NatoMeaning : o.Kind;
+                        string badge = o.Kind == "Dot" ? "DOT" : (natoDef != null ? natoDef.ShortBadge : o.SymbolCode);
+                        var (fullMgrs, _, kpInfo, _, _) = TacticalMapGeneratorView.FormatTacticalPointCoordinates(o.Points[0].Lat, o.Points[0].Lon);
+                        sb.AppendLine(string.Create(CultureInfo.InvariantCulture, $"  <wpt lat=\"{o.Points[0].Lat:0.000000}\" lon=\"{o.Points[0].Lon:0.000000}\"><name>[{SecurityElementText(badge)}] {safeName}</name><desc>{SecurityElementText(desc)} | MGRS: {fullMgrs} ({kpInfo})</desc><extensions><color>{o.ColorHex}</color></extensions></wpt>"));
+                    }
+                    else
+                    {
+                        sb.AppendLine($"  <rte><name>{safeName}</name><type>{o.Kind}</type>");
+                        foreach (var pt in o.Points)
+                            sb.AppendLine(string.Create(CultureInfo.InvariantCulture, $"    <rtept lat=\"{pt.Lat:0.000000}\" lon=\"{pt.Lon:0.000000}\" />"));
+                        sb.AppendLine("  </rte>");
+                    }
+                }
+            }
+
+            sb.AppendLine("</gpx>");
+            File.WriteAllText(gpxPath, sb.ToString(), Encoding.UTF8);
+        }
+
+        private static string SecurityElementText(string raw) =>
+            (raw ?? "").Replace("&", "&amp;").Replace("<", "&lt;").Replace(">", "&gt;").Replace("\"", "&quot;");
+    }
+
+    // =========================================================================
+    // OKNO WSPARCIA TWÓRCY APLIKACJI (KOD QR + LINK BUYCOFFEE.TO JAK W ANDROID)
+    // =========================================================================
+    internal static class CreatorSupportModal
+    {
+        public static string BuyCoffeeUrl { get; set; } = "https://buycoffee.to/qbcol";
+
+        private static string GetCustomUrlConfigPath()
+        {
+            try
+            {
+                string dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "FieldTakHub");
+                Directory.CreateDirectory(dir);
+                return Path.Combine(dir, "creator_support_url.txt");
+            }
+            catch { return ""; }
+        }
+
+        public static string GetEffectiveBuyCoffeeUrl()
+        {
+            try
+            {
+                string cfg = GetCustomUrlConfigPath();
+                if (!string.IsNullOrEmpty(cfg) && File.Exists(cfg))
+                {
+                    string saved = File.ReadAllText(cfg, Encoding.UTF8).Trim();
+                    if (saved.StartsWith("http", StringComparison.OrdinalIgnoreCase))
+                        return saved;
+                }
+            }
+            catch { }
+            return string.IsNullOrWhiteSpace(BuyCoffeeUrl) || BuyCoffeeUrl.Contains("__BUYCOFFEE")
+                ? "https://buycoffee.to/qbcol"
+                : BuyCoffeeUrl;
+        }
+
+        public static void ShowCreatorSupportDialog(Window owner)
+        {
+            string activeUrl = GetEffectiveBuyCoffeeUrl();
+
+            var dlg = new Window
+            {
+                Title = "☕ Wesprzyj twórcę — Field TAK Hub (BuyCoffee.to)",
+                Width = 450,
+                Height = 560,
+                WindowStartupLocation = WindowStartupLocation.CenterOwner,
+                Owner = owner,
+                Background = TacticalConfigPanel.BrushCardBg,
+                Foreground = Brushes.White,
+                ResizeMode = ResizeMode.NoResize,
+                WindowStyle = WindowStyle.ToolWindow
+            };
+
+            var root = new StackPanel { Margin = new Thickness(20, 16, 20, 16) };
+
+            var badgeBorder = new Border
+            {
+                Background = TacticalConfigPanel.BrushItemBg,
+                BorderBrush = TacticalConfigPanel.BrushAccent,
+                BorderThickness = new Thickness(1.2),
+                CornerRadius = new CornerRadius(8),
+                Padding = new Thickness(12, 8, 12, 8),
+                Margin = new Thickness(0, 0, 0, 12)
+            };
+            var hdrStack = new StackPanel();
+            hdrStack.Children.Add(new TextBlock
+            {
+                Text = "☕ POSTAW KAWĘ TWÓRCY FIELD TAK HUB",
+                Foreground = TacticalConfigPanel.BrushAccent,
+                FontSize = 13.5,
+                FontWeight = FontWeights.Bold,
+                HorizontalAlignment = HorizontalAlignment.Center
+            });
+            hdrStack.Children.Add(new TextBlock
+            {
+                Text = "Narzędzia Field TAK Hub (Windows Builder, Generator Map MGRS 1:1 oraz aplikacja Android) rozwijam z pasji dla społeczności MilSim i ASG. Jeśli program ułatwia Ci przygotowanie operacji, możesz wesprzeć dalszy rozwój projektu!",
+                Foreground = TacticalConfigPanel.BrushMutedText,
+                FontSize = 10.2,
+                TextWrapping = TextWrapping.Wrap,
+                TextAlignment = TextAlignment.Center,
+                Margin = new Thickness(0, 4, 0, 0)
+            });
+            badgeBorder.Child = hdrStack;
+            root.Children.Add(badgeBorder);
+
+            var qrFrame = new Border
+            {
+                Width = 250,
+                Height = 250,
+                Background = Brushes.White,
+                BorderBrush = TacticalConfigPanel.BrushAccent,
+                BorderThickness = new Thickness(2.5),
+                CornerRadius = new CornerRadius(12),
+                HorizontalAlignment = HorizontalAlignment.Center,
+                Margin = new Thickness(0, 2, 0, 12),
+                Padding = new Thickness(10)
+            };
+
+            var qrImage = new Image { Stretch = Stretch.Uniform };
+            RenderOptions.SetBitmapScalingMode(qrImage, BitmapScalingMode.NearestNeighbor);
+            qrFrame.Child = qrImage;
+            root.Children.Add(qrFrame);
+
+            void UpdateQrForUrl(string targetUrl)
+            {
+                qrImage.Source = RenderFallbackQrBitmap(targetUrl);
+                _ = Task.Run(async () =>
+                {
+                    try
+                    {
+                        string cacheKey = $"QR_COFFEE_{targetUrl}";
+                        byte[] cached = GeoportalLidarEngine.TryReadDiskCache(cacheKey);
+                        if (cached == null)
+                        {
+                            string api = $"https://api.qrserver.com/v1/create-qr-code/?size=360x360&margin=8&data={Uri.EscapeDataString(targetUrl)}";
+                            cached = await GeoportalLidarEngine.FastHttp.GetByteArrayAsync(api);
+                            if (GeoportalLidarEngine.IsValidImageBytes(cached))
+                                GeoportalLidarEngine.SaveDiskCacheAsync(cacheKey, cached);
+                        }
+                        if (GeoportalLidarEngine.IsValidImageBytes(cached) && Application.Current != null)
+                        {
+                            await Application.Current.Dispatcher.InvokeAsync(() =>
+                            {
+                                try
+                                {
+                                    var bmp = new BitmapImage();
+                                    using var ms = new MemoryStream(cached);
+                                    bmp.BeginInit();
+                                    bmp.CacheOption = BitmapCacheOption.OnLoad;
+                                    bmp.StreamSource = ms;
+                                    bmp.EndInit();
+                                    bmp.Freeze();
+                                    qrImage.Source = bmp;
+                                }
+                                catch { }
+                            });
+                        }
+                    }
+                    catch { }
+                });
+            }
+
+            UpdateQrForUrl(activeUrl);
+
+            root.Children.Add(new TextBlock
+            {
+                Text = "Zeskanuj kod QR aparatem telefonu lub kliknij poniżej:",
+                Foreground = TacticalConfigPanel.BrushMutedText,
+                FontSize = 10,
+                HorizontalAlignment = HorizontalAlignment.Center,
+                Margin = new Thickness(0, 0, 0, 6)
+            });
+
+            var urlBox = new TextBox
+            {
+                Text = activeUrl,
+                Height = 26,
+                FontSize = 11,
+                FontWeight = FontWeights.Bold,
+                HorizontalContentAlignment = HorizontalAlignment.Center,
+                VerticalContentAlignment = VerticalAlignment.Center,
+                Background = TacticalConfigPanel.BrushInputBg,
+                Foreground = TacticalConfigPanel.BrushAccent,
+                BorderBrush = TacticalConfigPanel.BrushInputBorder,
+                BorderThickness = new Thickness(1),
+                Margin = new Thickness(0, 0, 0, 10)
+            };
+            urlBox.TextChanged += (_, __) =>
+            {
+                string trimmed = urlBox.Text.Trim();
+                if (trimmed.StartsWith("http", StringComparison.OrdinalIgnoreCase))
+                {
+                    activeUrl = trimmed;
+                    BuyCoffeeUrl = trimmed;
+                    try
+                    {
+                        string cfg = GetCustomUrlConfigPath();
+                        if (!string.IsNullOrEmpty(cfg)) File.WriteAllText(cfg, trimmed, Encoding.UTF8);
+                    }
+                    catch { }
+                    UpdateQrForUrl(trimmed);
+                }
+            };
+            root.Children.Add(urlBox);
+
+            var btnOpenBrowser = new Button
+            {
+                Content = "☕ Otwórz buycoffee.to w przeglądarce",
+                Height = 34,
+                Background = new SolidColorBrush(Color.FromRgb(245, 184, 46)),
+                Foreground = TacticalConfigPanel.BrushDarkFg,
+                BorderBrush = Brushes.White,
+                BorderThickness = new Thickness(1),
+                FontWeight = FontWeights.Bold,
+                FontSize = 11.5,
+                Cursor = Cursors.Hand,
+                Margin = new Thickness(0, 0, 0, 8)
+            };
+            btnOpenBrowser.Click += (_, __) =>
+            {
+                try { Process.Start(new ProcessStartInfo { FileName = activeUrl, UseShellExecute = true }); } catch { }
+            };
+            root.Children.Add(btnOpenBrowser);
+
+            var bottomRow = new Grid();
+            bottomRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            bottomRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+
+            var btnCopy = new Button
+            {
+                Content = "📋 Kopiuj link do schowka",
+                Height = 28,
+                Margin = new Thickness(0, 0, 5, 0),
+                Background = TacticalConfigPanel.BrushItemBg,
+                Foreground = Brushes.White,
+                BorderBrush = TacticalConfigPanel.BrushAccent,
+                BorderThickness = new Thickness(1),
+                FontSize = 10.5,
+                FontWeight = FontWeights.SemiBold,
+                Cursor = Cursors.Hand
+            };
+            btnCopy.Click += (_, __) =>
+            {
+                try
+                {
+                    Clipboard.SetText(activeUrl);
+                    btnCopy.Content = "✓ Skopiowano link!";
+                }
+                catch { }
+            };
+
+            var btnClose = new Button
+            {
+                Content = "Zamknij",
+                Height = 28,
+                Margin = new Thickness(5, 0, 0, 0),
+                Background = TacticalConfigPanel.BrushInputBg,
+                Foreground = Brushes.White,
+                BorderBrush = TacticalConfigPanel.BrushTileBorder,
+                BorderThickness = new Thickness(1),
+                FontSize = 10.5,
+                Cursor = Cursors.Hand
+            };
+            btnClose.Click += (_, __) => dlg.Close();
+
+            Grid.SetColumn(btnCopy, 0);
+            Grid.SetColumn(btnClose, 1);
+            bottomRow.Children.Add(btnCopy);
+            bottomRow.Children.Add(btnClose);
+            root.Children.Add(bottomRow);
+
+            dlg.Content = root;
+            dlg.ShowDialog();
+        }
+
+        private static BitmapSource RenderFallbackQrBitmap(string payload)
+        {
+            const int sz = 300;
+            const int modules = 29;
+            double cell = (double)sz / modules;
+            byte[] hash = SHA256.HashData(Encoding.UTF8.GetBytes(payload ?? "https://buycoffee.to/qbcol"));
+
+            var dv = new DrawingVisual();
+            using (DrawingContext dc = dv.RenderOpen())
+            {
+                dc.DrawRectangle(Brushes.White, null, new Rect(0, 0, sz, sz));
+                bool IsFinder(int r, int c) => (r < 7 && c < 7) || (r < 7 && c >= modules - 7) || (r >= modules - 7 && c < 7);
+                void DrawFinder(int rOff, int cOff)
+                {
+                    for (int r = 0; r < 7; r++)
+                        for (int c = 0; c < 7; c++)
+                            if ((r == 0 || r == 6 || c == 0 || c == 6) || (r >= 2 && r <= 4 && c >= 2 && c <= 4))
+                                dc.DrawRectangle(Brushes.Black, null, new Rect((cOff + c) * cell, (rOff + r) * cell, cell + 0.4, cell + 0.4));
+                }
+                DrawFinder(0, 0); DrawFinder(0, modules - 7); DrawFinder(modules - 7, 0);
+                int bitIdx = 0;
+                for (int r = 0; r < modules; r++)
+                    for (int c = 0; c < modules; c++)
+                        if (!IsFinder(r, c) && r != 7 && c != 7)
+                        {
+                            if (((hash[(bitIdx / 8) % hash.Length] >> (bitIdx % 8)) & 1) == 1)
+                                dc.DrawRectangle(Brushes.Black, null, new Rect(c * cell, r * cell, cell + 0.4, cell + 0.4));
+                            bitIdx++;
+                        }
+            }
+            var rtb = new RenderTargetBitmap(sz, sz, 96, 96, PixelFormats.Pbgra32);
+            rtb.Render(dv);
+            rtb.Freeze();
+            return rtb;
+        }
+    }
+
     internal static class UtmGrid2DProjector
     {
         public static void LatLonToUtm(double lat, double lon, int forcedZone, out double easting, out double northing)
@@ -142,8 +1072,6 @@ namespace FieldTakHub.Builder.Services
         public static HttpClient FastHttp { get; private set; } = CreateDedicatedHttpClient(9);
         public static HttpClient LidarHttp { get; private set; } = CreateDedicatedHttpClient(8);
         public static string LastLidarDiagnosticStatus { get; private set; } = "Gotowy";
-
-        // Globalny współczynnik rozjaśniania cieni/gammy (ustawiany suwakiem w Sekcji 2)
         public static double ActiveBrightnessBoost { get; set; } = 0.0;
 
         private static string InitializeDiskCacheDirectory()
@@ -257,7 +1185,6 @@ namespace FieldTakHub.Builder.Services
             }
         }
 
-        // Rozjaśnia ciemne partie mapy (szczególnie gęste lasy i cienie) za pomocą nieliniowej krzywej Gamma Shadow-Lift bez przepalania jasnych pól!
         public static BitmapSource ApplyGammaAndBrightnessToBitmap(BitmapSource srcBmp, double boostAmount)
         {
             if (srcBmp == null || boostAmount <= 0.01) return srcBmp;
@@ -285,9 +1212,9 @@ namespace FieldTakHub.Builder.Services
                 {
                     if (px[i + 3] > 0)
                     {
-                        px[i]     = lut[px[i]];     // B
-                        px[i + 1] = lut[px[i + 1]]; // G
-                        px[i + 2] = lut[px[i + 2]]; // R
+                        px[i]     = lut[px[i]];
+                        px[i + 1] = lut[px[i + 1]];
+                        px[i + 2] = lut[px[i + 2]];
                     }
                 }
 
@@ -301,7 +1228,6 @@ namespace FieldTakHub.Builder.Services
         public static byte[] BuildGammaShadowLiftLut(double boostAmount)
         {
             double clamped = Math.Clamp(boostAmount, 0.0, 1.0);
-            // Gamma < 1.0 wyciąga szczegóły z ciemnego lasu, a delikatny offset podnosi najgłębsze czernie pod wydruk
             double gamma = 1.0 / (1.0 + clamped * 1.35);
             double blackLift = clamped * 36.0;
 
@@ -560,7 +1486,6 @@ namespace FieldTakHub.Builder.Services
             catch { return stdBmp; }
         }
 
-        // Jaśniejszy balans światłocienia 3D dla LiDARu: mocniejsze białe podświetlenie stoków i brak zaczerniania ciemnych lasów!
         private static void ApplyHillshadeContrastAndAlphaInPlace(byte[] bgraPixels, int width, int height, bool asTransparentOverlay)
         {
             if (bgraPixels == null || bgraPixels.Length < 16) return;
@@ -635,7 +1560,6 @@ namespace FieldTakHub.Builder.Services
                     }
                     else if (deltaFromNeutral > 8)
                     {
-                        // Wzmocnione jasne zbocza 3D, aby rzeźba terenu była wyraźnie widoczna na ciemnym lesie!
                         int lightStrength = deltaFromNeutral;
                         lutB[rawLum] = 248;
                         lutG[rawLum] = 252;
