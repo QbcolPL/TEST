@@ -17,7 +17,7 @@ using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
-using System.Windows.Shapes;
+using System.Windows.Shapes; using Path = System.IO.Path;
 using System.Windows.Threading;
 using Microsoft.Win32;
 
@@ -1126,7 +1126,7 @@ namespace FieldTakHub.Builder.Services
                 if (!saveDirectlyToFtakSource)
                 {
                     string initDir = !string.IsNullOrWhiteSpace(TacticalConfigPanel.LastExportDirectory) && Directory.Exists(TacticalConfigPanel.LastExportDirectory)
-                        ? TacticalConfigPanel.LastExportDirectory : (Path.GetDirectoryName(Path.TrimEndingDirectorySeparator(sourceDir)) ?? AppDomain.CurrentDomain.BaseDirectory);
+                        ? TacticalConfigPanel.LastExportDirectory : (System.IO.Path.GetDirectoryName(System.IO.Path.TrimEndingDirectorySeparator(sourceDir)) ?? AppDomain.CurrentDomain.BaseDirectory);
 
                     var dlg = new SaveFileDialog
                     {
@@ -1137,7 +1137,7 @@ namespace FieldTakHub.Builder.Services
                     };
                     if (dlg.ShowDialog(win) != true) return;
                     standaloneTargetFile = dlg.FileName;
-                    TacticalConfigPanel.LastExportDirectory = Path.GetDirectoryName(standaloneTargetFile) ?? initDir;
+                    TacticalConfigPanel.LastExportDirectory = System.IO.Path.GetDirectoryName(standaloneTargetFile) ?? initDir;
                     TacticalConfigPanel.SaveSessionStateAuto(win);
                 }
 
@@ -1185,16 +1185,16 @@ namespace FieldTakHub.Builder.Services
                             foreach (var fac in targetFacs)
                             {
                                 string sl = TacticalConfigPanel.SanitizeFileName(fac.Name).ToLowerInvariant();
-                                string facDir = Path.Combine(sourceDir, "factions", sl); Directory.CreateDirectory(facDir);
-                                if (writeMbtiles) NativeSqliteWriter.WriteMbTilesDatabase(Path.Combine(facDir, $"mapa_offline_{sl}.mbtiles"), $"{eventName}_{fac.Name}", _offlineMinZoom, _offlineMaxZoom, north, south, east, west, finalTilesList);
-                                if (writeSqlite) NativeSqliteWriter.WriteAtakMobacSqliteDatabase(Path.Combine(facDir, $"mapa_offline_{sl}.sqlite"), _offlineMinZoom, _offlineMaxZoom, finalTilesList);
+                                string facDir = System.IO.Path.Combine(sourceDir, "factions", sl); Directory.CreateDirectory(facDir);
+                                if (writeMbtiles) NativeSqliteWriter.WriteMbTilesDatabase(System.IO.Path.Combine(facDir, $"mapa_offline_{sl}.mbtiles"), $"{eventName}_{fac.Name}", _offlineMinZoom, _offlineMaxZoom, north, south, east, west, finalTilesList);
+                                if (writeSqlite) NativeSqliteWriter.WriteAtakMobacSqliteDatabase(System.IO.Path.Combine(facDir, $"mapa_offline_{sl}.sqlite"), _offlineMinZoom, _offlineMaxZoom, finalTilesList);
                             }
                         }
                         else
                         {
-                            string mapsDir = Path.Combine(sourceDir, "maps"); Directory.CreateDirectory(mapsDir);
-                            if (writeMbtiles) NativeSqliteWriter.WriteMbTilesDatabase(Path.Combine(mapsDir, $"{baseFileName}.mbtiles"), eventName, _offlineMinZoom, _offlineMaxZoom, north, south, east, west, finalTilesList);
-                            if (writeSqlite) NativeSqliteWriter.WriteAtakMobacSqliteDatabase(Path.Combine(mapsDir, $"{baseFileName}.sqlite"), _offlineMinZoom, _offlineMaxZoom, finalTilesList);
+                            string mapsDir = System.IO.Path.Combine(sourceDir, "maps"); Directory.CreateDirectory(mapsDir);
+                            if (writeMbtiles) NativeSqliteWriter.WriteMbTilesDatabase(System.IO.Path.Combine(mapsDir, $"{baseFileName}.mbtiles"), eventName, _offlineMinZoom, _offlineMaxZoom, north, south, east, west, finalTilesList);
+                            if (writeSqlite) NativeSqliteWriter.WriteAtakMobacSqliteDatabase(System.IO.Path.Combine(mapsDir, $"{baseFileName}.sqlite"), _offlineMinZoom, _offlineMaxZoom, finalTilesList);
                         }
                     });
 
@@ -1206,11 +1206,11 @@ namespace FieldTakHub.Builder.Services
                 }
                 else
                 {
-                    string outDir = Path.GetDirectoryName(standaloneTargetFile) ?? AppDomain.CurrentDomain.BaseDirectory;
-                    string stem = Path.Combine(outDir, Path.GetFileNameWithoutExtension(standaloneTargetFile));
+                    string outDir = System.IO.Path.GetDirectoryName(standaloneTargetFile) ?? AppDomain.CurrentDomain.BaseDirectory;
+                    string stem = System.IO.Path.Combine(outDir, System.IO.Path.GetFileNameWithoutExtension(standaloneTargetFile));
                     await Task.Run(() =>
                     {
-                        if (writeMbtiles) NativeSqliteWriter.WriteMbTilesDatabase($"{stem}.mbtiles", Path.GetFileNameWithoutExtension(standaloneTargetFile), _offlineMinZoom, _offlineMaxZoom, north, south, east, west, finalTilesList);
+                        if (writeMbtiles) NativeSqliteWriter.WriteMbTilesDatabase($"{stem}.mbtiles", System.IO.Path.GetFileNameWithoutExtension(standaloneTargetFile), _offlineMinZoom, _offlineMaxZoom, north, south, east, west, finalTilesList);
                         if (writeSqlite) NativeSqliteWriter.WriteAtakMobacSqliteDatabase($"{stem}.sqlite", _offlineMinZoom, _offlineMaxZoom, finalTilesList);
                     });
                     TacticalConfigPanel.TryOpenFolderInExplorer(outDir);
@@ -1942,7 +1942,7 @@ namespace FieldTakHub.Builder.Services
 
                 var dlg = new OpenFileDialog { Title = "Wczytaj projekt roboczy (.fthproj / .json) lub punkty (.kml / .gpx)", Filter = "Pliki projektu i mapy (*.fthproj;*.json;*.kml;*.gpx)|*.fthproj;*.json;*.kml;*.gpx", InitialDirectory = initDir };
                 if (dlg.ShowDialog(win) != true) return;
-                TacticalConfigPanel.LastExportDirectory = Path.GetDirectoryName(dlg.FileName) ?? initDir;
+                TacticalConfigPanel.LastExportDirectory = System.IO.Path.GetDirectoryName(dlg.FileName) ?? initDir;
 
                 string txt = File.ReadAllText(dlg.FileName, Encoding.UTF8);
                 if ((dlg.FileName.EndsWith(".json", StringComparison.OrdinalIgnoreCase) || dlg.FileName.EndsWith(".fthproj", StringComparison.OrdinalIgnoreCase)) &&
@@ -1993,17 +1993,17 @@ namespace FieldTakHub.Builder.Services
                         foreach (var fac in targetFacs)
                         {
                             string sl = TacticalConfigPanel.SanitizeFileName(fac.Name).ToLowerInvariant();
-                            string facDir = Path.Combine(sourceDir, "factions", sl); Directory.CreateDirectory(facDir);
-                            WriteKmzGroundOverlayArchive(Path.Combine(facDir, $"grg_map_{sl}.kmz"), $"Mapa_GRG_{fac.Name}", pngBytes, north, south, east, west);
-                            WriteGpxFile(Path.Combine(facDir, $"punkty_{sl}.gpx"));
+                            string facDir = System.IO.Path.Combine(sourceDir, "factions", sl); Directory.CreateDirectory(facDir);
+                            WriteKmzGroundOverlayArchive(System.IO.Path.Combine(facDir, $"grg_map_{sl}.kmz"), $"Mapa_GRG_{fac.Name}", pngBytes, north, south, east, west);
+                            WriteGpxFile(System.IO.Path.Combine(facDir, $"punkty_{sl}.gpx"));
                         }
                     }
                     else
                     {
-                        string mapsDir = Path.Combine(sourceDir, "maps"), atakDir = Path.Combine(sourceDir, "atak");
+                        string mapsDir = System.IO.Path.Combine(sourceDir, "maps"), atakDir = System.IO.Path.Combine(sourceDir, "atak");
                         Directory.CreateDirectory(mapsDir); Directory.CreateDirectory(atakDir);
-                        WriteKmzGroundOverlayArchive(Path.Combine(mapsDir, "grg_map_overlay.kmz"), "Mapa_GRG_ATAK", pngBytes, north, south, east, west);
-                        WriteGpxFile(Path.Combine(atakDir, "punkty_taktyczne.gpx"));
+                        WriteKmzGroundOverlayArchive(System.IO.Path.Combine(mapsDir, "grg_map_overlay.kmz"), "Mapa_GRG_ATAK", pngBytes, north, south, east, west);
+                        WriteGpxFile(System.IO.Path.Combine(atakDir, "punkty_taktyczne.gpx"));
                     }
                 });
                 TacticalConfigPanel.SaveSessionStateAuto(win);
@@ -2019,7 +2019,7 @@ namespace FieldTakHub.Builder.Services
             {
                 string sourceDir = TacticalConfigPanel.GetPrimarySourceDirectory(win);
                 string defaultDir = !string.IsNullOrWhiteSpace(TacticalConfigPanel.LastExportDirectory) && Directory.Exists(TacticalConfigPanel.LastExportDirectory)
-                    ? TacticalConfigPanel.LastExportDirectory : (Path.GetDirectoryName(Path.TrimEndingDirectorySeparator(sourceDir)) ?? AppDomain.CurrentDomain.BaseDirectory);
+                    ? TacticalConfigPanel.LastExportDirectory : (System.IO.Path.GetDirectoryName(System.IO.Path.TrimEndingDirectorySeparator(sourceDir)) ?? AppDomain.CurrentDomain.BaseDirectory);
 
                 string facSuffix = string.Join("_", GetActiveMapFactions().Select(f => TacticalConfigPanel.SanitizeFileName(f.Name)));
                 var dlg = new SaveFileDialog
@@ -2031,7 +2031,7 @@ namespace FieldTakHub.Builder.Services
                 };
                 if (dlg.ShowDialog(win) != true) return;
 
-                string chosenPath = dlg.FileName, chosenDir = Path.GetDirectoryName(chosenPath) ?? defaultDir;
+                string chosenPath = dlg.FileName, chosenDir = System.IO.Path.GetDirectoryName(chosenPath) ?? defaultDir;
                 TacticalConfigPanel.LastExportDirectory = chosenDir;
                 TacticalConfigPanel.SaveSessionStateAuto(win);
 
@@ -2045,7 +2045,7 @@ namespace FieldTakHub.Builder.Services
 
                 await Task.Run(() =>
                 {
-                    if (format == "kmz") WriteKmzGroundOverlayArchive(chosenPath, Path.GetFileNameWithoutExtension(chosenPath), pngBytes, north, south, east, west);
+                    if (format == "kmz") WriteKmzGroundOverlayArchive(chosenPath, System.IO.Path.GetFileNameWithoutExtension(chosenPath), pngBytes, north, south, east, west);
                     else if (format == "gpx") WriteGpxFile(chosenPath);
                 });
                 if (_statusText != null) _statusText.Text = $"✓ Zapisano plik: {chosenPath}";
@@ -2108,7 +2108,7 @@ namespace FieldTakHub.Builder.Services
             {
                 string sourceDir = TacticalConfigPanel.GetPrimarySourceDirectory(win);
                 string defaultDir = !string.IsNullOrWhiteSpace(TacticalConfigPanel.LastExportDirectory) && Directory.Exists(TacticalConfigPanel.LastExportDirectory)
-                    ? TacticalConfigPanel.LastExportDirectory : (Path.GetDirectoryName(Path.TrimEndingDirectorySeparator(sourceDir)) ?? AppDomain.CurrentDomain.BaseDirectory);
+                    ? TacticalConfigPanel.LastExportDirectory : (System.IO.Path.GetDirectoryName(System.IO.Path.TrimEndingDirectorySeparator(sourceDir)) ?? AppDomain.CurrentDomain.BaseDirectory);
 
                 bool landscape = _sheetOrientation == "Poziomo";
                 var (wMm, hMm) = GetActiveSheetDimensionsMm();
@@ -2124,7 +2124,7 @@ namespace FieldTakHub.Builder.Services
                 };
                 if (dlg.ShowDialog(win) != true) return;
 
-                string pdfPath = dlg.FileName, outDir = Path.GetDirectoryName(pdfPath) ?? defaultDir;
+                string pdfPath = dlg.FileName, outDir = System.IO.Path.GetDirectoryName(pdfPath) ?? defaultDir;
                 TacticalConfigPanel.LastExportDirectory = outDir;
                 TacticalConfigPanel.SaveSessionStateAuto(win);
 
