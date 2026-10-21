@@ -1053,7 +1053,7 @@ namespace FieldTakHub.Builder.Services
                 var dv = new DrawingVisual();
                 using (DrawingContext dc = dv.RenderOpen())
                 {
-                    dc.DrawImage(bmpBase, new Rect(0, 0, 256, 256));
+                    BitmapSource liftedBase = _mapBrightnessBoost > 0.01 ? (GeoportalLidarEngine.ApplyGammaAndBrightnessToBitmap(bmpBase, _mapBrightnessBoost) ?? bmpBase) : bmpBase; dc.DrawImage(liftedBase, new Rect(0, 0, 256, 256));
                     dc.PushOpacity(lidarAlpha);
                     dc.DrawImage(alphaLidar, new Rect(0, 0, 256, 256));
                     dc.Pop();

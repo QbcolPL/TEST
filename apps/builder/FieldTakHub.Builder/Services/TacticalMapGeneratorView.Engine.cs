@@ -76,6 +76,8 @@ namespace FieldTakHub.Builder.Services
         public int ScaleDenominator { get; set; }
         public bool IsDraftResolution { get; set; }
         public BitmapSource Bitmap { get; set; }
+        public double AppliedBoost { get; set; } = -1.0;
+        public BitmapSource BrightenedBitmap { get; set; }
     }
 
     internal static class NativeSqliteWriter
@@ -250,6 +252,7 @@ namespace FieldTakHub.Builder.Services
         private static readonly SemaphoreSlim WmsDedicatedThrottle = new SemaphoreSlim(6, 6);
         private static readonly ConcurrentDictionary<string, byte[]> RawTileCache = new ConcurrentDictionary<string, byte[]>();
         private static readonly ConcurrentDictionary<string, BitmapSource> DecodedImageCache = new ConcurrentDictionary<string, BitmapSource>();
+        private static readonly ConcurrentDictionary<string, BitmapSource> BrightenedTileCache = new ConcurrentDictionary<string, BitmapSource>();
         private static readonly ConcurrentDictionary<string, byte> PendingTileUrls = new ConcurrentDictionary<string, byte>();
         private static readonly ConcurrentDictionary<string, FormattedText> GlyphCache = new ConcurrentDictionary<string, FormattedText>();
         private static readonly ConcurrentDictionary<string, Brush> FrozenBrushCache = new ConcurrentDictionary<string, Brush>();
@@ -274,7 +277,7 @@ namespace FieldTakHub.Builder.Services
         private static readonly HashSet<string> _selectedMapFactions = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         private static CancellationTokenSource _renderCts, _wmsSheetCts, _offlineDownloadCts;
         private static DateTime _lastPanTileRefreshUtc = DateTime.MinValue;
-        private static DispatcherTimer _tileWatchdogTimer;
+        private static DispatcherTimer _tileWatchdogTimer, _brightnessDebounceTimer;
         private static volatile bool _hasMissingVisibleTiles;
         private static volatile bool _isWmsSheetFetchRunning;
         private static int _lastRenderedTileZoom = -1;
@@ -300,7 +303,8 @@ namespace FieldTakHub.Builder.Services
         private static string _gridLabelsMode = "MGRS + Ćwiartki/Keypad";
         private static string _labelBgStyle = "Kaseton (Kolor tła RGB)";
         private static double _gridThicknessMultiplier = 1.0, _fontScaleMultiplier = 1.0;
-        private static double _mainGridOpacity = 0.85, _subGridOpacity = 0.85, _subLabelBgOpacity = 0.82, _mapDimmerOpacity = 0.0, _lidarOpacity = 0.55;
+        private static double _mainGridOpacity = 0.85, _subGridOpacity = 0.85, _subLabelBgOpacity = 0.82;
+        private static double _mapBrightnessBoost = 0.0, _mapDimmerOpacity = 0.0, _lidarOpacity = 0.55;
         private static string _mainGridColorHex = "#FAD02C", _subGridLineColorHex = "#1FE0C5", _subLabelTextColorHex = "#FFFFFF", _subLabelBgColorHex = "#061014";
         private static string _gridHaloMode = "Pełny czarny obrys";
 
@@ -358,9 +362,38 @@ namespace FieldTakHub.Builder.Services
 
         private static bool IsValidImagePayload(byte[] data) => GeoportalLidarEngine.IsValidImageBytes(data);
 
+        private static BitmapSource GetGammaBrightenedTile(string url, BitmapSource rawBmp)
+        {
+            if (rawBmp == null || _mapBrightnessBoost <= 0.01) return rawBmp;
+            int boostKey = (int)Math.Round(_mapBrightnessBoost * 100);
+            string key = $"{url}_B{boostKey}";
+            if (BrightenedTileCache.TryGetValue(key, out var cached)) return cached;
+            var lifted = GeoportalLidarEngine.ApplyGammaAndBrightnessToBitmap(rawBmp, _mapBrightnessBoost) ?? rawBmp;
+            if (BrightenedTileCache.Count > 500) BrightenedTileCache.Clear();
+            BrightenedTileCache[key] = lifted;
+            return lifted;
+        }
+
+        private static void TriggerLiveBrightnessRefresh()
+        {
+            GeoportalLidarEngine.ActiveBrightnessBoost = _mapBrightnessBoost;
+            if (_brightnessDebounceTimer == null)
+            {
+                _brightnessDebounceTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(35) };
+                _brightnessDebounceTimer.Tick += (_, __) =>
+                {
+                    _brightnessDebounceTimer.Stop();
+                    BrightenedTileCache.Clear();
+                    RefreshTileCanvasesOnly();
+                };
+            }
+            _brightnessDebounceTimer.Stop();
+            _brightnessDebounceTimer.Start();
+        }
+
         private static StackPanel BuildSection2GridAndColorsUI(Window win)
         {
-            var sec2 = CreateSectionCard("2. SIATKA MGRS / WGS84 (NA LINII) & KOLORY RGB (KEYPAD / ĆWIARTKI)");
+            var sec2 = CreateSectionCard("2. SIATKA MGRS / WGS84 (NA LINII), ROZJAŚNIANIE LASU & KOLORY RGB");
             sec2.Children.Add(TacticalConfigPanel.FieldBox("System współrzędnych i typ siatki na mapie:", TacticalConfigPanel.ComboCtrl(new[] { "MGRS / UTM (Siatka wojskowa w metrach)", "Siatka Sektorowa (A1, B2, C3...)", "WGS84 (Stopnie geograficzne Lat/Lon)", "Brak siatki" }, _coordSystem, win, v => { _coordSystem = v; RedrawVectorsOnly(); })));
             var subGridRow = new UniformGrid { Columns = 2 };
             subGridRow.Children.Add(TacticalConfigPanel.FieldBox("Podział wewnątrz oczek:", TacticalConfigPanel.ComboCtrl(new[] { "Co 33 m (Keypad 1-9)", "Co 50 m (Ćwiartki A,B,C,D)", "Brak podziału (Tylko 100 m)", "Siatka co 250 m", "Siatka co 500 m" }, _subGridDivision, win, v => { _subGridDivision = v; RedrawVectorsOnly(); })));
@@ -390,7 +423,19 @@ namespace FieldTakHub.Builder.Services
             sec2.Children.Add(MakeSliderRow("Widoczność (alfa) głównych linii i opisów (MGRS / WGS84):", 0.05, 1.0, _mainGridOpacity, v => $"{(int)Math.Round(v * 100)}%", v => { _mainGridOpacity = Math.Round(v, 2); _fastOverlayRenderer?.InvalidateVisual(); }));
             sec2.Children.Add(MakeSliderRow("Widoczność (alfa) podziałki wewnętrznej (Keypad 1-9 / Ćwiartki):", 0.0, 1.0, _subGridOpacity, v => $"{(int)Math.Round(v * 100)}%", v => { _subGridOpacity = Math.Round(v, 2); _fastOverlayRenderer?.InvalidateVisual(); }));
             sec2.Children.Add(MakeSliderRow("Krycie tła (kasetonu) pod cyframi Keypad / Ćwiartek:", 0.0, 1.0, _subLabelBgOpacity, v => $"{(int)Math.Round(v * 100)}%", v => { _subLabelBgOpacity = Math.Round(v, 2); _fastOverlayRenderer?.InvalidateVisual(); }));
-            sec2.Children.Add(MakeSliderRow("Przyciemnienie podkładu mapy (większy kontrast pod siatkę):", 0.0, 0.65, _mapDimmerOpacity, v => $"{(int)Math.Round(v * 100)}%", v => { _mapDimmerOpacity = Math.Round(v, 2); if (_dimmerRect != null) _dimmerRect.Opacity = _mapDimmerOpacity; }));
+
+            // NOWY SUWAK ROZJAŚNIANIA PODKŁADU MAPY (GAMMA SHADOW-LIFT DLA CIEMNEGO LASU I WYDRUKÓW)
+            sec2.Children.Add(MakeSliderRow("☀️ Rozjaśnienie podkładu mapy (Ciemny las / Pod wydruk):", 0.0, 0.85, _mapBrightnessBoost, v => $"+{(int)Math.Round(v * 100)}%", v =>
+            {
+                _mapBrightnessBoost = Math.Round(v, 2);
+                TriggerLiveBrightnessRefresh();
+            }));
+
+            sec2.Children.Add(MakeSliderRow("Przyciemnienie podkładu mapy (większy kontrast pod siatkę):", 0.0, 0.65, _mapDimmerOpacity, v => $"{(int)Math.Round(v * 100)}%", v =>
+            {
+                _mapDimmerOpacity = Math.Round(v, 2);
+                if (_dimmerRect != null) _dimmerRect.Opacity = _mapDimmerOpacity;
+            }));
 
             var haloRow = new UniformGrid { Columns = 2 };
             haloRow.Children.Add(TacticalConfigPanel.FieldBox("Obrys linii (Halo):", TacticalConfigPanel.ComboCtrl(new[] { "Pełny czarny obrys", "Półprzezroczysty obrys", "Brak obrysu" }, _gridHaloMode, win, v => { _gridHaloMode = v; _fastOverlayRenderer?.InvalidateVisual(); })));
@@ -453,7 +498,6 @@ namespace FieldTakHub.Builder.Services
         private static (double X, double Y) LatLonToEpsg3857(double lat, double lon) => GeoportalLidarEngine.LatLonToEpsg3857(lat, lon);
         private static (double Easting, double Northing) LatLonToEpsg2180(double lat, double lon) => GeoportalLidarEngine.LatLonToEpsg2180(lat, lon);
 
-        // PRAWDZIWE WSPÓŁRZĘDNE NATO MGRS / UTM (100% zgodności z ATAK-CIV i odbiornikami Garmin!)
         public static (string FullMgrs, string ShortGrid100m, string KeypadAndQuarter, string UtmText, string WgsText) FormatTacticalPointCoordinates(double lat, double lon)
         {
             int zone = (int)Math.Floor((lon + 180.0) / 6.0) + 1;
@@ -556,7 +600,6 @@ namespace FieldTakHub.Builder.Services
             return FillAllBBoxTokens(fbTpl, GetEpsg3857BBox(tx, ty, zoom), GetEpsg2180TileBBoxNE(tx, ty, zoom), GetEpsg2180TileBBox(tx, ty, zoom), GetEpsg4326TileBBox(tx, ty, zoom), sz, sz);
         }
 
-        // Lekkie wymiary arkusza (max 980 px) dla natychmiastowego doczytywania po zoomie/przewijaniu + mostek dla małych skal (> 1:25 000)
         private static (string PrimaryUrl, string Fallback1Url, string Fallback2Url, double NorthLat, double SouthLat, double EastLon, double WestLon) BuildGeoportalSheetUrls(
             TacticalMapLayerDef layer, double viewW, double viewH, double centerLat, double centerLon, int scaleDenom)
         {
@@ -594,7 +637,6 @@ namespace FieldTakHub.Builder.Services
             string b4326 = string.Create(CultureInfo.InvariantCulture, $"{westLon:0.000000},{southLat:0.000000},{eastLon:0.000000},{northLat:0.000000}");
             string wStr = reqW.ToString(), hStr = reqH.ToString();
 
-            // Przy małych skalach przeglądowych (> 1:26 000, np. 1:100 000) GUGiK WMS wyłącza ortofotomapę — użyj od razu szybkiego serwera przeglądowego!
             if ((layer.Id == "geoportal_std" || layer.Id == "geoportal_hires") && scaleDenom > 26000)
             {
                 string overviewUrl = FillAllBBoxTokens(layer.SecondFallbackUrlTemplate, b3857, b2180NE, b2180EN, b4326, wStr, hStr);
@@ -707,6 +749,8 @@ namespace FieldTakHub.Builder.Services
             var scalingMode = _isPanningMap ? BitmapScalingMode.LowQuality : BitmapScalingMode.HighQuality;
             RenderOptions.SetBitmapScalingMode(targetCanvas, scalingMode);
 
+            bool applyBoost = (targetCanvas == _tileCanvas && _mapBrightnessBoost > 0.01);
+
             foreach (var sh in sheets)
             {
                 if (sh.Bitmap == null || (!string.IsNullOrEmpty(requiredLayerId) && sh.LayerId != requiredLayerId)) continue;
@@ -714,7 +758,18 @@ namespace FieldTakHub.Builder.Services
                 double left = Math.Min(nwPt.X, sePt.X), top = Math.Min(nwPt.Y, sePt.Y), width = Math.Abs(sePt.X - nwPt.X), height = Math.Abs(sePt.Y - nwPt.Y);
                 if (left + width < -viewW * 2 || left > viewW * 3 || top + height < -viewH * 2 || top > viewH * 3 || width < 12 || height < 12 || width > viewW * 25 || height > viewH * 25) continue;
 
-                var img = new Image { Source = sh.Bitmap, Width = width + 0.8, Height = height + 0.8, Stretch = Stretch.Fill, IsHitTestVisible = false };
+                BitmapSource displayBmp = sh.Bitmap;
+                if (applyBoost)
+                {
+                    if (sh.BrightenedBitmap == null || Math.Abs(sh.AppliedBoost - _mapBrightnessBoost) > 0.005)
+                    {
+                        sh.BrightenedBitmap = GeoportalLidarEngine.ApplyGammaAndBrightnessToBitmap(sh.Bitmap, _mapBrightnessBoost) ?? sh.Bitmap;
+                        sh.AppliedBoost = _mapBrightnessBoost;
+                    }
+                    displayBmp = sh.BrightenedBitmap;
+                }
+
+                var img = new Image { Source = displayBmp, Width = width + 0.8, Height = height + 0.8, Stretch = Stretch.Fill, IsHitTestVisible = false };
                 RenderOptions.SetBitmapScalingMode(img, scalingMode);
                 Canvas.SetLeft(img, left); Canvas.SetTop(img, top); targetCanvas.Children.Add(img);
             }
@@ -749,7 +804,8 @@ namespace FieldTakHub.Builder.Services
 
                     if (DecodedImageCache.TryGetValue(url, out var readyBmp))
                     {
-                        var img = new Image { Source = readyBmp, Width = tilePx + 0.9, Height = tilePx + 0.9, Stretch = Stretch.Fill };
+                        var dispBmp = GetGammaBrightenedTile(url, readyBmp);
+                        var img = new Image { Source = dispBmp, Width = tilePx + 0.9, Height = tilePx + 0.9, Stretch = Stretch.Fill };
                         Canvas.SetLeft(img, sx); Canvas.SetTop(img, sy); targetCanvas.Children.Add(img);
                     }
                     else
@@ -760,8 +816,9 @@ namespace FieldTakHub.Builder.Services
                             string parentUrl = BuildTileUrl(layer, wrappedTx / 2, ty / 2, _zoom - 1);
                             if (DecodedImageCache.TryGetValue(parentUrl, out var parentBmp))
                             {
-                                int cw = Math.Max(1, parentBmp.PixelWidth / 2), ch = Math.Max(1, parentBmp.PixelHeight / 2);
-                                var crop = new CroppedBitmap(parentBmp, new Int32Rect((wrappedTx % 2) * cw, (ty % 2) * ch, cw, ch)); crop.Freeze();
+                                var dispParent = GetGammaBrightenedTile(parentUrl, parentBmp);
+                                int cw = Math.Max(1, dispParent.PixelWidth / 2), ch = Math.Max(1, dispParent.PixelHeight / 2);
+                                var crop = new CroppedBitmap(dispParent, new Int32Rect((wrappedTx % 2) * cw, (ty % 2) * ch, cw, ch)); crop.Freeze();
                                 var fbImg = new Image { Source = crop, Width = tilePx + 0.9, Height = tilePx + 0.9, Stretch = Stretch.Fill };
                                 Canvas.SetLeft(fbImg, sx); Canvas.SetTop(fbImg, sy); targetCanvas.Children.Add(fbImg);
                             }
@@ -848,7 +905,6 @@ namespace FieldTakHub.Builder.Services
 
                     var bInfo = BuildGeoportalSheetUrls(reqLayer, w, h, reqLat, reqLon, reqScale);
 
-                    // Zapisz stan od razu po starcie właściwego pobierania, aby Watchdog nie wpadał w nieskończoną pętlę przy skalach przeglądowych!
                     _wmsLoadedCenterLat = reqLat;
                     _wmsLoadedCenterLon = reqLon;
                     _wmsLoadedScaleDenominator = reqScale;
@@ -1176,7 +1232,6 @@ namespace FieldTakHub.Builder.Services
                 }
                 else
                 {
-                    // PRAWDZIWA SIATKA 2D UTM / MGRS ZGODNA 1:1 Z ATAK-CIV I ODBIORNIKAMI GARMIN (UtmGrid2DProjector)
                     double metersPerPixel = GetExactMetersPerPixel();
                     int effectiveStepMeters = _subGridDivision.Contains("250") ? 250 : (_subGridDivision.Contains("500") ? 500 : 100);
                     while (effectiveStepMeters / metersPerPixel < 32.0 && effectiveStepMeters < 10000) effectiveStepMeters *= 2;
@@ -1298,7 +1353,8 @@ namespace FieldTakHub.Builder.Services
                 ["orientation"] = _sheetOrientation, ["sheetFormat"] = _selectedSheet?.Name ?? "", ["layerId"] = _activeLayer?.Id ?? "google_hyb",
                 ["showLidar"] = _showLidarSingleWms, ["lidarOpacity"] = _lidarOpacity, ["coordSystem"] = _coordSystem, ["subGridDivision"] = _subGridDivision,
                 ["gridLabelsMode"] = _gridLabelsMode, ["labelBgStyle"] = _labelBgStyle, ["gridThickness"] = _gridThicknessMultiplier, ["fontScale"] = _fontScaleMultiplier,
-                ["mainGridOpacity"] = _mainGridOpacity, ["subGridOpacity"] = _subGridOpacity, ["subLabelBgOpacity"] = _subLabelBgOpacity, ["mapDimmerOpacity"] = _mapDimmerOpacity,
+                ["mainGridOpacity"] = _mainGridOpacity, ["subGridOpacity"] = _subGridOpacity, ["subLabelBgOpacity"] = _subLabelBgOpacity,
+                ["mapBrightnessBoost"] = _mapBrightnessBoost, ["mapDimmerOpacity"] = _mapDimmerOpacity,
                 ["mainGridColorHex"] = _mainGridColorHex, ["subGridLineColorHex"] = _subGridLineColorHex, ["subLabelTextColorHex"] = _subLabelTextColorHex, ["subLabelBgColorHex"] = _subLabelBgColorHex,
                 ["gridHaloMode"] = _gridHaloMode, ["aoOutPattern"] = _aoOutPattern, ["aoOutMaskOpacity"] = _aoOutMaskOpacity, ["showAllObjectLabels"] = _showAllObjectLabels,
                 ["showRotationHandlesOnMap"] = _showRotationHandlesOnMap, ["showNorthArrow"] = _showNorthArrow, ["showScaleBar"] = _showScaleBar, ["showLegend"] = _showLegend, ["showNatoSymbolsInLegend"] = _showNatoSymbolsInLegend
@@ -1335,6 +1391,11 @@ namespace FieldTakHub.Builder.Services
                 if (double.TryParse(root["mainGridOpacity"]?.ToString(), NumberStyles.Any, CultureInfo.InvariantCulture, out double mgo)) _mainGridOpacity = mgo;
                 if (double.TryParse(root["subGridOpacity"]?.ToString(), NumberStyles.Any, CultureInfo.InvariantCulture, out double sgo)) _subGridOpacity = sgo;
                 if (double.TryParse(root["subLabelBgOpacity"]?.ToString(), NumberStyles.Any, CultureInfo.InvariantCulture, out double slbo)) _subLabelBgOpacity = slbo;
+                if (double.TryParse(root["mapBrightnessBoost"]?.ToString(), NumberStyles.Any, CultureInfo.InvariantCulture, out double mbb))
+                {
+                    _mapBrightnessBoost = Math.Clamp(mbb, 0.0, 0.85);
+                    GeoportalLidarEngine.ActiveBrightnessBoost = _mapBrightnessBoost;
+                }
                 if (double.TryParse(root["mapDimmerOpacity"]?.ToString(), NumberStyles.Any, CultureInfo.InvariantCulture, out double mdo)) _mapDimmerOpacity = mdo;
                 if (root["mainGridColorHex"] != null) _mainGridColorHex = root["mainGridColorHex"].ToString();
                 if (root["subGridLineColorHex"] != null) _subGridLineColorHex = root["subGridLineColorHex"].ToString();
@@ -1368,7 +1429,7 @@ namespace FieldTakHub.Builder.Services
                     }
                 }
 
-                GlyphCache.Clear(); ImportExtraMapUiState(root);
+                GlyphCache.Clear(); BrightenedTileCache.Clear(); ImportExtraMapUiState(root);
                 if (_fmtComboBox != null) _fmtComboBox.SelectedItem = _selectedSheet;
                 if (_oriComboBox != null) _oriComboBox.SelectedItem = _sheetOrientation;
                 if (_layerComboBox != null) _layerComboBox.SelectedItem = _activeLayer;

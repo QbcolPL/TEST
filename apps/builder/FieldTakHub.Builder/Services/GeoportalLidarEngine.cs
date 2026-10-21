@@ -139,10 +139,12 @@ namespace FieldTakHub.Builder.Services
         private static readonly string DiskCacheDir = InitializeDiskCacheDirectory();
         private static volatile int _preferredLidarCandidateIdx = 0;
 
-        // Dwie niezależne pule połączeń HTTP: Ortofotomapa (FastHttp) i LiDAR (LidarHttp) nigdy nie blokują się wzajemnie!
         public static HttpClient FastHttp { get; private set; } = CreateDedicatedHttpClient(9);
         public static HttpClient LidarHttp { get; private set; } = CreateDedicatedHttpClient(8);
         public static string LastLidarDiagnosticStatus { get; private set; } = "Gotowy";
+
+        // Globalny współczynnik rozjaśniania cieni/gammy (ustawiany suwakiem w Sekcji 2)
+        public static double ActiveBrightnessBoost { get; set; } = 0.0;
 
         private static string InitializeDiskCacheDirectory()
         {
@@ -255,6 +257,64 @@ namespace FieldTakHub.Builder.Services
             }
         }
 
+        // Rozjaśnia ciemne partie mapy (szczególnie gęste lasy i cienie) za pomocą nieliniowej krzywej Gamma Shadow-Lift bez przepalania jasnych pól!
+        public static BitmapSource ApplyGammaAndBrightnessToBitmap(BitmapSource srcBmp, double boostAmount)
+        {
+            if (srcBmp == null || boostAmount <= 0.01) return srcBmp;
+            try
+            {
+                BitmapSource frame = srcBmp;
+                if (frame.Format != PixelFormats.Bgra32 && frame.Format != PixelFormats.Pbgra32)
+                {
+                    var conv = new FormatConvertedBitmap();
+                    conv.BeginInit();
+                    conv.Source = frame;
+                    conv.DestinationFormat = PixelFormats.Bgra32;
+                    conv.EndInit();
+                    conv.Freeze();
+                    frame = conv;
+                }
+
+                int w = frame.PixelWidth, h = frame.PixelHeight, stride = w * 4;
+                byte[] px = new byte[h * stride];
+                frame.CopyPixels(px, stride, 0);
+
+                byte[] lut = BuildGammaShadowLiftLut(boostAmount);
+                int len = px.Length;
+                for (int i = 0; i + 3 < len; i += 4)
+                {
+                    if (px[i + 3] > 0)
+                    {
+                        px[i]     = lut[px[i]];     // B
+                        px[i + 1] = lut[px[i + 1]]; // G
+                        px[i + 2] = lut[px[i + 2]]; // R
+                    }
+                }
+
+                var outBmp = BitmapSource.Create(w, h, 96, 96, PixelFormats.Bgra32, null, px, stride);
+                outBmp.Freeze();
+                return outBmp;
+            }
+            catch { return srcBmp; }
+        }
+
+        public static byte[] BuildGammaShadowLiftLut(double boostAmount)
+        {
+            double clamped = Math.Clamp(boostAmount, 0.0, 1.0);
+            // Gamma < 1.0 wyciąga szczegóły z ciemnego lasu, a delikatny offset podnosi najgłębsze czernie pod wydruk
+            double gamma = 1.0 / (1.0 + clamped * 1.35);
+            double blackLift = clamped * 36.0;
+
+            byte[] lut = new byte[256];
+            for (int v = 0; v < 256; v++)
+            {
+                double norm = v / 255.0;
+                double lifted = Math.Pow(norm, gamma) * (255.0 - blackLift) + blackLift;
+                lut[v] = (byte)Math.Clamp((int)Math.Round(lifted), 0, 255);
+            }
+            return lut;
+        }
+
         public static (double Easting, double Northing) LatLonToEpsg2180(double lat, double lon)
         {
             const double a = 6378137.0;
@@ -291,14 +351,13 @@ namespace FieldTakHub.Builder.Services
         public static bool IsValidImageBytes(byte[] data)
         {
             if (data == null || data.Length < 128) return false;
-            if (data[0] == 0xFF && data[1] == 0xD8 && data[2] == 0xFF) return true; // JPEG
-            if (data[0] == 0x89 && data[1] == 0x50 && data[2] == 0x4E && data[3] == 0x47) return true; // PNG
-            if (data[0] == 0x47 && data[1] == 0x49 && data[2] == 0x46) return true; // GIF
-            if (data[0] == 0x52 && data[1] == 0x49 && data[2] == 0x46 && data[3] == 0x46) return true; // WEBP
+            if (data[0] == 0xFF && data[1] == 0xD8 && data[2] == 0xFF) return true;
+            if (data[0] == 0x89 && data[1] == 0x50 && data[2] == 0x4E && data[3] == 0x47) return true;
+            if (data[0] == 0x47 && data[1] == 0x49 && data[2] == 0x46) return true;
+            if (data[0] == 0x52 && data[1] == 0x49 && data[2] == 0x46 && data[3] == 0x46) return true;
             return false;
         }
 
-        // Dekoduje PNG/JPEG (w tym 8-bitowe PNG z kanałem przezroczystości zwracane przez GUGiK ShadedRelief) na biały podkład w formacie BGRA32
         private static bool TryDecodeToBgra32Pixels(byte[] rawBytes, int targetW, int targetH, out byte[] bgraPixels)
         {
             bgraPixels = null;
@@ -501,6 +560,7 @@ namespace FieldTakHub.Builder.Services
             catch { return stdBmp; }
         }
 
+        // Jaśniejszy balans światłocienia 3D dla LiDARu: mocniejsze białe podświetlenie stoków i brak zaczerniania ciemnych lasów!
         private static void ApplyHillshadeContrastAndAlphaInPlace(byte[] bgraPixels, int width, int height, bool asTransparentOverlay)
         {
             if (bgraPixels == null || bgraPixels.Length < 16) return;
@@ -551,40 +611,43 @@ namespace FieldTakHub.Builder.Services
             byte[] lutR = new byte[256];
             byte[] lutA = new byte[256];
 
+            byte[] gammaLift = ActiveBrightnessBoost > 0.01 ? BuildGammaShadowLiftLut(ActiveBrightnessBoost) : null;
+
             for (int rawLum = 0; rawLum < 256; rawLum++)
             {
                 int stretched = (int)Math.Clamp(((rawLum - lowClip) / span) * 255.0, 0.0, 255.0);
                 if (!asTransparentOverlay)
                 {
                     byte v = (byte)stretched;
+                    if (gammaLift != null) v = gammaLift[v];
                     lutB[rawLum] = v; lutG[rawLum] = v; lutR[rawLum] = v; lutA[rawLum] = 255;
                 }
                 else
                 {
-                    int deltaFromNeutral = stretched - 155;
-                    if (deltaFromNeutral < -6)
+                    int deltaFromNeutral = stretched - 152;
+                    if (deltaFromNeutral < -8)
                     {
                         int shadowStrength = -deltaFromNeutral;
-                        lutB[rawLum] = 6;
-                        lutG[rawLum] = 8;
-                        lutR[rawLum] = 10;
-                        lutA[rawLum] = (byte)Math.Clamp((int)(shadowStrength * 1.75) + 32, 34, 252);
+                        lutB[rawLum] = 8;
+                        lutG[rawLum] = 10;
+                        lutR[rawLum] = 12;
+                        lutA[rawLum] = (byte)Math.Clamp((int)(shadowStrength * 1.45) + 22, 24, 215);
                     }
-                    else if (deltaFromNeutral > 10)
+                    else if (deltaFromNeutral > 8)
                     {
+                        // Wzmocnione jasne zbocza 3D, aby rzeźba terenu była wyraźnie widoczna na ciemnym lesie!
                         int lightStrength = deltaFromNeutral;
-                        lutB[rawLum] = 242;
-                        lutG[rawLum] = 248;
+                        lutB[rawLum] = 248;
+                        lutG[rawLum] = 252;
                         lutR[rawLum] = 255;
-                        lutA[rawLum] = (byte)Math.Clamp((int)(lightStrength * 1.40) + 20, 22, 170);
+                        lutA[rawLum] = (byte)Math.Clamp((int)(lightStrength * 1.65) + 26, 28, 195);
                     }
                     else
                     {
-                        byte gVal = (byte)stretched;
-                        lutB[rawLum] = gVal;
-                        lutG[rawLum] = gVal;
-                        lutR[rawLum] = gVal;
-                        lutA[rawLum] = 22;
+                        lutB[rawLum] = 0;
+                        lutG[rawLum] = 0;
+                        lutR[rawLum] = 0;
+                        lutA[rawLum] = 0;
                     }
                 }
             }
@@ -636,7 +699,6 @@ namespace FieldTakHub.Builder.Services
             catch { return srcBmp; }
         }
 
-        // Oficjalne, zweryfikowane adresy GUGiK PZGIK/NMT/GRID1/WMS/ShadedRelief (FORMAT=image/png&TRANSPARENT=TRUE i STYLES=) + Esri World Hillshade dla małych skal przeglądowych!
         public static (string Label, string Url)[] BuildLidarCandidateUrlsWithLabels(double northLat, double southLat, double eastLon, double westLon, int reqW, int reqH)
         {
             var (e1, n1) = LatLonToEpsg2180(southLat, westLon);
@@ -656,33 +718,26 @@ namespace FieldTakHub.Builder.Services
             double spanN = Math.Max(50.0, maxN - minN);
             double boxAspect = Math.Clamp(spanE / spanN, 0.35, 2.8);
 
-            // Dobierz rozmiar zapytania tak, aby skala wewnętrzna na serwerze GUGiK wynosiła <= 1:3200 (gwarantuje 100% widoczności warstwy Raster!)
             int wmsW = Math.Clamp((int)Math.Round(spanE / (3200.0 * 0.00028)), 512, 1650);
             int wmsH = Math.Clamp((int)Math.Round(wmsW / boxAspect), 380, 1650);
 
             return new (string Label, string Url)[]
             {
-                // 1. Oficjalny GUGiK WMS 1.3.0 EPSG:2180 (PNG Transparent, STYLES= puste — jak w oficjalnej dokumentacji GUGiK i QGIS)
                 ("GUGiK NMT GRID1 (EPSG:2180 PNG)",
                  $"https://mapy.geoportal.gov.pl/wss/service/PZGIK/NMT/GRID1/WMS/ShadedRelief?SERVICE=WMS&VERSION=1.3.0&REQUEST=GetMap&FORMAT=image/png&TRANSPARENT=TRUE&LAYERS=Raster&STYLES=&CRS=EPSG:2180&BBOX={bbox2180NE}&WIDTH={wmsW}&HEIGHT={wmsH}"),
 
-                // 2. Oficjalny GUGiK WMS 1.3.0 CRS:84 (PNG Transparent — używany przez OsmAnd)
                 ("GUGiK NMT GRID1 (CRS:84 PNG)",
                  $"https://mapy.geoportal.gov.pl/wss/service/PZGIK/NMT/GRID1/WMS/ShadedRelief?SERVICE=WMS&VERSION=1.3.0&REQUEST=GetMap&FORMAT=image/png&TRANSPARENT=TRUE&LAYERS=Raster&STYLES=&CRS=CRS:84&BBOX={bboxCrs84}&WIDTH={wmsW}&HEIGHT={wmsH}"),
 
-                // 3. Oficjalny GUGiK WMS 1.1.1 EPSG:2180 (Easting, Northing)
                 ("GUGiK NMT GRID1 (WMS 1.1.1 2180)",
                  $"https://mapy.geoportal.gov.pl/wss/service/PZGIK/NMT/GRID1/WMS/ShadedRelief?SERVICE=WMS&VERSION=1.1.1&REQUEST=GetMap&FORMAT=image/png&TRANSPARENT=TRUE&LAYERS=Raster&STYLES=&SRS=EPSG:2180&BBOX={bbox2180EN}&WIDTH={wmsW}&HEIGHT={wmsH}"),
 
-                // 4. Oficjalny GUGiK WMS 1.1.1 EPSG:3857 (Web Mercator)
                 ("GUGiK NMT GRID1 (EPSG:3857)",
                  $"https://mapy.geoportal.gov.pl/wss/service/PZGIK/NMT/GRID1/WMS/ShadedRelief?SERVICE=WMS&VERSION=1.1.1&REQUEST=GetMap&FORMAT=image/png&TRANSPARENT=TRUE&LAYERS=Raster&STYLES=&SRS=EPSG:3857&BBOX={bbox3857}&WIDTH={wmsW}&HEIGHT={wmsH}"),
 
-                // 5. Zapasowy serwer rzeźby terenu Esri World Hillshade (działa w każdej skali, również 1:10 000 – 1:100 000!)
                 ("World Hillshade (Fallback)",
                  $"https://ibasemaps-api.arcgis.com/arcgis/rest/services/Elevation/World_Hillshade/MapServer/export?bbox={bbox3857}&bboxSR=3857&imageSR=3857&size={reqW},{reqH}&format=png&transparent=true&f=image"),
 
-                // 6. Drugi serwer ArcGIS Online World Hillshade Export
                 ("ArcGIS Elevation Hillshade",
                  $"https://services.arcgisonline.com/arcgis/rest/services/Elevation/World_Hillshade/MapServer/export?bbox={bbox3857}&bboxSR=3857&imageSR=3857&size={reqW},{reqH}&format=jpg&f=image")
             };
@@ -725,7 +780,7 @@ namespace FieldTakHub.Builder.Services
                     try
                     {
                         using var reqCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-                        reqCts.CancelAfter(3800); // Krótki limit 3.8s na pojedynczy serwer — nigdy nie zawiesi kolejki!
+                        reqCts.CancelAfter(3800);
 
                         byte[] bytes = await LidarHttp.GetByteArrayAsync(cand.Url, reqCts.Token);
                         if (TryDecodeToBgra32Pixels(bytes, targetW, targetH, out byte[] bgraPx) &&
@@ -753,7 +808,6 @@ namespace FieldTakHub.Builder.Services
             }
         }
 
-        // Szybki kompozytor LiDAR: maksymalnie 1x1 (do 2.2 km) lub 2x2 (powyżej 2.2 km) — brak przeciążania serwera GUGiK 9 sektorami!
         public static async Task<BitmapSource> FetchCompositeLidarSheetAsync(
             HttpClient http,
             double northLat,
@@ -769,7 +823,6 @@ namespace FieldTakHub.Builder.Services
             var (e2, _) = LatLonToEpsg2180(northLat, eastLon);
             double totalWidthMeters = Math.Abs(e2 - e1);
 
-            // Dla małych skal przeglądowych (> 5.5 km) lub pojedynczych arkuszy (<= 2.2 km) pobieraj 1 arkusz (1x1); dla średnich (2.2–5.5 km) 2x2
             int gridN = (totalWidthMeters > 2200 && totalWidthMeters <= 5500) ? 2 : 1;
 
             int sectorPxW = Math.Clamp((int)Math.Round(viewW / gridN), 420, 820);
