@@ -17,7 +17,6 @@ using System.Windows.Media.Imaging;
 
 namespace FieldTakHub.Builder.Services
 {
-    // Precyzyjny dwuwymiarowy projektor siatki wojskowej UTM / MGRS (bez sztucznego punktu refEasting/refNorthing)
     internal static class UtmGrid2DProjector
     {
         public static void LatLonToUtm(double lat, double lon, int forcedZone, out double easting, out double northing)
@@ -88,17 +87,10 @@ namespace FieldTakHub.Builder.Services
             lon = lonOrigin + lonRad * 180.0 / Math.PI;
         }
 
-        // Wylicza pełny zakres siatki UTM z WSZYSTKICH 4 narożników arkusza (NW, NE, SW, SE), gwarantując 100% pokrycia ekranu bez urywania linii!
         public static void ComputeSheetUtmEnvelope(
             Func<double, double, (double Lat, double Lon)> screenToLatLon,
-            double viewW,
-            double viewH,
-            int utmZone,
-            int stepMeters,
-            out double firstEasting,
-            out double lastEasting,
-            out double firstNorthing,
-            out double lastNorthing)
+            double viewW, double viewH, int utmZone, int stepMeters,
+            out double firstEasting, out double lastEasting, out double firstNorthing, out double lastNorthing)
         {
             var nw = screenToLatLon(0, 0);
             var ne = screenToLatLon(viewW, 0);
@@ -115,36 +107,26 @@ namespace FieldTakHub.Builder.Services
             double minN = Math.Min(Math.Min(nNW, nNE), Math.Min(nSW, nSE));
             double maxN = Math.Max(Math.Max(nNW, nNE), Math.Max(nSW, nSE));
 
-            int pad = Math.Max(100, stepMeters) * 4;
+            int pad = Math.Max(200, stepMeters * 6);
             firstEasting  = Math.Floor((minE - pad) / stepMeters) * stepMeters;
             lastEasting   = Math.Ceiling((maxE + pad) / stepMeters) * stepMeters;
             firstNorthing = Math.Floor((minN - pad) / stepMeters) * stepMeters;
             lastNorthing  = Math.Ceiling((maxN + pad) / stepMeters) * stepMeters;
         }
 
-        // Wyznacza dokładny punkt X przecięcia linii pionowej UTM z poziomym pasem etykiet przy górnej krawędzi (y = targetY)
         public static bool TryGetVerticalLineLabelPoint(Point pTop, Point pBot, double targetY, double canvasW, out double intersectX)
         {
             intersectX = pTop.X;
             double dy = pBot.Y - pTop.Y;
-            if (Math.Abs(dy) > 0.01)
-            {
-                double t = (targetY - pTop.Y) / dy;
-                intersectX = pTop.X + t * (pBot.X - pTop.X);
-            }
+            if (Math.Abs(dy) > 0.01) intersectX = pTop.X + ((targetY - pTop.Y) / dy) * (pBot.X - pTop.X);
             return intersectX >= 10.0 && intersectX <= canvasW - 10.0;
         }
 
-        // Wyznacza dokładny punkt Y przecięcia linii poziomej UTM z pionowym pasem etykiet przy lewej krawędzi (x = targetX)
         public static bool TryGetHorizontalLineLabelPoint(Point pLeft, Point pRight, double targetX, double canvasH, out double intersectY)
         {
             intersectY = pLeft.Y;
             double dx = pRight.X - pLeft.X;
-            if (Math.Abs(dx) > 0.01)
-            {
-                double t = (targetX - pLeft.X) / dx;
-                intersectY = pLeft.Y + t * (pRight.Y - pLeft.Y);
-            }
+            if (Math.Abs(dx) > 0.01) intersectY = pLeft.Y + ((targetX - pLeft.X) / dx) * (pRight.Y - pLeft.Y);
             return intersectY >= 10.0 && intersectY <= canvasH - 10.0;
         }
     }
@@ -152,10 +134,11 @@ namespace FieldTakHub.Builder.Services
     internal static class GeoportalLidarEngine
     {
         private static readonly ConcurrentDictionary<string, byte[]> RawBgraSectorCache = new ConcurrentDictionary<string, byte[]>();
+        private static readonly SemaphoreSlim LidarThrottle = new SemaphoreSlim(6, 6);
         private static readonly string DiskCacheDir = InitializeDiskCacheDirectory();
-        private static volatile int _preferredCandidateIndex = 0;
 
-        public static HttpClient FastHttp { get; private set; } = CreateCleanHttp11Client();
+        // Stabilny klient HttpClientHandler z wersji, w której potwierdziłeś działanie LiDARu i Geoportalu
+        public static HttpClient FastHttp { get; private set; } = CreateStableHttpClient();
         public static string LastLidarDiagnosticStatus { get; private set; } = "Gotowy";
 
         private static string InitializeDiskCacheDirectory()
@@ -165,61 +148,38 @@ namespace FieldTakHub.Builder.Services
                 string dir = Path.Combine(
                     Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
                     "FieldTakHub",
-                    "GeoCacheV24");
+                    "GeoCacheV25");
                 Directory.CreateDirectory(dir);
                 return dir;
             }
-            catch
-            {
-                return "";
-            }
+            catch { return ""; }
         }
 
-        private static HttpClient CreateCleanHttp11Client()
+        private static HttpClient CreateStableHttpClient()
         {
             try
             {
-                var handler = new SocketsHttpHandler
+                var handler = new HttpClientHandler
                 {
                     AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate,
-                    PooledConnectionLifetime = TimeSpan.FromSeconds(45),
-                    PooledConnectionIdleTimeout = TimeSpan.FromSeconds(20),
-                    MaxConnectionsPerServer = 8,
-                    EnableMultipleHttp2Connections = false,
-                    ConnectTimeout = TimeSpan.FromSeconds(3.5)
+                    ServerCertificateCustomValidationCallback = (s, c, ch, e) => true,
+                    MaxConnectionsPerServer = 28
                 };
-                handler.SslOptions.RemoteCertificateValidationCallback = (s, c, ch, e) => true;
-
-                var client = new HttpClient(handler)
-                {
-                    Timeout = TimeSpan.FromSeconds(8),
-                    DefaultRequestVersion = HttpVersion.Version11,
-                    DefaultVersionPolicy = HttpVersionPolicy.RequestVersionExact
-                };
-                client.DefaultRequestHeaders.UserAgent.ParseAdd("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36");
-                client.DefaultRequestHeaders.Referrer = new Uri("https://mapy.geoportal.gov.pl/");
-                client.DefaultRequestHeaders.Accept.ParseAdd("image/jpeg,image/png,image/*;q=0.9,*/*;q=0.5");
-                return client;
+                var c = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(14) };
+                c.DefaultRequestHeaders.UserAgent.ParseAdd("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36");
+                c.DefaultRequestHeaders.Referrer = new Uri("https://mapy.geoportal.gov.pl/");
+                c.DefaultRequestHeaders.Accept.ParseAdd("image/jpeg,image/png,image/*;q=0.9,*/*;q=0.5");
+                return c;
             }
             catch
             {
-                return new HttpClient { Timeout = TimeSpan.FromSeconds(8) };
+                return new HttpClient { Timeout = TimeSpan.FromSeconds(14) };
             }
         }
 
         public static void ResetHttpConnectionPool()
         {
-            try
-            {
-                var old = FastHttp;
-                FastHttp = CreateCleanHttp11Client();
-                _ = Task.Run(async () =>
-                {
-                    await Task.Delay(5000);
-                    try { old?.Dispose(); } catch { }
-                });
-            }
-            catch { }
+            try { FastHttp = CreateStableHttpClient(); } catch { }
         }
 
         public static byte[] TryReadDiskCache(string urlOrKey)
@@ -260,7 +220,6 @@ namespace FieldTakHub.Builder.Services
         public static void ClearCache(bool clearDiskCacheToo = false)
         {
             RawBgraSectorCache.Clear();
-            ResetHttpConnectionPool();
             if (clearDiskCacheToo && !string.IsNullOrEmpty(DiskCacheDir) && Directory.Exists(DiskCacheDir))
             {
                 _ = Task.Run(() =>
@@ -313,10 +272,10 @@ namespace FieldTakHub.Builder.Services
         public static bool IsValidImageBytes(byte[] data)
         {
             if (data == null || data.Length < 128) return false;
-            if (data[0] == 0xFF && data[1] == 0xD8 && data[2] == 0xFF) return true;
-            if (data[0] == 0x89 && data[1] == 0x50 && data[2] == 0x4E && data[3] == 0x47) return true;
-            if (data[0] == 0x47 && data[1] == 0x49 && data[2] == 0x46) return true;
-            if (data[0] == 0x52 && data[1] == 0x49 && data[2] == 0x46 && data[3] == 0x46) return true;
+            if (data[0] == 0xFF && data[1] == 0xD8 && data[2] == 0xFF) return true; // JPEG
+            if (data[0] == 0x89 && data[1] == 0x50 && data[2] == 0x4E && data[3] == 0x47) return true; // PNG
+            if (data[0] == 0x47 && data[1] == 0x49 && data[2] == 0x46) return true; // GIF
+            if (data[0] == 0x52 && data[1] == 0x49 && data[2] == 0x46 && data[3] == 0x46) return true; // WEBP
             return false;
         }
 
@@ -363,17 +322,14 @@ namespace FieldTakHub.Builder.Services
                 frame.CopyPixels(bgraPixels, stride, 0);
                 return true;
             }
-            catch
-            {
-                return false;
-            }
+            catch { return false; }
         }
 
         private static bool HasValidHillshadeSignal(byte[] bgraPixels, int width, int height)
         {
             if (bgraPixels == null || width < 8 || height < 8) return false;
             int stride = width * 4;
-            int grid = 14;
+            int grid = 20;
             int emptyOrWhiteCount = 0, total = 0;
             double sumLum = 0, sumLumSq = 0;
             byte minLum = 255, maxLum = 0;
@@ -406,7 +362,7 @@ namespace FieldTakHub.Builder.Services
             double mean = sumLum / total;
             double variance = Math.Max(0.0, (sumLumSq / total) - (mean * mean));
 
-            if (emptyRatio >= 0.97) return false;
+            if (emptyRatio >= 0.96) return false;
             if ((maxLum - minLum) < 2 && mean > 240.0) return false;
             if (variance < 0.25 && mean > 242.0) return false;
             return true;
@@ -436,13 +392,105 @@ namespace FieldTakHub.Builder.Services
             catch { return false; }
         }
 
+        // Wykrywa częściowe białe plamy braku pokrycia na warstwie Ortofotomapa HIGH-RES (np. gdy 70% arkusza jest białe poza granicą miasta!)
+        public static bool HasPartialWhiteNoDataZone(BitmapSource bmp, double whiteRatioThreshold = 0.08)
+        {
+            if (bmp == null || bmp.PixelWidth < 8 || bmp.PixelHeight < 8) return true;
+            try
+            {
+                BitmapSource src = bmp;
+                if (src.Format != PixelFormats.Bgra32 && src.Format != PixelFormats.Pbgra32)
+                {
+                    var conv = new FormatConvertedBitmap();
+                    conv.BeginInit();
+                    conv.Source = src;
+                    conv.DestinationFormat = PixelFormats.Bgra32;
+                    conv.EndInit();
+                    conv.Freeze();
+                    src = conv;
+                }
+                int w = src.PixelWidth, h = src.PixelHeight, stride = w * 4;
+                byte[] px = new byte[h * stride];
+                src.CopyPixels(px, stride, 0);
+
+                int grid = 24, whiteOrEmpty = 0, total = 0;
+                for (int r = 1; r < grid; r++)
+                {
+                    int y = (h * r) / grid;
+                    for (int c = 1; c < grid; c++)
+                    {
+                        int x = (w * c) / grid;
+                        int idx = y * stride + x * 4;
+                        if (idx + 3 < px.Length)
+                        {
+                            total++;
+                            byte b = px[idx], g = px[idx + 1], red = px[idx + 2], a = px[idx + 3];
+                            if (a < 15 || (red >= 252 && g >= 252 && b >= 252))
+                                whiteOrEmpty++;
+                        }
+                    }
+                }
+                return total == 0 || ((double)whiteOrEmpty / total) >= whiteRatioThreshold;
+            }
+            catch { return true; }
+        }
+
+        // Łączy arkusz Ortofotomapy HIGH-RES (5 cm) z arkuszem Standard (25 cm), zastępując białe plamy braku danych obrazem Standard!
+        public static BitmapSource MergeHighResWithStandardFallback(BitmapSource hiResBmp, BitmapSource stdBmp)
+        {
+            if (hiResBmp == null) return stdBmp;
+            if (stdBmp == null) return hiResBmp;
+            try
+            {
+                int w = stdBmp.PixelWidth, h = stdBmp.PixelHeight, stride = w * 4;
+                BitmapSource sFrame = stdBmp;
+                if (sFrame.Format != PixelFormats.Bgra32)
+                {
+                    var c = new FormatConvertedBitmap(); c.BeginInit(); c.Source = sFrame; c.DestinationFormat = PixelFormats.Bgra32; c.EndInit(); c.Freeze(); sFrame = c;
+                }
+
+                BitmapSource hFrame = hiResBmp;
+                if (hFrame.PixelWidth != w || hFrame.PixelHeight != h)
+                {
+                    var tb = new TransformedBitmap(); tb.BeginInit(); tb.Source = hFrame; tb.Transform = new ScaleTransform((double)w / hFrame.PixelWidth, (double)h / hFrame.PixelHeight); tb.EndInit(); tb.Freeze(); hFrame = tb;
+                }
+                if (hFrame.Format != PixelFormats.Bgra32)
+                {
+                    var c = new FormatConvertedBitmap(); c.BeginInit(); c.Source = hFrame; c.DestinationFormat = PixelFormats.Bgra32; c.EndInit(); c.Freeze(); hFrame = c;
+                }
+
+                byte[] stdPx = new byte[h * stride];
+                byte[] hiPx = new byte[h * stride];
+                sFrame.CopyPixels(stdPx, stride, 0);
+                hFrame.CopyPixels(hiPx, stride, 0);
+
+                for (int i = 0; i + 3 < hiPx.Length; i += 4)
+                {
+                    byte b = hiPx[i], g = hiPx[i + 1], r = hiPx[i + 2], a = hiPx[i + 3];
+                    // Jeśli piksel w High-Res nie jest białą plamą No-Data, użyj ostrego piksela High-Res 5cm
+                    if (a >= 20 && !(r >= 250 && g >= 250 && b >= 250))
+                    {
+                        stdPx[i] = b;
+                        stdPx[i + 1] = g;
+                        stdPx[i + 2] = r;
+                        stdPx[i + 3] = 255;
+                    }
+                }
+
+                var merged = BitmapSource.Create(w, h, 96, 96, PixelFormats.Bgra32, null, stdPx, stride);
+                merged.Freeze();
+                return merged;
+            }
+            catch { return stdBmp; }
+        }
+
         private static void ApplyHillshadeContrastAndAlphaInPlace(byte[] bgraPixels, int width, int height, bool asTransparentOverlay)
         {
             if (bgraPixels == null || bgraPixels.Length < 16) return;
 
             int[] hist = new int[256];
             int validSamples = 0;
-            int step = Math.Max(1, (bgraPixels.Length / 4) / 4000) * 4;
+            int step = Math.Max(1, (bgraPixels.Length / 4) / 6000) * 4;
 
             for (int i = 0; i + 3 < bgraPixels.Length; i += step)
             {
@@ -583,25 +631,13 @@ namespace FieldTakHub.Builder.Services
 
             string bbox2180NE = string.Create(CultureInfo.InvariantCulture, $"{minN:0.00},{minE:0.00},{maxN:0.00},{maxE:0.00}");
             string bbox2180EN = string.Create(CultureInfo.InvariantCulture, $"{minE:0.00},{minN:0.00},{maxE:0.00},{maxN:0.00}");
+            string bbox4326EN = string.Create(CultureInfo.InvariantCulture, $"{westLon:0.000000},{southLat:0.000000},{eastLon:0.000000},{northLat:0.000000}");
             string bbox3857   = string.Create(CultureInfo.InvariantCulture, $"{minX3857:0.00},{minY3857:0.00},{maxX3857:0.00},{maxY3857:0.00}");
 
             double spanMeters = Math.Max(80.0, maxE - minE);
             double aspect = Math.Max(0.3, (double)reqW / Math.Max(1, reqH));
-            int wmsW = Math.Clamp((int)Math.Round(spanMeters / (3400.0 * 0.00028)), 380, 1180);
-            int wmsH = Math.Clamp((int)Math.Round(wmsW / aspect), 300, 1180);
-
-            if (spanMeters > 3600.0)
-            {
-                return new (string Label, string Url)[]
-                {
-                    ("EVRF2007 GRID5 (EPSG:2180)",
-                     $"https://mapy.geoportal.gov.pl/wss/service/PZGIK/NMT/GRID5/WMS/ShadedRelief_EVRF2007?SERVICE=WMS&VERSION=1.1.1&REQUEST=GetMap&LAYERS=Raster&STYLES=&SRS=EPSG:2180&BBOX={bbox2180EN}&WIDTH={wmsW}&HEIGHT={wmsH}&FORMAT=image/jpeg"),
-                    ("KRON86 GRID5 (EPSG:2180)",
-                     $"https://mapy.geoportal.gov.pl/wss/service/PZGIK/NMT/GRID5/WMS/ShadedRelief?SERVICE=WMS&VERSION=1.1.1&REQUEST=GetMap&LAYERS=Raster&STYLES=&SRS=EPSG:2180&BBOX={bbox2180EN}&WIDTH={wmsW}&HEIGHT={wmsH}&FORMAT=image/jpeg"),
-                    ("EVRF2007 GRID1 (EPSG:2180)",
-                     $"https://mapy.geoportal.gov.pl/wss/service/PZGIK/NMT/GRID1/WMS/ShadedRelief_EVRF2007?SERVICE=WMS&VERSION=1.1.1&REQUEST=GetMap&LAYERS=Raster&STYLES=&SRS=EPSG:2180&BBOX={bbox2180EN}&WIDTH={wmsW}&HEIGHT={wmsH}&FORMAT=image/jpeg")
-                };
-            }
+            int wmsW = Math.Clamp((int)Math.Round(spanMeters / (3000.0 * 0.00028)), 420, 1500);
+            int wmsH = Math.Clamp((int)Math.Round(wmsW / aspect), 320, 1500);
 
             return new (string Label, string Url)[]
             {
@@ -614,67 +650,75 @@ namespace FieldTakHub.Builder.Services
                 ("EVRF2007 GRID1 (WMS 1.3.0 EPSG:2180)",
                  $"https://mapy.geoportal.gov.pl/wss/service/PZGIK/NMT/GRID1/WMS/ShadedRelief_EVRF2007?SERVICE=WMS&VERSION=1.3.0&REQUEST=GetMap&LAYERS=Raster&STYLES=default&CRS=EPSG:2180&BBOX={bbox2180NE}&WIDTH={wmsW}&HEIGHT={wmsH}&FORMAT=image/jpeg"),
 
+                ("KRON86 GRID1 (WMS 1.3.0 EPSG:2180)",
+                 $"https://mapy.geoportal.gov.pl/wss/service/PZGIK/NMT/GRID1/WMS/ShadedRelief?SERVICE=WMS&VERSION=1.3.0&REQUEST=GetMap&LAYERS=Raster&STYLES=default&CRS=EPSG:2180&BBOX={bbox2180NE}&WIDTH={wmsW}&HEIGHT={wmsH}&FORMAT=image/jpeg"),
+
+                ("EVRF2007 GRID1 (EPSG:4326)",
+                 $"https://mapy.geoportal.gov.pl/wss/service/PZGIK/NMT/GRID1/WMS/ShadedRelief_EVRF2007?SERVICE=WMS&VERSION=1.1.1&REQUEST=GetMap&LAYERS=Raster&STYLES=&SRS=EPSG:4326&BBOX={bbox4326EN}&WIDTH={wmsW}&HEIGHT={wmsH}&FORMAT=image/jpeg"),
+
+                ("KRON86 GRID1 (EPSG:4326)",
+                 $"https://mapy.geoportal.gov.pl/wss/service/PZGIK/NMT/GRID1/WMS/ShadedRelief?SERVICE=WMS&VERSION=1.1.1&REQUEST=GetMap&LAYERS=Raster&STYLES=&SRS=EPSG:4326&BBOX={bbox4326EN}&WIDTH={wmsW}&HEIGHT={wmsH}&FORMAT=image/jpeg"),
+
                 ("EVRF2007 GRID1 (EPSG:3857)",
                  $"https://mapy.geoportal.gov.pl/wss/service/PZGIK/NMT/GRID1/WMS/ShadedRelief_EVRF2007?SERVICE=WMS&VERSION=1.1.1&REQUEST=GetMap&LAYERS=Raster&STYLES=&SRS=EPSG:3857&BBOX={bbox3857}&WIDTH={wmsW}&HEIGHT={wmsH}&FORMAT=image/jpeg"),
 
-                ("EVRF2007 GRID5 (EPSG:2180)",
-                 $"https://mapy.geoportal.gov.pl/wss/service/PZGIK/NMT/GRID5/WMS/ShadedRelief_EVRF2007?SERVICE=WMS&VERSION=1.1.1&REQUEST=GetMap&LAYERS=Raster&STYLES=&SRS=EPSG:2180&BBOX={bbox2180EN}&WIDTH={wmsW}&HEIGHT={wmsH}&FORMAT=image/jpeg")
+                ("KRON86 GRID5 (EPSG:2180)",
+                 $"https://mapy.geoportal.gov.pl/wss/service/PZGIK/NMT/GRID5/WMS/ShadedRelief?SERVICE=WMS&VERSION=1.1.1&REQUEST=GetMap&LAYERS=Raster&STYLES=&SRS=EPSG:2180&BBOX={bbox2180EN}&WIDTH={wmsW}&HEIGHT={wmsH}&FORMAT=image/jpeg")
             };
         }
 
         public static string[] BuildLidarCandidateUrls(double northLat, double southLat, double eastLon, double westLon, int reqW, int reqH) =>
             BuildLidarCandidateUrlsWithLabels(northLat, southLat, eastLon, westLon, reqW, reqH).Select(x => x.Url).ToArray();
 
-        private static async Task<byte[]> FetchSingleLidarSheetPixelsAsync(double northLat, double southLat, double eastLon, double westLon, int targetW, int targetH, CancellationToken ct)
+        private static async Task<byte[]> FetchSingleLidarSectorPixelsAsync(HttpClient http, double northLat, double southLat, double eastLon, double westLon, int targetW, int targetH, CancellationToken ct)
         {
-            string cacheKey = string.Create(CultureInfo.InvariantCulture, $"LIDAR_SINGLE_{northLat:0.0000}_{southLat:0.0000}_{eastLon:0.0000}_{westLon:0.0000}_{targetW}x{targetH}");
+            string cacheKey = string.Create(CultureInfo.InvariantCulture, $"LIDAR_OK_{northLat:0.0000}_{southLat:0.0000}_{eastLon:0.0000}_{westLon:0.0000}_{targetW}x{targetH}");
             if (RawBgraSectorCache.TryGetValue(cacheKey, out var cachedPx))
                 return cachedPx;
 
-            byte[] diskRawBytes = TryReadDiskCache(cacheKey);
-            if (diskRawBytes != null && TryDecodeToBgra32Pixels(diskRawBytes, targetW, targetH, out byte[] diskBgra) && HasValidHillshadeSignal(diskBgra, targetW, targetH))
+            byte[] diskBytes = TryReadDiskCache(cacheKey);
+            if (diskBytes != null && TryDecodeToBgra32Pixels(diskBytes, targetW, targetH, out byte[] diskBgra) && HasValidHillshadeSignal(diskBgra, targetW, targetH))
             {
                 LastLidarDiagnosticStatus = "SSD Cache";
                 RawBgraSectorCache[cacheKey] = diskBgra;
                 return diskBgra;
             }
 
-            var rawCandidates = BuildLidarCandidateUrlsWithLabels(northLat, southLat, eastLon, westLon, targetW, targetH);
+            var candidates = BuildLidarCandidateUrlsWithLabels(northLat, southLat, eastLon, westLon, targetW, targetH);
 
-            int pref = Math.Clamp(_preferredCandidateIndex, 0, rawCandidates.Length - 1);
-            var orderedIndices = new List<int> { pref };
-            for (int i = 0; i < rawCandidates.Length; i++)
-                if (i != pref) orderedIndices.Add(i);
-
-            foreach (int cIdx in orderedIndices)
+            await LidarThrottle.WaitAsync(ct);
+            try
             {
-                if (ct.IsCancellationRequested) break;
-                try
-                {
-                    using var reqCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-                    reqCts.CancelAfter(4500);
+                if (RawBgraSectorCache.TryGetValue(cacheKey, out var cachedPx2))
+                    return cachedPx2;
 
-                    byte[] bytes = await FastHttp.GetByteArrayAsync(rawCandidates[cIdx].Url, reqCts.Token);
-                    if (bytes != null && TryDecodeToBgra32Pixels(bytes, targetW, targetH, out byte[] bgraPx) && HasValidHillshadeSignal(bgraPx, targetW, targetH))
-                    {
-                        _preferredCandidateIndex = cIdx;
-                        LastLidarDiagnosticStatus = rawCandidates[cIdx].Label;
-                        if (RawBgraSectorCache.Count > 180) RawBgraSectorCache.Clear();
-                        RawBgraSectorCache[cacheKey] = bgraPx;
-                        SaveDiskCacheAsync(cacheKey, bytes);
-                        return bgraPx;
-                    }
-                }
-                catch (OperationCanceledException)
+                foreach (var cand in candidates)
                 {
                     if (ct.IsCancellationRequested) break;
+                    try
+                    {
+                        byte[] bytes = await (http ?? FastHttp).GetByteArrayAsync(cand.Url, ct);
+                        if (TryDecodeToBgra32Pixels(bytes, targetW, targetH, out byte[] bgraPx) &&
+                            HasValidHillshadeSignal(bgraPx, targetW, targetH))
+                        {
+                            LastLidarDiagnosticStatus = cand.Label;
+                            if (RawBgraSectorCache.Count > 240) RawBgraSectorCache.Clear();
+                            RawBgraSectorCache[cacheKey] = bgraPx;
+                            SaveDiskCacheAsync(cacheKey, bytes);
+                            return bgraPx;
+                        }
+                    }
+                    catch { }
                 }
-                catch { }
+                return null;
             }
-
-            return null;
+            finally
+            {
+                LidarThrottle.Release();
+            }
         }
 
+        // Sprawdzona architektura wielosektorowa (2x2 / 3x3), dzięki której pojedynczy sektor nigdy nie przekracza limitu skali GUGiK GRID1!
         public static async Task<BitmapSource> FetchCompositeLidarSheetAsync(
             HttpClient http,
             double northLat,
@@ -686,19 +730,76 @@ namespace FieldTakHub.Builder.Services
             bool convertToTransparentOverlay,
             CancellationToken ct)
         {
-            int targetW = Math.Clamp((int)Math.Round(viewW * 0.92), 420, 960);
-            int targetH = Math.Clamp((int)Math.Round(viewH * 0.92), 320, 960);
+            var (e1, _) = LatLonToEpsg2180(southLat, westLon);
+            var (e2, _) = LatLonToEpsg2180(northLat, eastLon);
+            double totalWidthMeters = Math.Abs(e2 - e1);
 
-            byte[] rawPixels = await FetchSingleLidarSheetPixelsAsync(northLat, southLat, eastLon, westLon, targetW, targetH, ct);
-            if (ct.IsCancellationRequested || rawPixels == null)
+            int gridN = totalWidthMeters > 3200 ? 3 : (totalWidthMeters > 1450 ? 2 : 1);
+
+            int sectorPxW = Math.Clamp((int)Math.Round((viewW * 1.05) / gridN), 420, 860);
+            int sectorPxH = Math.Clamp((int)Math.Round((viewH * 1.05) / gridN), 360, 860);
+
+            double dLat = (northLat - southLat) / gridN;
+            double dLon = (eastLon - westLon) / gridN;
+
+            var tasks = new List<Task<(int Row, int Col, byte[] Px)>>();
+            for (int r = 0; r < gridN; r++)
             {
+                double secNorth = northLat - r * dLat;
+                double secSouth = northLat - (r + 1) * dLat;
+                for (int c = 0; c < gridN; c++)
+                {
+                    double secWest = westLon + c * dLon;
+                    double secEast = westLon + (c + 1) * dLon;
+                    int capR = r, capC = c;
+                    tasks.Add(Task.Run(async () =>
+                    {
+                        byte[] px = await FetchSingleLidarSectorPixelsAsync(FastHttp, secNorth, secSouth, secEast, secWest, sectorPxW, sectorPxH, ct);
+                        return (capR, capC, px);
+                    }, ct));
+                }
+            }
+
+            var results = await Task.WhenAll(tasks);
+            if (ct.IsCancellationRequested || results.All(x => x.Px == null))
+            {
+                LastLidarDiagnosticStatus = "Brak odpowiedzi NMT z GUGiK";
                 return null;
             }
 
-            byte[] workingPixels = (byte[])rawPixels.Clone();
-            ApplyHillshadeContrastAndAlphaInPlace(workingPixels, targetW, targetH, convertToTransparentOverlay);
+            int totalW = sectorPxW * gridN;
+            int totalH = sectorPxH * gridN;
+            int totalStride = totalW * 4;
+            int sectorStride = sectorPxW * 4;
 
-            var finalBmp = BitmapSource.Create(targetW, targetH, 96, 96, PixelFormats.Bgra32, null, workingPixels, targetW * 4);
+            byte[] compositePixels;
+            if (gridN == 1 && results[0].Px != null)
+            {
+                compositePixels = (byte[])results[0].Px.Clone();
+            }
+            else
+            {
+                compositePixels = new byte[totalH * totalStride];
+                foreach (var item in results)
+                {
+                    if (item.Px == null) continue;
+                    int destXOffsetBytes = item.Col * sectorStride;
+                    int destYStart = item.Row * sectorPxH;
+                    for (int rowY = 0; rowY < sectorPxH; rowY++)
+                    {
+                        int srcOffset = rowY * sectorStride;
+                        int dstOffset = (destYStart + rowY) * totalStride + destXOffsetBytes;
+                        if (srcOffset + sectorStride <= item.Px.Length && dstOffset + sectorStride <= compositePixels.Length)
+                        {
+                            Buffer.BlockCopy(item.Px, srcOffset, compositePixels, dstOffset, sectorStride);
+                        }
+                    }
+                }
+            }
+
+            ApplyHillshadeContrastAndAlphaInPlace(compositePixels, totalW, totalH, convertToTransparentOverlay);
+
+            var finalBmp = BitmapSource.Create(totalW, totalH, 96, 96, PixelFormats.Bgra32, null, compositePixels, totalStride);
             finalBmp.Freeze();
             return finalBmp;
         }
