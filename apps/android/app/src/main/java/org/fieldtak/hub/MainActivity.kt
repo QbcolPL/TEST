@@ -65,7 +65,7 @@ class MainActivity : AppCompatActivity() {
         checkIncomingViewIntent(intent)
     }
 
-    override fun onResume() { super.onResume(); checkIncomingViewIntent(intent) }
+    override fun onResume() { super.onResume(); rebuildScreen(); checkIncomingViewIntent(intent) }
 
     override fun onDestroy() {
         FieldShareAndQrEngine.stopLocalFtakServer()
@@ -219,19 +219,15 @@ class MainActivity : AppCompatActivity() {
             } else {
                 perms.add(Manifest.permission.READ_EXTERNAL_STORAGE)
             }
+            FtakProvisioningEngine.setPermissionsOnboardingCompleted(this, true)
             requestPermissions(perms.toTypedArray(), REQ_RUNTIME_PERMS)
+            rebuildScreen()
         } else {
             FtakProvisioningEngine.setPermissionsOnboardingCompleted(this, true)
             rebuildScreen()
         }
     }
-
-    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<String>, grantResults: IntArray) {
-        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-        if (requestCode == REQ_RUNTIME_PERMS) {
-            FtakProvisioningEngine.setPermissionsOnboardingCompleted(this, true)
-            rebuildScreen()
-        } else if (requestCode == REQ_CAMERA_FOR_QR) {
+ else if (requestCode == REQ_CAMERA_FOR_QR) {
             if (grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
                 showLiveCameraQrScannerDialog()
             } else {
