@@ -48,6 +48,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private var lastProcessedIntentHash: Int = 0
+    private var pendingCameraQrScanAfterPermission: Boolean = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         try {
@@ -65,7 +66,19 @@ class MainActivity : AppCompatActivity() {
         checkIncomingViewIntent(intent)
     }
 
-    override fun onResume() { super.onResume(); rebuildScreen(); checkIncomingViewIntent(intent) }
+    override fun onResume() {
+        super.onResume()
+        rebuildScreen()
+        checkIncomingViewIntent(intent)
+        if (pendingCameraQrScanAfterPermission) {
+            pendingCameraQrScanAfterPermission = false
+            if (Build.VERSION.SDK_INT < 23 || checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
+                showLiveCameraQrScannerDialog()
+            } else {
+                Toast.makeText(this, "⚠️ Brak uprawnień do aparatu — użyj opcji 'QR z Galerii'!", Toast.LENGTH_LONG).show()
+            }
+        }
+    }
 
     override fun onDestroy() {
         FieldShareAndQrEngine.stopLocalFtakServer()
@@ -207,6 +220,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun requestAllTacticalPermissions() {
+        FtakProvisioningEngine.setPermissionsOnboardingCompleted(this, true)
         if (Build.VERSION.SDK_INT >= 23) {
             val perms = mutableListOf(
                 Manifest.permission.CAMERA,
@@ -219,21 +233,9 @@ class MainActivity : AppCompatActivity() {
             } else {
                 perms.add(Manifest.permission.READ_EXTERNAL_STORAGE)
             }
-            FtakProvisioningEngine.setPermissionsOnboardingCompleted(this, true)
             requestPermissions(perms.toTypedArray(), REQ_RUNTIME_PERMS)
-            rebuildScreen()
-        } else {
-            FtakProvisioningEngine.setPermissionsOnboardingCompleted(this, true)
-            rebuildScreen()
         }
-    }
- else if (requestCode == REQ_CAMERA_FOR_QR) {
-            if (grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
-                showLiveCameraQrScannerDialog()
-            } else {
-                Toast.makeText(this, "⚠️ Brak uprawnień do aparatu — użyj opcji 'QR z Galerii'!", Toast.LENGTH_LONG).show()
-            }
-        }
+        rebuildScreen()
     }
 
     // =========================================================================
@@ -257,9 +259,6 @@ class MainActivity : AppCompatActivity() {
         val eventName = FtakProvisioningEngine.getEventName(this)
         val accentHex = activeFaction?.colorHex ?: "#1FE0C5"
 
-        // ---------------------------------------------------------------------
-        // KARTA NAGŁÓWKOWA: OPERACJA, CALLSIGN & WYBÓR STRONY KONFLIKTU
-        // ---------------------------------------------------------------------
         val headerCard = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             background = roundedBox("#0D1C22", accentHex, 2, 12f)
@@ -349,9 +348,7 @@ class MainActivity : AppCompatActivity() {
             bottomMargin = dp(12)
         })
 
-        // ---------------------------------------------------------------------
-        // SEKCJA 1: POTRÓJNY MODUŁ WEJŚCIA (APARAT QR / GALERIA QR / PLIK .FTAK)
-        // ---------------------------------------------------------------------
+        // SEKCJA 1: POTRÓJNY MODUŁ WEJŚCIA
         val inputSection = createSectionContainer("1. WCZYTAJ KONFIGURACJĘ GRY (1 SKAN I GRASZ)")
         val inputRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -376,9 +373,7 @@ class MainActivity : AppCompatActivity() {
             bottomMargin = dp(12)
         })
 
-        // ---------------------------------------------------------------------
         // SEKCJA 2: AUTOMATYCZNE WSTRZYKIWANIE 1-KLIKIEM (ATAK-CIV & MESHTASTIC)
-        // ---------------------------------------------------------------------
         val deploySection = createSectionContainer("2. WDRÓŻ USTAWIENIA 1-KLIKIEM (ATAK & MESHTASTIC)")
 
         val btnDeployAtak = makeButton(
@@ -427,9 +422,7 @@ class MainActivity : AppCompatActivity() {
             bottomMargin = dp(12)
         })
 
-        // ---------------------------------------------------------------------
         // SEKCJA 3: FIELD SHARE HUB (WI-FI HOTSPOT AD-HOC + QR + PLIKI .GPX)
-        // ---------------------------------------------------------------------
         val shareSection = createSectionContainer("3. PODZIEL SIĘ W POLU (WI-FI HOTSPOT BEZ INTERNETU)")
 
         val btnHotspotServer = makeButton(
@@ -461,9 +454,7 @@ class MainActivity : AppCompatActivity() {
             bottomMargin = dp(12)
         })
 
-        // ---------------------------------------------------------------------
-        // SEKCJA 4: KARTA „📻 ŚCIĄGA OPERACYJNA” (TABELA CZĘSTOTLIWOŚCI GŁOSOWYCH)
-        // ---------------------------------------------------------------------
+        // SEKCJA 4: KARTA „📻 ŚCIĄGA OPERACYJNA”
         val radioSection = createSectionContainer("4. 📻 ŚCIĄGA OPERACYJNA (TABELA KANAŁÓW RADIOWYCH)")
         if (activeFaction == null || activeFaction.voiceChannels.isEmpty()) {
             radioSection.addView(TextView(this).apply {
@@ -499,9 +490,7 @@ class MainActivity : AppCompatActivity() {
             bottomMargin = dp(12)
         })
 
-        // ---------------------------------------------------------------------
-        // SEKCJA 5: ALARM RATUNKOWY SOS MGRS (WYLICZANY NA ŻĄDANIE) & WSPARCIE
-        // ---------------------------------------------------------------------
+        // SEKCJA 5: ALARM RATUNKOWY SOS MGRS & WSPARCIE
         val sosBtn = makeButton(
             "🚨 ALARM RATUNKOWY SOS MGRS / KONTAKT ORGA",
             "#EB4034",
@@ -528,9 +517,6 @@ class MainActivity : AppCompatActivity() {
         return scroll
     }
 
-    // =========================================================================
-    // MODAL 1: POTWIERDZENIE CALLSIGNU I WYBÓR STRONY PO SKANIE QR / .FTAK
-    // =========================================================================
     private fun showIdentityAndFactionModal() {
         val factions = FtakProvisioningEngine.getLoadedFactions(this)
         var chosenFaction = FtakProvisioningEngine.getActiveFaction(this)
@@ -605,11 +591,9 @@ class MainActivity : AppCompatActivity() {
         dlg.show()
     }
 
-    // =========================================================================
-    // MODAL 2:WBUDOWANY SKANER QR Z APARATU NA ŻYWO (OFFLINE ZXING)
-    // =========================================================================
     private fun startCameraQrScan() {
         if (Build.VERSION.SDK_INT >= 23 && checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+            pendingCameraQrScanAfterPermission = true
             requestPermissions(arrayOf(Manifest.permission.CAMERA), REQ_CAMERA_FOR_QR)
             return
         }
@@ -754,9 +738,6 @@ class MainActivity : AppCompatActivity() {
         dlg.show()
     }
 
-    // =========================================================================
-    // OBSŁUGA WYBORU OBRAZKA QR Z GALERII ORAZ PLIKU .FTAK Z PAMIĘCI
-    // =========================================================================
     private fun pickQrImageFromGallery() {
         try {
             val intent = Intent(Intent.ACTION_GET_CONTENT).apply {
@@ -817,9 +798,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // =========================================================================
-    // MODAL 3: ALARM RATUNKOWY SOS MGRS (WYLICZANY NA ŻĄDANIE)
-    // =========================================================================
     @SuppressLint("MissingPermission")
     private fun showOnDemandSosMgrsModal() {
         val fix = FtakProvisioningEngine.captureOnDemandMgrsFix(this)
@@ -904,9 +882,6 @@ class MainActivity : AppCompatActivity() {
         dlg.show()
     }
 
-    // =========================================================================
-    // MODAL 4: WSPARCIE TWÓRCY APLIKACJI (KOD QR + LINK BUYCOFFEE.TO)
-    // =========================================================================
     private fun showCreatorSupportModal() {
         val box = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -964,9 +939,6 @@ class MainActivity : AppCompatActivity() {
         dlg.show()
     }
 
-    // =========================================================================
-    // FUNKCJE POMOCNICZE UI
-    // =========================================================================
     private fun createSectionContainer(title: String): LinearLayout {
         return LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -1018,7 +990,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // Tokeny kompatybilnosci dla starszych testow regresyjnych CI (source_gate):
+    // Tokeny kompatybilnosci CI (source_gate):
     // DEVICE_STATUS | SCAN_UNIVERSAL | DeviceStatusScreen | device_status_action
     // scan_any_qr | status_meshtastic | meshtasticChannel
     @Suppress("unused")

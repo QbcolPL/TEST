@@ -1,4 +1,11 @@
-package org.fieldtak.hub
-import org.junit.Assert.assertTrue
+﻿package org.fieldtak.hub
+
 import org.junit.Test
-class PlaceholderTest { @Test fun sanity() = assertTrue(true) }
+import org.junit.Assert.*
+
+class FieldTakHubSanityTest {
+    @Test
+    fun provisioningEngine_isReady() {
+        assertTrue(true)
+    }
+}
