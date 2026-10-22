@@ -1,6 +1,7 @@
-buildscript {
+﻿buildscript {
   repositories { google(); mavenCentral(); gradlePluginPortal() }
   dependencies {
+    implementation("com.google.zxing:core:3.5.3")
     // AGP 9 uses built-in Kotlin. Pin a newer KGP runtime so it matches the Compose compiler plugin.
     classpath("org.jetbrains.kotlin:kotlin-gradle-plugin:2.3.21")
   }

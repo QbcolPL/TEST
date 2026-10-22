@@ -19,7 +19,11 @@
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
     <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
-<application
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
+    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
+    <application
     android:allowBackup="false"
     android:label="@string/app_name"
     android:icon="@mipmap/ic_launcher"
@@ -46,5 +50,10 @@
       android:grantUriPermissions="true">
       <meta-data android:name="android.support.FILE_PROVIDER_PATHS" android:resource="@xml/file_paths" />
     </provider>
-  </application>
+          <provider
+            android:name="org.fieldtak.hub.FtakShareContentProvider"
+            android:authorities="org.fieldtak.hub.ftakprovider"
+            android:exported="false"
+            android:grantUriPermissions="true" />
+    </application>
 </manifest>
