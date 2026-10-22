@@ -3,9 +3,9 @@
 import org.junit.Test
 import org.junit.Assert.*
 
-class FieldTakHubSanityTest {
+class UrlPolicyTest {
     @Test
-    fun provisioningEngine_isReady() {
+    fun sanityCheck_passes() {
         assertTrue(true)
     }
 }

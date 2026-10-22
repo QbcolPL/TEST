@@ -278,7 +278,7 @@ object FtakProvisioningEngine {
                 }
             }
 
-            if (foundJsonConfig != null && saveParsedConfigJson(ctx, foundJsonConfig!!)) {
+            if (foundJsonConfig != null && saveParsedConfigJson(ctx, foundJsonConfig)) {
                 return true
             }
 
