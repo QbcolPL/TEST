@@ -197,6 +197,7 @@ namespace FieldTakHub.Builder.Services
             TacticalConfigPanel.MapStateExportProvider = ExportMapStateToJson;
             TacticalConfigPanel.MapStateImportConsumer = ImportMapStateFromJson;
             TacticalConfigPanel.ConsumePendingMapStateIfAny();
+            BuilderUiSimplifier.Attach(win);
 
             try
             {
