@@ -24,17 +24,13 @@ import android.view.SurfaceView
 import android.view.View
 import android.view.ViewGroup
 import android.view.Window
+import android.view.WindowInsets
 import android.widget.*
 import androidx.appcompat.app.AppCompatActivity
-import com.google.zxing.BarcodeFormat
-import com.google.zxing.BinaryBitmap
-import com.google.zxing.DecodeHintType
-import com.google.zxing.MultiFormatReader
-import com.google.zxing.PlanarYUVLuminanceSource
-import com.google.zxing.common.HybridBinarizer
-import java.util.EnumMap
 import java.util.Locale
 import java.util.concurrent.atomic.AtomicBoolean
+import kotlin.math.abs
+import kotlin.math.max
 
 @Suppress("DEPRECATION")
 class MainActivity : AppCompatActivity() {
@@ -59,6 +55,12 @@ class MainActivity : AppCompatActivity() {
             actionBar?.hide()
         } catch (_: Exception) { }
 
+        // Wyłącz nachodzenie pasków systemowych na treść (Android 14/15 Edge-to-Edge fix)
+        if (Build.VERSION.SDK_INT >= 30) {
+            try {
+                window?.setDecorFitsSystemWindows(true)
+            } catch (_: Exception) { }
+        }
         window?.statusBarColor = Color.parseColor("#061014")
         window?.navigationBarColor = Color.parseColor("#061014")
 
@@ -125,6 +127,49 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /**
+     * Nakłada bezpieczne odstępy na górze (pod zegarem i ikonami zasięgu) oraz na dole
+     * (nad paskiem nawigacyjnym Samsung/Android III O <), zapobiegając ucinaniu UI.
+     */
+    private fun applySafeSystemBarsPadding(targetContainer: View, sideDp: Int) {
+        val sidePx = dp(sideDp)
+        val minTopPx = getStatusBarHeightPx() + dp(12)
+        val minBottomPx = getNavBarHeightPx() + dp(24)
+
+        targetContainer.setPadding(sidePx, minTopPx, sidePx, minBottomPx)
+
+        if (Build.VERSION.SDK_INT >= 23) {
+            targetContainer.setOnApplyWindowInsetsListener { v, insets ->
+                var insetTop = 0
+                var insetBot = 0
+                if (Build.VERSION.SDK_INT >= 30) {
+                    val sysBars = insets.getInsets(WindowInsets.Type.systemBars())
+                    insetTop = sysBars.top
+                    insetBot = sysBars.bottom
+                } else {
+                    insetTop = insets.systemWindowInsetTop
+                    insetBot = insets.systemWindowInsetBottom
+                }
+                val finalTop = max(minTopPx, insetTop + dp(12))
+                val finalBot = max(minBottomPx, insetBot + dp(24))
+                v.setPadding(sidePx, finalTop, sidePx, finalBot)
+                insets
+            }
+        }
+    }
+
+    private fun getStatusBarHeightPx(): Int {
+        val resId = resources.getIdentifier("status_bar_height", "dimen", "android")
+        val h = if (resId > 0) resources.getDimensionPixelSize(resId) else 0
+        return max(h, dp(32))
+    }
+
+    private fun getNavBarHeightPx(): Int {
+        val resId = resources.getIdentifier("navigation_bar_height", "dimen", "android")
+        val h = if (resId > 0) resources.getDimensionPixelSize(resId) else 0
+        return max(h, dp(48))
+    }
+
     // =========================================================================
     // EKRAN 1: ŚWIADOMY ONBOARDING UPRAWNIEŃ (PERMISSION GATE)
     // =========================================================================
@@ -132,12 +177,13 @@ class MainActivity : AppCompatActivity() {
         val scroll = ScrollView(this).apply {
             setBackgroundColor(Color.parseColor("#061014"))
             isFillViewport = true
+            clipToPadding = false
         }
 
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(20), dp(24), dp(20), dp(24))
         }
+        applySafeSystemBarsPadding(root, 18)
 
         val badgeHeader = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -160,7 +206,7 @@ class MainActivity : AppCompatActivity() {
         })
 
         root.addView(badgeHeader, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-            bottomMargin = dp(16)
+            bottomMargin = dp(14)
         })
 
         fun addPermissionExplainCard(iconTitle: String, desc: String) {
@@ -188,11 +234,11 @@ class MainActivity : AppCompatActivity() {
 
         addPermissionExplainCard(
             "📷 1. Aparat (Kamera)",
-            "Wymagany wyłącznie do szybkiego skanowania kodów QR z plakatów w Safezonie lub z ekranu telefonu dowódcy."
+            "Wymagany wyłącznie do szybkiego skanowania kodów QR z plakatów w Safezonie lub z ekranu monitora / telefonu."
         )
         addPermissionExplainCard(
-            "🖼️ 2. Galeria i Pamięć Plików",
-            "Wymagane do wczytywania kodów QR zapisanych jako obrazki z Discorda/Messengera oraz otwierania paczek misji (.ftak)."
+            "📂 2. Dostęp do folderu /atak/ i Galerii",
+            "Wymagany do bezpośredniego wstrzykiwania map (.mbtiles, .kmz, .gpx) oraz ustawień prosto do katalogu ATAK-CIV."
         )
         addPermissionExplainCard(
             "📡 3. Wi-Fi / Sieć Lokalna (Hotspot Ad-Hoc)",
@@ -207,12 +253,13 @@ class MainActivity : AppCompatActivity() {
             "✅ ZROZUMIAŁEM — NADAJ UPRAWNIENIA I WEJDŹ",
             "#1FE0C5",
             Color.parseColor("#041014"),
-            15f
+            14.5f
         ) {
             requestAllTacticalPermissions()
         }
         root.addView(btnGrant, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(54)).apply {
-            topMargin = dp(12)
+            topMargin = dp(10)
+            bottomMargin = dp(20)
         })
 
         scroll.addView(root)
@@ -232,8 +279,12 @@ class MainActivity : AppCompatActivity() {
                 perms.add("android.permission.POST_NOTIFICATIONS")
             } else {
                 perms.add(Manifest.permission.READ_EXTERNAL_STORAGE)
+                perms.add(Manifest.permission.WRITE_EXTERNAL_STORAGE)
             }
             requestPermissions(perms.toTypedArray(), REQ_RUNTIME_PERMS)
+        }
+        if (!FtakProvisioningEngine.hasAllFilesStorageAccess()) {
+            FtakProvisioningEngine.requestAllFilesStorageAccess(this)
         }
         rebuildScreen()
     }
@@ -245,12 +296,13 @@ class MainActivity : AppCompatActivity() {
         val scroll = ScrollView(this).apply {
             setBackgroundColor(Color.parseColor("#061014"))
             isFillViewport = true
+            clipToPadding = false
         }
 
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(14), dp(14), dp(14), dp(22))
         }
+        applySafeSystemBarsPadding(root, 14)
 
         val hasProfile = FtakProvisioningEngine.hasLoadedProfile(this)
         val activeFaction = FtakProvisioningEngine.getActiveFaction(this)
@@ -258,6 +310,7 @@ class MainActivity : AppCompatActivity() {
         val callsign = FtakProvisioningEngine.getCallsign(this)
         val eventName = FtakProvisioningEngine.getEventName(this)
         val accentHex = activeFaction?.colorHex ?: "#1FE0C5"
+        val atakPkg = FtakProvisioningEngine.detectInstalledAtakPackage(this)
 
         val headerCard = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -286,14 +339,14 @@ class MainActivity : AppCompatActivity() {
             text = if (hasProfile) "OPERACJA: $eventName" else "BRAK WCZYTANEJ OPERACJI"
             setTextColor(Color.WHITE)
             typeface = Typeface.DEFAULT_BOLD
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 15.5f)
         })
 
         val btnEditIdentity = makeButton(
             "👤 $callsign ✎",
             "#152C35",
             Color.WHITE,
-            12.5f
+            12f
         ) {
             showIdentityAndFactionModal()
         }
@@ -305,10 +358,11 @@ class MainActivity : AppCompatActivity() {
             val factionFiles = FtakProvisioningEngine.getFactionFilteredFiles(this, activeFaction)
             val statusTxt = TextView(this).apply {
                 val otsInfo = if (activeFaction.otsHost.isNotBlank()) activeFaction.otsHost else "Tryb Lokalny / Mesh"
+                val atakStatus = if (atakPkg != null) "Wykryto ($atakPkg)" else "Brak ATAK"
                 text = "🛡️ Strona: ${activeFaction.name}  •  Kanał LoRa: ${activeFaction.channelName} (${activeFaction.loraRegion})\n" +
-                        "🌐 OTS: $otsInfo  •  Załączone pliki map/warstw: ${factionFiles.size}"
+                        "🌐 OTS: $otsInfo  •  Pliki map: ${factionFiles.size}  •  ATAK: $atakStatus"
                 setTextColor(Color.parseColor("#B8CFD8"))
-                setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f)
                 setPadding(0, dp(8), 0, dp(4))
             }
             headerCard.addView(statusTxt)
@@ -337,7 +391,7 @@ class MainActivity : AppCompatActivity() {
             }
         } else {
             headerCard.addView(TextView(this).apply {
-                text = "Zeskanuj kod QR z plakatu w Safezonie, wybierz zrzut ekranu QR z Galerii lub wczytaj plik .ftak poniżej:"
+                text = "Zeskanuj kod QR z plakatu / monitora, wybierz obrazek QR z Galerii lub wczytaj plik .ftak poniżej:"
                 setTextColor(Color.parseColor("#9CB3BC"))
                 setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
                 setPadding(0, dp(6), 0, 0)
@@ -354,13 +408,13 @@ class MainActivity : AppCompatActivity() {
             orientation = LinearLayout.HORIZONTAL
         }
 
-        val btnScanCamera = makeButton("📷 Skanuj QR\n(Aparat)", "#1FE0C5", Color.parseColor("#041014"), 12f) {
+        val btnScanCamera = makeButton("📷 Skanuj QR\n(Aparat)", "#1FE0C5", Color.parseColor("#041014"), 11.5f) {
             startCameraQrScan()
         }
-        val btnScanGallery = makeButton("🖼️ Wczytaj QR\n(Z Galerii)", "#142A33", Color.WHITE, 12f) {
+        val btnScanGallery = makeButton("🖼️ Wczytaj QR\n(Z Galerii)", "#142A33", Color.WHITE, 11.5f) {
             pickQrImageFromGallery()
         }
-        val btnLoadFtak = makeButton("📂 Wczytaj\nPlik .ftak", "#142A33", Color.WHITE, 12f) {
+        val btnLoadFtak = makeButton("📂 Wczytaj\nPlik .ftak", "#142A33", Color.WHITE, 11.5f) {
             pickFtakFileFromStorage()
         }
 
@@ -377,10 +431,10 @@ class MainActivity : AppCompatActivity() {
         val deploySection = createSectionContainer("2. WDRÓŻ USTAWIENIA 1-KLIKIEM (ATAK & MESHTASTIC)")
 
         val btnDeployAtak = makeButton(
-            "🗺️ WGRAJ MAPY, PUNKTY I SERWER DO ATAK-CIV",
+            "🗺️ WSTRZYKNIJ MAPY I USTAWIENIA DO ATAK-CIV",
             if (hasProfile) "#2684FF" else "#182830",
             Color.WHITE,
-            13.5f
+            13f
         ) {
             FtakProvisioningEngine.provisionAtakOneClick(this)
         }
@@ -412,7 +466,7 @@ class MainActivity : AppCompatActivity() {
             "📡 ZAPROGRAMUJ RADIO MESHTASTIC (KANAŁ + PSK)",
             if (hasProfile) "#2ECC71" else "#182830",
             if (hasProfile) Color.parseColor("#04120A") else Color.WHITE,
-            13.5f
+            13f
         ) {
             FtakProvisioningEngine.provisionMeshtasticOneClick(this)
         }
@@ -429,7 +483,7 @@ class MainActivity : AppCompatActivity() {
             "📡 UDOSTĘPNIJ .FTAK PRZEZ WI-FI HOTSPOT (SERWER AD-HOC + QR)",
             "#142E38",
             Color.parseColor("#1FE0C5"),
-            12.5f
+            12f
         ) {
             FieldShareAndQrEngine.showWifiHotspotShareDialog(this)
         }
@@ -473,12 +527,12 @@ class MainActivity : AppCompatActivity() {
                     text = "🎙️ ${vc.roleName}   [${vc.bandType}]"
                     setTextColor(Color.parseColor("#1FE0C5"))
                     typeface = Typeface.DEFAULT_BOLD
-                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 13.5f)
+                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
                 })
                 chCard.addView(TextView(this).apply {
                     text = "Kanał / Częstotliwość: ${vc.freqMhz}   •   Ton / Kod: ${vc.toneOrCode}"
                     setTextColor(Color.WHITE)
-                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f)
+                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
                 })
                 radioSection.addView(chCard, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
                     bottomMargin = dp(6)
@@ -495,7 +549,7 @@ class MainActivity : AppCompatActivity() {
             "🚨 ALARM RATUNKOWY SOS MGRS / KONTAKT ORGA",
             "#EB4034",
             Color.WHITE,
-            14f
+            13.5f
         ) {
             showOnDemandSosMgrsModal()
         }
@@ -511,7 +565,9 @@ class MainActivity : AppCompatActivity() {
         ) {
             showCreatorSupportModal()
         }
-        root.addView(btnSupportCoffee, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(42)))
+        root.addView(btnSupportCoffee, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(44)).apply {
+            bottomMargin = dp(28)
+        })
 
         scroll.addView(root)
         return scroll
@@ -591,6 +647,9 @@ class MainActivity : AppCompatActivity() {
         dlg.show()
     }
 
+    // =========================================================================
+    // SKANER QR Z APARATU (ML KIT + ZXING 90° + TAP-TO-FOCUS)
+    // =========================================================================
     private fun startCameraQrScan() {
         if (Build.VERSION.SDK_INT >= 23 && checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
             pendingCameraQrScanAfterPermission = true
@@ -608,10 +667,10 @@ class MainActivity : AppCompatActivity() {
         }
 
         box.addView(TextView(this).apply {
-            text = "📷 ZESKANUJ KOD QR Z PLAKATU SAFEZONE LUB EKRANU KOLEGI"
+            text = "📷 ZESKANUJ KOD QR Z PLAKATU, MONITORA LUB TELEFONU"
             setTextColor(Color.parseColor("#1FE0C5"))
             typeface = Typeface.DEFAULT_BOLD
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 13.5f)
             gravity = Gravity.CENTER
         })
 
@@ -621,23 +680,23 @@ class MainActivity : AppCompatActivity() {
         }
 
         val surfaceView = SurfaceView(this)
-        previewFrame.addView(surfaceView, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(290)))
+        previewFrame.addView(surfaceView, FrameLayout.LayoutParams(dp(280), dp(340), Gravity.CENTER))
 
         val aimingCross = TextView(this).apply {
-            text = "[ + ]"
-            setTextColor(Color.parseColor("#881FE0C5"))
+            text = "[  +  ]"
+            setTextColor(Color.parseColor("#AA1FE0C5"))
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 28f)
             gravity = Gravity.CENTER
         }
-        previewFrame.addView(aimingCross, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(290)))
+        previewFrame.addView(aimingCross, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(340)))
 
         box.addView(previewFrame, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
             topMargin = dp(10)
-            bottomMargin = dp(10)
+            bottomMargin = dp(8)
         })
 
         box.addView(TextView(this).apply {
-            text = "Skieruj aparat na kod QR. Możesz też wybrać zrzut ekranu z Galerii poniżej:"
+            text = "Dotknij podglądu kamery, aby wyostrzyć ostrość (Autofocus), lub wybierz obrazek QR z Galerii:"
             setTextColor(Color.parseColor("#9CB3BC"))
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f)
             gravity = Gravity.CENTER
@@ -645,6 +704,7 @@ class MainActivity : AppCompatActivity() {
 
         var cameraInstance: Camera? = null
         val decodedFlag = AtomicBoolean(false)
+        val busyDecoding = AtomicBoolean(false)
         var lastDecodeTime = 0L
 
         fun releaseCam() {
@@ -670,13 +730,24 @@ class MainActivity : AppCompatActivity() {
             }
             .create()
 
-        val reader = MultiFormatReader().apply {
-            val hints = EnumMap<DecodeHintType, Any>(DecodeHintType::class.java).apply {
-                put(DecodeHintType.TRY_HARDER, java.lang.Boolean.TRUE)
-                put(DecodeHintType.CHARACTER_SET, "UTF-8")
-                put(DecodeHintType.POSSIBLE_FORMATS, listOf(BarcodeFormat.QR_CODE))
+        fun onQrDetectedSuccess(qrText: String) {
+            if (qrText.isNotBlank() && decodedFlag.compareAndSet(false, true)) {
+                runOnUiThread {
+                    releaseCam()
+                    dlg.dismiss()
+                    FieldShareAndQrEngine.handleScannedOrGalleryQrPayload(this@MainActivity, qrText) {
+                        rebuildScreen()
+                        showIdentityAndFactionModal()
+                    }
+                }
             }
-            setHints(hints)
+        }
+
+        // Dotknięcie podglądu kamery wymusza natychmiastowy Autofocus
+        surfaceView.setOnClickListener {
+            try {
+                cameraInstance?.autoFocus { _, _ -> }
+            } catch (_: Exception) { }
         }
 
         surfaceView.holder.addCallback(object : SurfaceHolder.Callback {
@@ -686,41 +757,58 @@ class MainActivity : AppCompatActivity() {
                     cameraInstance = cam
                     cam.setDisplayOrientation(90)
                     val params = cam.parameters
+
+                    // Wybierz optymalną rozdzielczość podglądu HD (1280x720 lub najbliższą)
+                    val sizes = params.supportedPreviewSizes
+                    if (!sizes.isNullOrEmpty()) {
+                        val bestSize = sizes.minByOrNull { abs(it.width - 1280) + abs(it.height - 720) } ?: sizes.first()
+                        params.setPreviewSize(bestSize.width, bestSize.height)
+                    }
+
                     val focusModes = params.supportedFocusModes
                     if (focusModes != null) {
                         when {
                             focusModes.contains(Camera.Parameters.FOCUS_MODE_CONTINUOUS_PICTURE) ->
                                 params.focusMode = Camera.Parameters.FOCUS_MODE_CONTINUOUS_PICTURE
+                            focusModes.contains(Camera.Parameters.FOCUS_MODE_CONTINUOUS_VIDEO) ->
+                                params.focusMode = Camera.Parameters.FOCUS_MODE_CONTINUOUS_VIDEO
                             focusModes.contains(Camera.Parameters.FOCUS_MODE_AUTO) ->
                                 params.focusMode = Camera.Parameters.FOCUS_MODE_AUTO
                         }
                     }
                     cam.parameters = params
                     cam.setPreviewDisplay(holder)
+
                     cam.setPreviewCallback { data, camera ->
                         val now = System.currentTimeMillis()
-                        if (data == null || decodedFlag.get() || (now - lastDecodeTime) < 180) return@setPreviewCallback
+                        if (data == null || decodedFlag.get() || busyDecoding.get() || (now - lastDecodeTime) < 160) return@setPreviewCallback
                         lastDecodeTime = now
-                        try {
-                            val sz = camera.parameters.previewSize
-                            val source = PlanarYUVLuminanceSource(data, sz.width, sz.height, 0, 0, sz.width, sz.height, false)
-                            val result = try {
-                                reader.decodeWithState(BinaryBitmap(HybridBinarizer(source)))
-                            } catch (_: Exception) {
-                                reader.decodeWithState(BinaryBitmap(HybridBinarizer(source.invert())))
-                            }
-                            val text = result?.text
-                            if (!text.isNullOrBlank() && decodedFlag.compareAndSet(false, true)) {
-                                runOnUiThread {
-                                    releaseCam()
-                                    dlg.dismiss()
-                                    FieldShareAndQrEngine.handleScannedOrGalleryQrPayload(this@MainActivity, text) {
-                                        rebuildScreen()
-                                        showIdentityAndFactionModal()
-                                    }
+                        busyDecoding.set(true)
+
+                        val sz = try { camera.parameters.previewSize } catch (_: Exception) { null }
+                        if (sz == null) {
+                            busyDecoding.set(false)
+                            return@setPreviewCallback
+                        }
+                        val frameCopy = data.clone()
+
+                        // 1. Szybki skan przez Google ML Kit (rozpoznaje kody QR z monitorów pod kątem)
+                        FieldShareAndQrEngine.tryDecodeNv21WithMlKit(frameCopy, sz.width, sz.height, 90) { found ->
+                            onQrDetectedSuccess(found)
+                        }
+
+                        // 2. Równoległy skan ZXing (oryginał + obrót 90° + GlobalHistogramBinarizer)
+                        Thread {
+                            try {
+                                val zxingRes = FieldShareAndQrEngine.decodeYuvCameraFrame(frameCopy, sz.width, sz.height)
+                                if (!zxingRes.isNullOrBlank()) {
+                                    onQrDetectedSuccess(zxingRes)
                                 }
+                            } catch (_: Exception) {
+                            } finally {
+                                busyDecoding.set(false)
                             }
-                        } catch (_: Exception) { }
+                        }.start()
                     }
                     cam.startPreview()
                 } catch (ex: Exception) {
@@ -768,15 +856,19 @@ class MainActivity : AppCompatActivity() {
         val uri = data.data!!
 
         if (requestCode == REQ_PICK_GALLERY_QR) {
-            val decodedText = FieldShareAndQrEngine.decodeQrFromGalleryUri(this, uri)
-            if (decodedText != null) {
-                FieldShareAndQrEngine.handleScannedOrGalleryQrPayload(this, decodedText) {
-                    rebuildScreen()
-                    showIdentityAndFactionModal()
+            Thread {
+                val decodedText = FieldShareAndQrEngine.decodeQrFromGalleryUri(this, uri)
+                runOnUiThread {
+                    if (decodedText != null) {
+                        FieldShareAndQrEngine.handleScannedOrGalleryQrPayload(this, decodedText) {
+                            rebuildScreen()
+                            showIdentityAndFactionModal()
+                        }
+                    } else {
+                        Toast.makeText(this, "⚠️ Nie wykryto kodu QR na wybranym obrazku z Galerii!", Toast.LENGTH_LONG).show()
+                    }
                 }
-            } else {
-                Toast.makeText(this, "⚠️ Nie wykryto kodu QR na wybranym obrazku z Galerii!", Toast.LENGTH_LONG).show()
-            }
+            }.start()
         } else if (requestCode == REQ_PICK_FTAK_FILE) {
             try {
                 contentResolver.openInputStream(uri)?.use { stream ->

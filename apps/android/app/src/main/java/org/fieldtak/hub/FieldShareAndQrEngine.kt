@@ -17,6 +17,7 @@ import android.view.Gravity
 import android.view.ViewGroup
 import android.widget.*
 import com.google.zxing.*
+import com.google.zxing.common.GlobalHistogramBinarizer
 import com.google.zxing.common.HybridBinarizer
 import com.google.zxing.qrcode.QRCodeWriter
 import com.google.zxing.qrcode.decoder.ErrorCorrectionLevel
@@ -37,8 +38,11 @@ import java.net.URL
 import java.util.Collections
 import java.util.EnumMap
 import java.util.Locale
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.math.max
 import kotlin.math.roundToInt
 
@@ -49,9 +53,6 @@ object FieldShareAndQrEngine {
     private val downloadCounter = AtomicInteger(0)
     private var activeServerPort: Int = 8080
 
-    // =========================================================================
-    // 1. GENERATOR PRAWDZIWYCH KODÓW QR (STANDARD ISO ZXING)
-    // =========================================================================
     fun generateStandardQrBitmap(content: String, sizePx: Int = 520): Bitmap {
         val safeContent = content.ifBlank { "https://fieldtakhub.local" }
         return try {
@@ -81,7 +82,7 @@ object FieldShareAndQrEngine {
     }
 
     // =========================================================================
-    // 2. DEKODER KODÓW QR Z GALERII ZDJĘĆ (ZRZUTY EKRANU Z DISCORDA / APARATU)
+    // DEKODER QR (GOOGLE ML KIT + ZXING MULTI-PASS Z OBROTEM 90 STOPNI)
     // =========================================================================
     fun decodeQrFromGalleryUri(ctx: Context, imageUri: Uri): String? {
         return try {
@@ -102,11 +103,103 @@ object FieldShareAndQrEngine {
                 BitmapFactory.decodeStream(it, null, decodeOpts)
             } ?: return null
 
+            // 1. Najpierw spróbuj Google ML Kit (jeśli jest wkompilowany w APK)
+            val mlKitRes = tryDecodeBitmapWithMlKit(bitmap)
+            if (!mlKitRes.isNullOrBlank()) {
+                bitmap.recycle()
+                return mlKitRes
+            }
+
+            // 2. Wieloprzelotowy ZXing (GlobalHistogram + Hybrid + Inwersja)
             val decoded = decodeQrFromBitmap(bitmap)
             bitmap.recycle()
             decoded
         } catch (_: Exception) {
             null
+        }
+    }
+
+    fun tryDecodeBitmapWithMlKit(bitmap: Bitmap): String? {
+        return try {
+            val inputImageClass = Class.forName("com.google.mlkit.vision.common.InputImage")
+            val fromBitmapMethod = inputImageClass.getMethod("fromBitmap", Bitmap::class.java, Int::class.javaPrimitiveType)
+            val inputImage = fromBitmapMethod.invoke(null, bitmap, 0)
+
+            val scanningClass = Class.forName("com.google.mlkit.vision.barcode.BarcodeScanning")
+            val scanner = scanningClass.getMethod("getClient").invoke(null)
+            val processMethod = scanner.javaClass.getMethod("process", inputImageClass)
+            val task = processMethod.invoke(scanner, inputImage)
+
+            val latch = CountDownLatch(1)
+            val outRef = AtomicReference<String?>(null)
+
+            val onSuccessClass = Class.forName("com.google.android.gms.tasks.OnSuccessListener")
+            val proxy = java.lang.reflect.Proxy.newProxyInstance(
+                onSuccessClass.classLoader,
+                arrayOf(onSuccessClass)
+            ) { _, _, args ->
+                val list = args?.firstOrNull() as? List<*>
+                if (!list.isNullOrEmpty()) {
+                    val firstBarcode = list.first()!!
+                    val rawVal = firstBarcode.javaClass.getMethod("getRawValue").invoke(firstBarcode) as? String
+                    if (!rawVal.isNullOrBlank()) outRef.set(rawVal)
+                }
+                latch.countDown()
+                null
+            }
+            val onFailureClass = Class.forName("com.google.android.gms.tasks.OnFailureListener")
+            val failProxy = java.lang.reflect.Proxy.newProxyInstance(
+                onFailureClass.classLoader,
+                arrayOf(onFailureClass)
+            ) { _, _, _ ->
+                latch.countDown()
+                null
+            }
+
+            task.javaClass.getMethod("addOnSuccessListener", onSuccessClass).invoke(task, proxy)
+            task.javaClass.getMethod("addOnFailureListener", onFailureClass).invoke(task, failProxy)
+            latch.await(1500, TimeUnit.MILLISECONDS)
+            outRef.get()
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    fun tryDecodeNv21WithMlKit(nv21: ByteArray, width: Int, height: Int, rotationDeg: Int, onFound: (String) -> Unit): Boolean {
+        return try {
+            val inputImageClass = Class.forName("com.google.mlkit.vision.common.InputImage")
+            val fromBytesMethod = inputImageClass.getMethod(
+                "fromByteArray",
+                ByteArray::class.java,
+                Int::class.javaPrimitiveType,
+                Int::class.javaPrimitiveType,
+                Int::class.javaPrimitiveType,
+                Int::class.javaPrimitiveType
+            )
+            // 17 = ImageFormat.NV21
+            val inputImage = fromBytesMethod.invoke(null, nv21, width, height, rotationDeg, 17)
+            val scanningClass = Class.forName("com.google.mlkit.vision.barcode.BarcodeScanning")
+            val scanner = scanningClass.getMethod("getClient").invoke(null)
+            val processMethod = scanner.javaClass.getMethod("process", inputImageClass)
+            val task = processMethod.invoke(scanner, inputImage)
+
+            val onSuccessClass = Class.forName("com.google.android.gms.tasks.OnSuccessListener")
+            val proxy = java.lang.reflect.Proxy.newProxyInstance(
+                onSuccessClass.classLoader,
+                arrayOf(onSuccessClass)
+            ) { _, _, args ->
+                val list = args?.firstOrNull() as? List<*>
+                if (!list.isNullOrEmpty()) {
+                    val firstBarcode = list.first()!!
+                    val rawVal = firstBarcode.javaClass.getMethod("getRawValue").invoke(firstBarcode) as? String
+                    if (!rawVal.isNullOrBlank()) onFound(rawVal)
+                }
+                null
+            }
+            task.javaClass.getMethod("addOnSuccessListener", onSuccessClass).invoke(task, proxy)
+            true
+        } catch (_: Exception) {
+            false
         }
     }
 
@@ -118,32 +211,64 @@ object FieldShareAndQrEngine {
             bitmap.getPixels(pixels, 0, width, 0, 0, width, height)
 
             val source = RGBLuminanceSource(width, height, pixels)
-            val hints = EnumMap<DecodeHintType, Any>(DecodeHintType::class.java).apply {
-                put(DecodeHintType.TRY_HARDER, java.lang.Boolean.TRUE)
-                put(DecodeHintType.CHARACTER_SET, "UTF-8")
-                put(DecodeHintType.POSSIBLE_FORMATS, listOf(BarcodeFormat.QR_CODE))
-            }
-            val reader = MultiFormatReader().apply { setHints(hints) }
-
-            try {
-                val binaryBitmap = BinaryBitmap(HybridBinarizer(source))
-                reader.decodeWithState(binaryBitmap).text
-            } catch (_: Exception) {
-                // Drugi przebieg dla kodów QR w negatywie (jasny kod na ciemnym tle)
-                val invertedBitmap = BinaryBitmap(HybridBinarizer(source.invert()))
-                reader.decodeWithState(invertedBitmap).text
-            }
+            decodeLuminanceSourceMultiPass(source)
         } catch (_: Exception) {
             null
         }
     }
 
-    /**
-     * Przetwarza dowolny zeskanowany lub wczytany z Galerii ładunek QR:
-     * - Jeśli to link do lokalnego serwera Wi-Fi Hotspot (http://192.168...:8080/deploy.ftak),
-     *   automatycznie pobiera całą paczkę .ftak przez Wi-Fi i rozpakowuje mapy!
-     * - Jeśli to JSON lub link Meshtastic, importuje profil bezpośrednio.
-     */
+    fun decodeYuvCameraFrame(data: ByteArray, width: Int, height: Int): String? {
+        // 1. Przebieg na oryginalnej klatce YUV
+        try {
+            val src1 = PlanarYUVLuminanceSource(data, width, height, 0, 0, width, height, false)
+            val res1 = decodeLuminanceSourceMultiPass(src1)
+            if (!res1.isNullOrBlank()) return res1
+        } catch (_: Exception) { }
+
+        // 2. Przebieg na klatce obróconej o 90 stopni (dla kamer w trybie pionowym)
+        try {
+            val rotated = ByteArray(width * height)
+            for (y in 0 until height) {
+                for (x in 0 until width) {
+                    rotated[x * height + height - y - 1] = data[y * width + x]
+                }
+            }
+            val src2 = PlanarYUVLuminanceSource(rotated, height, width, 0, 0, height, width, false)
+            val res2 = decodeLuminanceSourceMultiPass(src2)
+            if (!res2.isNullOrBlank()) return res2
+        } catch (_: Exception) { }
+
+        return null
+    }
+
+    private fun decodeLuminanceSourceMultiPass(source: LuminanceSource): String? {
+        val hints = EnumMap<DecodeHintType, Any>(DecodeHintType::class.java).apply {
+            put(DecodeHintType.TRY_HARDER, java.lang.Boolean.TRUE)
+            put(DecodeHintType.CHARACTER_SET, "UTF-8")
+            put(DecodeHintType.POSSIBLE_FORMATS, listOf(BarcodeFormat.QR_CODE))
+        }
+        val reader = MultiFormatReader().apply { setHints(hints) }
+
+        val binarizers = listOf(
+            GlobalHistogramBinarizer(source),
+            HybridBinarizer(source),
+            GlobalHistogramBinarizer(source.invert()),
+            HybridBinarizer(source.invert())
+        )
+        for (bin in binarizers) {
+            try {
+                val res = reader.decodeWithState(BinaryBitmap(bin))
+                if (!res.text.isNullOrBlank()) return res.text
+            } catch (_: Exception) {
+                reader.reset()
+            }
+        }
+        return null
+    }
+
+    // =========================================================================
+    // UNIWERSALNA OBSŁUGA KODÓW QR (WINDOWS BUILDER :8765/.JSON, HOTSPOT, .FTAK)
+    // =========================================================================
     fun handleScannedOrGalleryQrPayload(
         activity: Activity,
         rawPayload: String,
@@ -155,16 +280,14 @@ object FieldShareAndQrEngine {
             return
         }
 
-        val isHttpFtakUrl = (trimmed.startsWith("http://", ignoreCase = true) ||
+        // 1. Każdy adres HTTP / HTTPS (z wyjątkiem bezpośredniego linku Meshtastic) pobierz z sieci lokalnej / serwera Buildera!
+        val isHttpDownloadUrl = (trimmed.startsWith("http://", ignoreCase = true) ||
                 trimmed.startsWith("https://", ignoreCase = true)) &&
-                (trimmed.endsWith(".ftak", ignoreCase = true) ||
-                        trimmed.contains("/deploy.ftak", ignoreCase = true) ||
-                        trimmed.contains(":8080/", ignoreCase = true) ||
-                        trimmed.contains(":8484/", ignoreCase = true))
+                !trimmed.startsWith("https://meshtastic.org/e/#", ignoreCase = true)
 
-        if (isHttpFtakUrl) {
+        if (isHttpDownloadUrl) {
             val targetUrl = if (trimmed.endsWith("/")) "${trimmed}deploy.ftak" else trimmed
-            downloadFtakFromHotspotAsync(activity, targetUrl, onImportCompleted)
+            downloadFromUrlAndIngestAsync(activity, targetUrl, onImportCompleted)
             return
         }
 
@@ -178,50 +301,78 @@ object FieldShareAndQrEngine {
         } else {
             Toast.makeText(
                 activity,
-                "⚠️ Nie rozpoznano formatu kodu QR (oczekiwano profilu .ftak, linku Wi-Fi Hotspot lub Meshtastic).",
+                "⚠️ Nie rozpoznano formatu kodu QR: ${trimmed.take(60)}",
                 Toast.LENGTH_LONG
             ).show()
         }
     }
 
-    private fun downloadFtakFromHotspotAsync(
+    private fun downloadFromUrlAndIngestAsync(
         activity: Activity,
         urlStr: String,
         onImportCompleted: () -> Unit
     ) {
-        Toast.makeText(activity, "📡 Pobieranie paczki .ftak przez Wi-Fi z: $urlStr ...", Toast.LENGTH_SHORT).show()
+        Toast.makeText(activity, "📡 Pobieranie konfiguracji z: $urlStr ...", Toast.LENGTH_SHORT).show()
         Thread {
             try {
-                val url = URL(urlStr)
-                val conn = (url.openConnection() as HttpURLConnection).apply {
-                    connectTimeout = 6000
-                    readTimeout = 20000
-                    requestMethod = "GET"
-                    connect()
+                val bytes = fetchHttpBytes(urlStr)
+                val asText = String(bytes, Charsets.UTF_8).trim()
+
+                // Jeśli pobrany plik to deskryptor JSON z Windows Buildera (np. http://192.168.0.43:8765/d/...json),
+                // sprawdź czy wskazuje on na pełną paczkę .ftak do pobrania:
+                if (asText.startsWith("{")) {
+                    try {
+                        val root = JSONObject(asText)
+                        val nestedPkgUrl = listOf(
+                            root.optString("packageUrl"),
+                            root.optString("ftakUrl"),
+                            root.optString("bundleUrl"),
+                            root.optString("downloadUrl"),
+                            root.optString("archiveUrl"),
+                            root.optString("url")
+                        ).firstOrNull { it.isNotBlank() && (it.startsWith("http", true) || it.startsWith("/")) }
+
+                        if (nestedPkgUrl != null) {
+                            val resolvedPkgUrl = if (nestedPkgUrl.startsWith("/")) {
+                                val base = URL(urlStr)
+                                "${base.protocol}://${base.host}:${if (base.port != -1) base.port else base.defaultPort}$nestedPkgUrl"
+                            } else {
+                                nestedPkgUrl
+                            }
+                            try {
+                                val pkgBytes = fetchHttpBytes(resolvedPkgUrl)
+                                if (FtakProvisioningEngine.importFromFtakStream(activity, pkgBytes.inputStream())) {
+                                    // Zachowaj też metadane z deskryptora JSON
+                                    FtakProvisioningEngine.importFromQrStringOrJson(activity, asText)
+                                    activity.runOnUiThread {
+                                        Toast.makeText(activity, "✓ Pobrano paczkę .ftak i konfigurację z Buildera!", Toast.LENGTH_LONG).show()
+                                        onImportCompleted()
+                                    }
+                                    return@Thread
+                                }
+                            } catch (_: Exception) { }
+                        }
+                    } catch (_: Exception) { }
                 }
-                if (conn.responseCode != HttpURLConnection.HTTP_OK) {
-                    throw Exception("Serwer zwrócił kod HTTP ${conn.responseCode}")
-                }
-                val ok = conn.inputStream.use { stream ->
-                    FtakProvisioningEngine.importFromFtakStream(activity, stream)
-                }
+
+                val ok = FtakProvisioningEngine.importFromFtakStream(activity, bytes.inputStream())
                 activity.runOnUiThread {
                     if (ok) {
                         Toast.makeText(
                             activity,
-                            "✓ Pobrano i rozpakowano paczkę .ftak przez Wi-Fi Hotspot!",
+                            "✓ Pobrano i wczytano: ${FtakProvisioningEngine.getEventName(activity)}!",
                             Toast.LENGTH_LONG
                         ).show()
                         onImportCompleted()
                     } else {
-                        Toast.makeText(activity, "⚠️ Pobrany plik nie jest prawidłową paczką .ftak!", Toast.LENGTH_LONG).show()
+                        Toast.makeText(activity, "⚠️ Pobrany plik nie zawiera prawidłowej konfiguracji .ftak!", Toast.LENGTH_LONG).show()
                     }
                 }
             } catch (ex: Exception) {
                 activity.runOnUiThread {
                     Toast.makeText(
                         activity,
-                        "⚠️ Błąd pobierania z Wi-Fi Hotspot (${ex.message}). Upewnij się, że jesteś połączony z Wi-Fi kolegi!",
+                        "⚠️ Błąd połączenia z $urlStr (${ex.message}). Sprawdź czy telefon jest w tej samej sieci Wi-Fi!",
                         Toast.LENGTH_LONG
                     ).show()
                 }
@@ -229,8 +380,22 @@ object FieldShareAndQrEngine {
         }.start()
     }
 
+    private fun fetchHttpBytes(urlStr: String): ByteArray {
+        val url = URL(urlStr)
+        val conn = (url.openConnection() as HttpURLConnection).apply {
+            connectTimeout = 6000
+            readTimeout = 20000
+            requestMethod = "GET"
+            connect()
+        }
+        if (conn.responseCode != HttpURLConnection.HTTP_OK) {
+            throw Exception("HTTP ${conn.responseCode}")
+        }
+        return conn.inputStream.use { it.readBytes() }
+    }
+
     // =========================================================================
-    // 3. LOKALNY SERWER HTTP WI-FI HOTSPOT AD-HOC (DZIELENIE SIĘ .FTAK W LESIE)
+    // LOKALNY SERWER HTTP WI-FI HOTSPOT AD-HOC
     // =========================================================================
     fun detectLocalHotspotOrWifiIp(): String {
         val candidates = mutableListOf<Pair<Int, String>>()
@@ -243,7 +408,6 @@ object FieldShareAndQrEngine {
                     if (addr is Inet4Address && !addr.isLoopbackAddress) {
                         val ip = addr.hostAddress ?: continue
                         val priority = when {
-                            // Najwyższy priorytet dla interfejsów Hotspotu Androida (SoftAP)
                             ifName.startsWith("ap") || ifName.startsWith("swlan") || ifName.contains("wlan1") -> 100
                             ip.startsWith("192.168.43.") || ip.startsWith("192.168.137.") -> 95
                             ifName.startsWith("wlan") -> 85
@@ -372,9 +536,6 @@ object FieldShareAndQrEngine {
         }
     }
 
-    // =========================================================================
-    // 4. OKNA DIALOGOWE UDOSTĘPNIANIA (WI-FI HOTSPOT + QR NA EKRANIE + PLIKI)
-    // =========================================================================
     fun showWifiHotspotShareDialog(activity: Activity) {
         if (!FtakProvisioningEngine.hasLoadedProfile(activity)) {
             Toast.makeText(activity, "⚠️ Najpierw wczytaj paczkę .ftak lub zeskanuj kod QR!", Toast.LENGTH_LONG).show()
@@ -387,23 +548,21 @@ object FieldShareAndQrEngine {
             setPadding(dp(activity, 18), dp(activity, 16), dp(activity, 18), dp(activity, 12))
         }
 
-        val titleView = TextView(activity).apply {
+        root.addView(TextView(activity).apply {
             text = "📡 SERWER WI-FI HOTSPOT AD-HOC"
             setTextColor(Color.parseColor("#1FE0C5"))
             typeface = Typeface.DEFAULT_BOLD
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 15.5f)
             gravity = Gravity.CENTER
-        }
-        root.addView(titleView)
+        })
 
-        val instrView = TextView(activity).apply {
+        root.addView(TextView(activity).apply {
             text = "1. Włącz Hotspot Wi-Fi w swoim telefonie (lub połączcie się z tym samym Wi-Fi).\n" +
-                    "2. Koledzy z drużyny łączą się z Twoim Wi-Fi i skanują poniższy kod QR w aplikacji Field TAK Hub (lub zwykłym aparatem):"
+                    "2. Koledzy z drużyny łączą się z Twoim Wi-Fi i skanują poniższy kod QR:"
             setTextColor(Color.parseColor("#B4C8D0"))
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
             setPadding(0, dp(activity, 6), 0, dp(activity, 10))
-        }
-        root.addView(instrView)
+        })
 
         val qrImageView = ImageView(activity).apply {
             background = createRoundedBg("#FFFFFF", "#1FE0C5", 3, 12f)
@@ -448,9 +607,9 @@ object FieldShareAndQrEngine {
 
         val dlg = AlertDialog.Builder(activity)
             .setView(ScrollView(activity).apply { addView(root) })
-            .setPositiveButton("🔄 Odśwież adres IP") { _, _ -> }
+            .setPositiveButton("🔄 Odśwież IP") { _, _ -> }
             .setNeutralButton("📋 Kopiuj link") { _, _ -> }
-            .setNegativeButton("⏹ Zatrzymaj i zamknij") { _, _ ->
+            .setNegativeButton("⏹ Zatrzymaj") { _, _ ->
                 stopLocalFtakServer()
             }
             .setOnDismissListener {
@@ -472,10 +631,6 @@ object FieldShareAndQrEngine {
         }
     }
 
-    /**
-     * Pokazuje na ekranie kod QR z samą konfiguracją aktywnej strony (JSON),
-     * dzięki czemu kolega stojący obok może zeskanować konfigurację nawet bez włączania Wi-Fi.
-     */
     fun showOfflineFactionQrDialog(activity: Activity) {
         val fac = FtakProvisioningEngine.getActiveFaction(activity)
         if (fac == null) {
@@ -547,11 +702,6 @@ object FieldShareAndQrEngine {
         dlg.show()
     }
 
-    /**
-     * Otwiera menu udostępniania plików w polu:
-     * - Cała paczka .ftak (Quick Share / Bluetooth / Discord)
-     * - Pojedyncze warstwy wybranej strony (.GPX do zegarka Garmin, .KMZ, .MBTILES)
-     */
     fun showShareFilesPickerDialog(activity: Activity) {
         val fac = FtakProvisioningEngine.getActiveFaction(activity)
         if (fac == null) {

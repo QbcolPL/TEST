@@ -2,6 +2,7 @@
 
 import android.annotation.SuppressLint
 import android.app.Activity
+import android.app.AlertDialog
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.ContentProvider
@@ -13,8 +14,11 @@ import android.database.MatrixCursor
 import android.location.Location
 import android.location.LocationManager
 import android.net.Uri
+import android.os.Build
+import android.os.Environment
 import android.os.ParcelFileDescriptor
 import android.provider.OpenableColumns
+import android.provider.Settings
 import android.util.Base64
 import android.widget.Toast
 import org.json.JSONArray
@@ -147,6 +151,30 @@ object FtakProvisioningEngine {
             .edit().putBoolean(KEY_PERMISSIONS_ACK, completed).apply()
     }
 
+    fun hasAllFilesStorageAccess(): Boolean {
+        return if (Build.VERSION.SDK_INT >= 30) {
+            Environment.isExternalStorageManager()
+        } else {
+            true
+        }
+    }
+
+    fun requestAllFilesStorageAccess(activity: Activity) {
+        if (Build.VERSION.SDK_INT >= 30 && !Environment.isExternalStorageManager()) {
+            try {
+                val intent = Intent(
+                    Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
+                    Uri.parse("package:${activity.packageName}")
+                )
+                activity.startActivity(intent)
+            } catch (_: Exception) {
+                try {
+                    activity.startActivity(Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION))
+                } catch (_: Exception) { }
+            }
+        }
+    }
+
     fun getCallsign(ctx: Context): String =
         ctx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).getString(KEY_CALLSIGN, "OPERATOR-1") ?: "OPERATOR-1"
 
@@ -187,9 +215,6 @@ object FtakProvisioningEngine {
 
     fun getSavedRawFtakArchiveFile(ctx: Context): File =
         File(ctx.filesDir, "current_operation.ftak")
-
-    fun getRawConfigJsonString(ctx: Context): String =
-        ctx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).getString(KEY_RAW_CONFIG_JSON, "") ?: ""
 
     fun importFromQrStringOrJson(ctx: Context, rawPayload: String): Boolean {
         val trimmed = rawPayload.trim()
@@ -248,7 +273,7 @@ object FtakProvisioningEngine {
             bundleDir.deleteRecursively()
             bundleDir.mkdirs()
 
-            var foundJsonConfig: String? = null
+            val jsonCandidates = mutableListOf<Pair<Int, String>>()
 
             ZipInputStream(rawBytes.inputStream()).use { zis ->
                 var entry: ZipEntry? = zis.nextEntry
@@ -265,10 +290,15 @@ object FtakProvisioningEngine {
                                 relPath.endsWith(".fthproj", ignoreCase = true) ||
                                 relPath.endsWith("manifest.ftak", ignoreCase = true)) {
                                 val candidateTxt = String(entryBytes, Charsets.UTF_8).trim()
-                                if (candidateTxt.contains("\"factions\"", ignoreCase = true) ||
-                                    candidateTxt.contains("\"Factions\"", ignoreCase = true) ||
-                                    candidateTxt.contains("\"ChannelName\"", ignoreCase = true)) {
-                                    foundJsonConfig = candidateTxt
+                                if (candidateTxt.startsWith("{")) {
+                                    // Priorytet dla plików zawierających pełną tablicę factions[] oraz VoiceChannels
+                                    val score = when {
+                                        candidateTxt.contains("\"factions\"", true) && candidateTxt.contains("VoiceChannels", true) -> 100
+                                        candidateTxt.contains("\"factions\"", true) -> 80
+                                        candidateTxt.contains("ChannelName", true) || candidateTxt.contains("otsHost", true) -> 50
+                                        else -> 10
+                                    }
+                                    jsonCandidates.add(score to candidateTxt)
                                 }
                             }
                         }
@@ -278,8 +308,13 @@ object FtakProvisioningEngine {
                 }
             }
 
-            if (foundJsonConfig != null && saveParsedConfigJson(ctx, foundJsonConfig)) {
-                return true
+            // Scal informacje ze wszystkich znalezionych plików JSON w paczce .ftak
+            if (jsonCandidates.isNotEmpty()) {
+                val sorted = jsonCandidates.sortedByDescending { it.first }
+                val mergedJson = mergeJsonConfigsFromBundle(sorted.map { it.second }, bundleDir)
+                if (saveParsedConfigJson(ctx, mergedJson)) {
+                    return true
+                }
             }
 
             val extractedFiles = bundleDir.walkTopDown().filter { it.isFile }.toList()
@@ -287,8 +322,8 @@ object FtakProvisioningEngine {
                 val fallbackJson = JSONObject().apply {
                     put("eventName", "Pakiet Map Polowych")
                     put("factions", JSONArray().put(JSONObject().apply {
-                        put("Name", "OPERATOR")
-                        put("ColorHex", "#1FE0C5")
+                        put("Name", "BLUFOR")
+                        put("ColorHex", "#2684FF")
                         put("ChannelName", "TAK-MESH")
                         put("LoraRegion", "EU_868")
                         put("LoraModemPreset", "SHORT_FAST")
@@ -301,6 +336,37 @@ object FtakProvisioningEngine {
         } catch (_: Exception) {
             false
         }
+    }
+
+    private fun mergeJsonConfigsFromBundle(jsonStrings: List<String>, bundleDir: File): String {
+        val primary = JSONObject(jsonStrings.first())
+        // Jeśli w innych plikach JSON w paczce jest adres OtsHost lub nazwa strony, uzupełnij brakujące pola
+        for (otherStr in jsonStrings.drop(1)) {
+            try {
+                val other = JSONObject(otherStr)
+                for (key in other.keys()) {
+                    if (!primary.has(key) || primary.optString(key).isBlank()) {
+                        primary.put(key, other.get(key))
+                    }
+                }
+            } catch (_: Exception) { }
+        }
+
+        // Wykryj nazwy stron z podkatalogów factions/<strona>, jeśli istnieją w paczce
+        val factionsDir = File(bundleDir, "factions")
+        if (factionsDir.exists() && factionsDir.isDirectory && !primary.has("factions") && !primary.has("Factions")) {
+            val subDirs = factionsDir.listFiles()?.filter { it.isDirectory } ?: emptyList()
+            if (subDirs.isNotEmpty()) {
+                val arr = JSONArray()
+                for (sd in subDirs) {
+                    val clone = JSONObject(primary.toString())
+                    clone.put("Name", sd.name.uppercase(Locale.ROOT))
+                    arr.put(clone)
+                }
+                primary.put("factions", arr)
+            }
+        }
+        return primary.toString()
     }
 
     private fun writeSyntheticFtakZipFromCurrentJson(ctx: Context, jsonText: String) {
@@ -319,7 +385,15 @@ object FtakProvisioningEngine {
             val factions = parseFactionsFromConfigJson(rawJson)
             if (factions.isEmpty()) return false
             val root = JSONObject(rawJson)
-            val evName = root.optString("eventName", root.optString("name", "OPERACJA TAKTYCZNA")).ifBlank { "OPERACJA TAKTYCZNA" }
+            val evName = firstNonBlank(
+                root.optString("eventName"),
+                root.optString("EventName"),
+                root.optString("missionName"),
+                root.optString("profileName"),
+                root.optString("title"),
+                root.optString("name"),
+                "OPERACJA TAKTYCZNA"
+            )
             ctx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit()
                 .putString(KEY_EVENT_NAME, evName)
                 .putString(KEY_RAW_CONFIG_JSON, rawJson)
@@ -336,44 +410,145 @@ object FtakProvisioningEngine {
         try {
             val root = JSONObject(rawJson)
             val arr = root.optJSONArray("factions") ?: root.optJSONArray("Factions")
-            if (arr != null) {
+            if (arr != null && arr.length() > 0) {
                 for (i in 0 until arr.length()) {
                     val o = arr.optJSONObject(i) ?: continue
-                    list.add(parseSingleFactionJson(o, i + 1))
+                    list.add(parseSingleFactionJson(o, root, i + 1))
                 }
-            } else if (root.has("ChannelName") || root.has("channelName") || root.has("OtsHost")) {
-                list.add(parseSingleFactionJson(root, 1))
+            } else {
+                list.add(parseSingleFactionJson(root, root, 1))
             }
         } catch (_: Exception) { }
         return list
     }
 
-    private fun parseSingleFactionJson(o: JSONObject, index: Int): FtakFactionProfile {
-        val name = o.optString("Name", o.optString("name", "STRONA-$index")).trim().ifEmpty { "STRONA-$index" }
-        val colorHex = o.optString("ColorHex", o.optString("colorHex", "#1FE0C5")).trim().ifEmpty { "#1FE0C5" }
-        val chName = o.optString("ChannelName", o.optString("channelName", name)).trim()
-        val psk = o.optString("Psk", o.optString("psk", "")).trim()
-        val chUrl = o.optString("ChannelUrl", o.optString("channelUrl", "")).trim()
-        val region = o.optString("LoraRegion", o.optString("loraRegion", "EU_868")).trim().ifEmpty { "EU_868" }
-        val preset = o.optString("LoraModemPreset", o.optString("loraModemPreset", "SHORT_FAST")).trim().ifEmpty { "SHORT_FAST" }
-        val hop = o.optInt("HopLimit", o.optInt("hopLimit", 3)).coerceIn(1, 7)
-        val ots = o.optString("OtsHost", o.optString("otsHost", "")).trim()
-        val enroll = o.optString("EnrollmentUri", o.optString("enrollmentUri", "")).trim()
-        val phone = o.optString("EmergencyPhone", o.optString("emergencyPhone", "")).trim()
-        val pli = o.optString("PliProfile", o.optString("pliProfile", "ConstRateUnreliable")).trim()
-        val mesh = o.optString("MeshProfile", o.optString("meshProfile", "StationaryMesh")).trim()
+    private fun parseSingleFactionJson(o: JSONObject, rootFallback: JSONObject, index: Int): FtakFactionProfile {
+        val meshObj = o.optJSONObject("meshtastic") ?: o.optJSONObject("Meshtastic")
+            ?: rootFallback.optJSONObject("meshtastic") ?: rootFallback.optJSONObject("Meshtastic")
+        val otsObj = o.optJSONObject("ots") ?: o.optJSONObject("Ots") ?: o.optJSONObject("takServer")
+            ?: rootFallback.optJSONObject("ots") ?: rootFallback.optJSONObject("takServer")
+
+        val chName = firstNonBlank(
+            o.optString("ChannelName"),
+            o.optString("channelName"),
+            meshObj?.optString("channelName"),
+            meshObj?.optString("ChannelName"),
+            meshObj?.optString("name"),
+            rootFallback.optString("ChannelName"),
+            rootFallback.optString("channelName"),
+            "TAK-MESH"
+        )
+
+        val inferredFactionName = when {
+            chName.contains("BLU", true) -> "BLUFOR"
+            chName.contains("OPF", true) -> "OPFOR"
+            else -> chName.replace("-TAK", "", ignoreCase = true).ifBlank { "BLUFOR" }
+        }
+
+        val name = firstNonBlank(
+            o.optString("Name"),
+            o.optString("name"),
+            o.optString("factionName"),
+            o.optString("FactionName"),
+            o.optString("faction"),
+            o.optString("team"),
+            inferredFactionName
+        )
+
+        val defaultCol = if (name.contains("OPF", true) || name.contains("RED", true)) "#EB4034" else "#2684FF"
+        val colorHex = firstNonBlank(
+            o.optString("ColorHex"),
+            o.optString("colorHex"),
+            o.optString("color"),
+            defaultCol
+        )
+
+        val psk = firstNonBlank(
+            o.optString("Psk"),
+            o.optString("psk"),
+            meshObj?.optString("psk"),
+            meshObj?.optString("Psk"),
+            rootFallback.optString("Psk"),
+            rootFallback.optString("psk"),
+            ""
+        )
+
+        val chUrl = firstNonBlank(
+            o.optString("ChannelUrl"),
+            o.optString("channelUrl"),
+            meshObj?.optString("channelUrl"),
+            meshObj?.optString("url"),
+            rootFallback.optString("ChannelUrl"),
+            rootFallback.optString("channelUrl"),
+            ""
+        )
+
+        val region = firstNonBlank(
+            o.optString("LoraRegion"),
+            o.optString("loraRegion"),
+            meshObj?.optString("region"),
+            meshObj?.optString("loraRegion"),
+            rootFallback.optString("LoraRegion"),
+            "EU_868"
+        )
+
+        val preset = firstNonBlank(
+            o.optString("LoraModemPreset"),
+            o.optString("loraModemPreset"),
+            meshObj?.optString("modemPreset"),
+            meshObj?.optString("loraModemPreset"),
+            rootFallback.optString("LoraModemPreset"),
+            "SHORT_FAST"
+        )
+
+        val hop = o.optInt("HopLimit", o.optInt("hopLimit", meshObj?.optInt("hopLimit", 3) ?: 3)).coerceIn(1, 7)
+
+        val ots = firstNonBlank(
+            o.optString("OtsHost"),
+            o.optString("otsHost"),
+            o.optString("serverHost"),
+            o.optString("takServerHost"),
+            otsObj?.optString("host"),
+            otsObj?.optString("hostname"),
+            otsObj?.optString("address"),
+            rootFallback.optString("OtsHost"),
+            rootFallback.optString("otsHost"),
+            rootFallback.optString("serverHost"),
+            ""
+        )
+
+        val enroll = firstNonBlank(
+            o.optString("EnrollmentUri"),
+            o.optString("enrollmentUri"),
+            otsObj?.optString("enrollmentUri"),
+            rootFallback.optString("EnrollmentUri"),
+            rootFallback.optString("enrollmentUri"),
+            ""
+        )
+
+        val phone = firstNonBlank(
+            o.optString("EmergencyPhone"),
+            o.optString("emergencyPhone"),
+            rootFallback.optString("EmergencyPhone"),
+            rootFallback.optString("emergencyPhone"),
+            ""
+        )
+
+        val pli = firstNonBlank(o.optString("PliProfile"), o.optString("pliProfile"), "ConstRateUnreliable")
+        val mesh = firstNonBlank(o.optString("MeshProfile"), o.optString("meshProfile"), "StationaryMesh")
 
         val voices = mutableListOf<FtakVoiceChannel>()
         val vArr = o.optJSONArray("VoiceChannels") ?: o.optJSONArray("voiceChannels")
+            ?: rootFallback.optJSONArray("VoiceChannels") ?: rootFallback.optJSONArray("voiceChannels")
         if (vArr != null) {
             for (j in 0 until vArr.length()) {
                 val vo = vArr.optJSONObject(j) ?: continue
                 voices.add(
                     FtakVoiceChannel(
-                        roleName = vo.optString("roleName", vo.optString("RoleName", "Kanał ${j + 1}")),
-                        bandType = vo.optString("bandType", vo.optString("BandType", "PMR")),
-                        freqMhz = vo.optString("freqMhz", vo.optString("FreqMhz", "-")),
-                        toneOrCode = vo.optString("toneOrCode", vo.optString("ToneOrCode", "-"))
+                        roleName = firstNonBlank(vo.optString("roleName"), vo.optString("RoleName"), "Kanał ${j + 1}"),
+                        bandType = firstNonBlank(vo.optString("bandType"), vo.optString("BandType"), "PMR"),
+                        freqMhz = firstNonBlank(vo.optString("freqMhz"), vo.optString("FreqMhz"), "-"),
+                        toneOrCode = firstNonBlank(vo.optString("toneOrCode"), vo.optString("ToneOrCode"), "-")
                     )
                 )
             }
@@ -397,6 +572,13 @@ object FtakProvisioningEngine {
         )
     }
 
+    private fun firstNonBlank(vararg values: String?): String {
+        for (v in values) {
+            if (!v.isNullOrBlank() && v.trim() != "null") return v.trim()
+        }
+        return ""
+    }
+
     fun getFactionFilteredFiles(ctx: Context, faction: FtakFactionProfile): List<File> {
         val rootDir = getExtractedBundleDir(ctx)
         if (!rootDir.exists()) return emptyList()
@@ -417,6 +599,9 @@ object FtakProvisioningEngine {
         }.toList()
     }
 
+    // =========================================================================
+    // KODER BINARNY MESHTASTIC PROTOBUF (CHANNELSET -> DEEP LINK 1-KLIK)
+    // =========================================================================
     fun buildMeshtasticDeepLinkUrl(faction: FtakFactionProfile): String {
         if (faction.channelUrl.startsWith("https://meshtastic.org/e/#", ignoreCase = true) ||
             faction.channelUrl.startsWith("meshtastic://", ignoreCase = true)) {
@@ -430,9 +615,7 @@ object FtakProvisioningEngine {
             byteArrayOf(1)
         }
 
-        val cleanNameBytes = faction.channelName
-            .take(11)
-            .toByteArray(Charsets.UTF_8)
+        val cleanNameBytes = faction.channelName.take(11).toByteArray(Charsets.UTF_8)
 
         val chSettingsOut = ByteArrayOutputStream()
         writeProtoBytes(chSettingsOut, 0x12, pskBytes)
@@ -533,10 +716,34 @@ object FtakProvisioningEngine {
                 activity.startActivity(genericIntent)
                 true
             } catch (_: Exception) {
-                Toast.makeText(activity, "📋 Skopiowano link konfiguracyjny Meshtastic do schowka:\n$deepLink", Toast.LENGTH_LONG).show()
+                Toast.makeText(activity, "📋 Skopiowano link Meshtastic do schowka:\n$deepLink", Toast.LENGTH_LONG).show()
                 false
             }
         }
+    }
+
+    // =========================================================================
+    // WYKRYWANIE I BEZPOŚREDNIE WSTRZYKIWANIE DO ATAK-CIV (ZERO BŁĘDÓW INTENTU)
+    // =========================================================================
+    fun detectInstalledAtakPackage(ctx: Context): String? {
+        val pm = ctx.packageManager
+        val candidates = listOf("com.atakmap.app.civ", "com.atakmap.app.mil", "com.atakmap.app")
+        for (pkg in candidates) {
+            try {
+                pm.getPackageInfo(pkg, 0)
+                return pkg
+            } catch (_: Exception) { }
+            if (pm.getLaunchIntentForPackage(pkg) != null) return pkg
+        }
+        try {
+            val allApps = pm.getInstalledApplications(0)
+            for (app in allApps) {
+                if (app.packageName.contains("atakmap", ignoreCase = true)) {
+                    return app.packageName
+                }
+            }
+        } catch (_: Exception) { }
+        return null
     }
 
     private fun mapHexColorToAtakTeam(colorHex: String, factionName: String): String {
@@ -552,14 +759,8 @@ object FtakProvisioningEngine {
         }
     }
 
-    fun buildAtakMissionPackageZip(ctx: Context, faction: FtakFactionProfile, callsign: String): File {
-        val outZip = File(ctx.cacheDir, "FieldTakHub_${faction.name}_ATAK.zip")
-        if (outZip.exists()) outZip.delete()
-
+    fun buildAtakConfigPrefXml(faction: FtakFactionProfile, callsign: String): String {
         val teamColor = mapHexColorToAtakTeam(faction.colorHex, faction.name)
-        val factionFiles = getFactionFilteredFiles(ctx, faction)
-        val packageUid = UUID.randomUUID().toString()
-
         val prefSb = StringBuilder()
         prefSb.appendLine("<?xml version='1.0' standalone='yes'?>")
         prefSb.appendLine("<preferences>")
@@ -578,6 +779,17 @@ object FtakProvisioningEngine {
             prefSb.appendLine("  </preference>")
         }
         prefSb.appendLine("</preferences>")
+        return prefSb.toString()
+    }
+
+    fun buildAtakMissionPackageZip(ctx: Context, faction: FtakFactionProfile, callsign: String): File {
+        val safeFac = faction.name.replace(Regex("[^a-zA-Z0-9_-]"), "_")
+        val outZip = File(ctx.cacheDir, "FieldTakHub_${safeFac}_ATAK.zip")
+        if (outZip.exists()) outZip.delete()
+
+        val factionFiles = getFactionFilteredFiles(ctx, faction)
+        val packageUid = UUID.randomUUID().toString()
+        val prefXml = buildAtakConfigPrefXml(faction, callsign)
 
         val manSb = StringBuilder()
         manSb.appendLine("<MissionPackageManifest version=\"2\">")
@@ -612,7 +824,7 @@ object FtakProvisioningEngine {
             zos.closeEntry()
 
             zos.putNextEntry(ZipEntry("prefs/config.pref"))
-            zos.write(prefSb.toString().toByteArray(Charsets.UTF_8))
+            zos.write(prefXml.toByteArray(Charsets.UTF_8))
             zos.closeEntry()
 
             for ((zPath, file) in zipEntriesToWrite) {
@@ -631,34 +843,127 @@ object FtakProvisioningEngine {
             return false
         }
 
+        // Na Androidzie 11+ poproś o dostęp do pamięci (MANAGE_EXTERNAL_STORAGE), aby wstrzykiwać pliki bezpośrednio do /sdcard/atak/
+        if (Build.VERSION.SDK_INT >= 30 && !Environment.isExternalStorageManager()) {
+            AlertDialog.Builder(activity)
+                .setTitle("📂 Dostęp do folderu /atak/")
+                .setMessage("Aby automatycznie wstrzyknąć Callsign, serwer oraz mapy prosto do folderu roboczego ATAK-CIV (/sdcard/atak/), włącz opcję 'Zezwól na zarządzanie wszystkimi plikami' na kolejnym ekranie, a następnie kliknij przycisk ponownie.")
+                .setPositiveButton("Włącz dostęp") { _, _ ->
+                    requestAllFilesStorageAccess(activity)
+                }
+                .setNegativeButton("Pomiń", null)
+                .show()
+            return false
+        }
+
         val callsign = getCallsign(activity)
-        return try {
-            val zipFile = buildAtakMissionPackageZip(activity, fac, callsign)
-            val contentUri = FtakShareContentProvider.buildUriForFile(activity, zipFile)
+        val atakPkg = detectInstalledAtakPackage(activity)
+        val zipFile = buildAtakMissionPackageZip(activity, fac, callsign)
+        val factionFiles = getFactionFilteredFiles(activity, fac)
+        val prefXml = buildAtakConfigPrefXml(fac, callsign)
 
-            val pm = activity.packageManager
-            val atakInstalled = try {
-                pm.getPackageInfo("com.atakmap.app.civ", 0)
-                true
-            } catch (_: Exception) { false }
+        var injectedToAtakDir = false
+        var copiedCount = 0
 
-            val viewIntent = Intent(Intent.ACTION_VIEW).apply {
-                setDataAndType(contentUri, "application/zip")
-                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
-                if (atakInstalled) setPackage("com.atakmap.app.civ")
+        try {
+            val extRoot = Environment.getExternalStorageDirectory()
+            val atakRoot = File(extRoot, "atak")
+            if (atakRoot.exists() || atakRoot.mkdirs()) {
+                // 1. Wstrzyknij Mission Package ZIP do /sdcard/atak/tools/datapackage/ (ATAK automatycznie ładuje pakiety z tego folderu!)
+                val dpDir = File(atakRoot, "tools/datapackage").apply { mkdirs() }
+                val targetZip = File(dpDir, zipFile.name)
+                zipFile.copyTo(targetZip, overwrite = true)
+
+                // 2. Wstrzyknij config.pref do /sdcard/atak/prefs/ oraz /sdcard/atak/tools/datapackage/
+                val prefsDir = File(atakRoot, "prefs").apply { mkdirs() }
+                File(prefsDir, "fieldtakhub.pref").writeText(prefXml, Charsets.UTF_8)
+
+                // 3. Wstrzyknij pojedyncze warstwy bezpośrednio do katalogów ATAK-a (imagery, overlays, cert)
+                val imageryDir = File(atakRoot, "imagery").apply { mkdirs() }
+                val overlaysDir = File(atakRoot, "overlays").apply { mkdirs() }
+                val certDir = File(atakRoot, "cert").apply { mkdirs() }
+
+                for (f in factionFiles) {
+                    val destDir = when (f.extension.lowercase(Locale.ROOT)) {
+                        "mbtiles", "sqlite" -> imageryDir
+                        "p12" -> certDir
+                        else -> overlaysDir
+                    }
+                    f.copyTo(File(destDir, f.name), overwrite = true)
+                    copiedCount++
+                }
+                injectedToAtakDir = true
             }
 
-            activity.startActivity(Intent.createChooser(viewIntent, "Zaimportuj pakiet misji w ATAK-CIV").apply {
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            })
-            Toast.makeText(
-                activity,
-                "🗺️ Wysłano pakiet misji do ATAK-CIV (Callsign: $callsign, Strona: ${fac.name})!",
-                Toast.LENGTH_LONG
-            ).show()
-            true
+            // Zapisz również kopię w /sdcard/Download/
+            val dlDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+            dlDir?.mkdirs()
+            if (dlDir != null && dlDir.exists()) {
+                zipFile.copyTo(File(dlDir, zipFile.name), overwrite = true)
+            }
+        } catch (_: Exception) { }
+
+        // Powiadom ATAK-CIV o nowym pakiecie i uruchom ATAK-CIV bezpośrednio (bez błędnego ekranu "Żadna z aplikacji...")
+        return try {
+            val contentUri = FtakShareContentProvider.buildUriForFile(activity, zipFile)
+            if (atakPkg != null) {
+                activity.grantUriPermission(atakPkg, contentUri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+
+                // Wyślij broadcast importu do ATAK-CIV
+                try {
+                    val bcast = Intent("com.atakmap.app.IMPORT_FILE").apply {
+                        setPackage(atakPkg)
+                        setDataAndType(contentUri, "application/zip")
+                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    }
+                    activity.sendBroadcast(bcast)
+                } catch (_: Exception) { }
+
+                // Jeśli w profilu jest link Enrollment (tak://), uruchom go, w przeciwnym razie uruchom ATAK-CIV
+                if (fac.enrollmentUri.isNotBlank()) {
+                    try {
+                        val enrollIntent = Intent(Intent.ACTION_VIEW, Uri.parse(fac.enrollmentUri)).apply {
+                            setPackage(atakPkg)
+                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        }
+                        if (activity.packageManager.resolveActivity(enrollIntent, 0) != null) {
+                            activity.startActivity(enrollIntent)
+                            Toast.makeText(activity, "✓ Wstrzyknięto pliki do /atak/ i uruchomiono autoryzację OTS w ATAK!", Toast.LENGTH_LONG).show()
+                            return true
+                        }
+                    } catch (_: Exception) { }
+                }
+
+                val launchIntent = activity.packageManager.getLaunchIntentForPackage(atakPkg)
+                if (launchIntent != null) {
+                    launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    activity.startActivity(launchIntent)
+                    Toast.makeText(
+                        activity,
+                        "✓ Wstrzyknięto do /sdcard/atak/: Callsign '$callsign', stronę ${fac.name} oraz $copiedCount warstw map! Uruchamiam ATAK-CIV...",
+                        Toast.LENGTH_LONG
+                    ).show()
+                    return true
+                }
+            }
+
+            if (injectedToAtakDir) {
+                Toast.makeText(
+                    activity,
+                    "✓ Zapisano konfigurację ($callsign / ${fac.name}) oraz $copiedCount plików w folderze /sdcard/atak/! Otwórz aplikację ATAK-CIV.",
+                    Toast.LENGTH_LONG
+                ).show()
+                true
+            } else {
+                Toast.makeText(
+                    activity,
+                    "⚠️ Nie wykryto aplikacji ATAK-CIV w telefonie. Pakiet zapisano w Pobrane (Download/${zipFile.name}).",
+                    Toast.LENGTH_LONG
+                ).show()
+                false
+            }
         } catch (ex: Exception) {
-            Toast.makeText(activity, "⚠️ Błąd wysyłania pakietu do ATAK: ${ex.message}", Toast.LENGTH_LONG).show()
+            Toast.makeText(activity, "⚠️ Błąd uruchamiania ATAK: ${ex.message}", Toast.LENGTH_LONG).show()
             false
         }
     }
