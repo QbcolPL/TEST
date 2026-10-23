@@ -19,9 +19,6 @@ using System.Windows.Media;
 
 namespace FieldTakHub.Builder.Services
 {
-    // =========================================================================
-    // 1. DWUJĘZYCZNY SILNIK LOKALIZACJI INTERFEJSU (PL <-> EN)
-    // =========================================================================
     internal static class BuilderI18n
     {
         public static string CurrentLang { get; private set; } = LoadSavedLanguage();
@@ -142,9 +139,6 @@ namespace FieldTakHub.Builder.Services
         }
     }
 
-    // =========================================================================
-    // 2. SERWIS POGODOWO-ASTRONOMICZNY METOC (POGODA, SŁOŃCE, FAZA KSIĘŻYCA)
-    // =========================================================================
     internal sealed class MetocReportData
     {
         public string DateIso { get; set; } = "";
@@ -205,10 +199,7 @@ namespace FieldTakHub.Builder.Services
             }
             string cleanDate = targetDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
 
-            // 1. Wylicz dokładną Fazę Księżyca i % oświetlenia tarczy (algorytm synodyczny)
             var moonInfo = CalculateMoonPhaseAndIllumination(targetDate);
-
-            // 2. Wylicz rezerwowe godziny wschodu/zachodu słońca oraz świtu/zmierzchu cywilnego (BMNT / EENT)
             var fallbackSun = CalculateAstronomicalSunTimes(targetDate, lat, lon);
 
             string condText = BuilderI18n.T("Umiarkowane zachmurzenie (dane astronomiczne obliczone lokalnie)", "Moderate cloud cover (astronomical data calculated locally)");
@@ -294,10 +285,7 @@ namespace FieldTakHub.Builder.Services
                         avgHumidity, precipMm, precipProb);
                 }
             }
-            catch
-            {
-                // W przypadku braku internetu lub daty spoza zasięgu API zachowaj obliczenia astronomiczne Słońca i Księżyca
-            }
+            catch { }
 
             string sunLine = string.Format(
                 "BMNT (Świt): {0}  |  ☀️ Wschód (SR): {1}  |  🌇 Zachód (SS): {2}  |  EENT (Zmierzch NVG): {3}",
@@ -337,13 +325,12 @@ namespace FieldTakHub.Builder.Services
 
         private static (string PhaseName, int IlluminationPct, string FullText) CalculateMoonPhaseAndIllumination(DateTime date)
         {
-            // Referencyjny Nów Księżyca: 2000-01-06 18:14 UTC, okres synodyczny: 29.53058867 doby
             DateTime knownNewMoon = new DateTime(2000, 1, 6, 18, 14, 0, DateTimeKind.Utc);
             DateTime sampleUtc = new DateTime(date.Year, date.Month, date.Day, 22, 0, 0, DateTimeKind.Utc);
             double synodicMonth = 29.53058867;
             double daysSince = (sampleUtc - knownNewMoon).TotalDays;
             double cyclePos = ((daysSince % synodicMonth) + synodicMonth) % synodicMonth;
-            double phaseFraction = cyclePos / synodicMonth; // 0.0 = Nów, 0.5 = Pełnia
+            double phaseFraction = cyclePos / synodicMonth;
 
             double illumFraction = 0.5 * (1.0 - Math.Cos(2.0 * Math.PI * phaseFraction));
             int illumPct = (int)Math.Round(illumFraction * 100.0);
@@ -517,9 +504,6 @@ namespace FieldTakHub.Builder.Services
         }
     }
 
-    // =========================================================================
-    // 3. MODEL DANYCH I GENERATOR ROZKAZU BOJOWEGO NATO (5-PARAGRAPH OPORD)
-    // =========================================================================
     internal sealed class OpordParagraphModel
     {
         public string TargetFaction { get; set; } = "BLUFOR";
@@ -533,7 +517,6 @@ namespace FieldTakHub.Builder.Services
         public string IssuingHq { get; set; } = "TOC / SZTAB GŁÓWNY";
         public string MapReferences { get; set; } = "Mapa Taktyczna MGRS 1:5000 (W załączeniu .FTAK / .KMZ)";
 
-        // Dane pogodowe METOC
         public string MetocCondition { get; set; } = "Brak pobranego raportu (kliknij '🌦️ Pobierz prognozę METOC' w sekcji 1c)";
         public string MetocTemperature { get; set; } = "-";
         public string MetocWind { get; set; } = "-";
@@ -541,12 +524,10 @@ namespace FieldTakHub.Builder.Services
         public string MetocSunTimes { get; set; } = "-";
         public string MetocMoonPhase { get; set; } = "-";
 
-        // 1. SITUATION
         public string EnemyForces { get; set; } = "Siły OPFOR w sile plutonu piechoty lekkiej prowadzą działania obronno-dywersyjne w rejonie AO. Wyposażenie: łączność radiowa, dymy, repliki szturmowe i wsparcia.";
         public string FriendlyForces { get; set; } = "Siły własne (BLUFOR) w składzie 2 sekcji szturmowych (ALFA, BRAVO) oraz elementu rozpoznawczego (RECON). Sztab (HQ) rozwinięty w pobliżu punktu startowego.";
         public string TerrainAndWeather { get; set; } = "Teren leśno-pagórkowaty z gęstym podszyciem i siecią dróg leśnych. Widoczność w koronach drzew ograniczona, miejscami skarpy oraz cieki wodne.";
 
-        // 2. MISSION (5W)
         public string MissionWho { get; set; } = "Zgrupowanie zadaniowe BLUFOR";
         public string MissionWhat { get; set; } = "opanuje i utrzyma kluczowy węzeł terenowy OBJ ALPHA";
         public string MissionWhen { get; set; } = "w dniu operacji od godz. H (09:00) do godz. 15:00";
@@ -554,17 +535,14 @@ namespace FieldTakHub.Builder.Services
         public string MissionWhy { get; set; } = "w celu uniemożliwienia siłom przeciwnika kontroli nad szlakiem zaopatrzeniowym.";
         public string MissionFullStatement { get; set; } = "";
 
-        // 3. EXECUTION
         public string CommandersIntent { get; set; } = "Kluczem do powodzenia jest skryte podejście, utrzymanie łączności w sieci Meshtastic/ATAK oraz jednoczesne uderzenie z dwóch kierunków. Stan końcowy: obiekt zabezpieczony, siły własne gotowe do obrony okrężnej.";
         public string ConceptOfOperations { get; set; } = "FAZA I (Infiltracja): Wyjście z FOB i zajęcie punktów wyjściowych.\nFAZA II (Szturm): Jednoczesne wejście w strefę obiektu po sygnale sztabu.\nFAZA III (Konsolidacja): Obrona okrężna i ewakuacja rannych.";
         public string TasksToSubordinateUnits { get; set; } = "• Sekcja ALFA: Główne uderzenie od kierunku północno-zachodniego.\n• Sekcja BRAVO: Ubezpieczenie skrzydła i blokada dróg podejścia od południa.\n• Sekcja RECON: Obserwacja przedpola i naprowadzanie w ATAK-CIV.";
         public string CoordinatingAndRoe { get; set; } = "• Obowiązkowa ochrona wzroku przez cały czas trwania gry.\n• Identyfikacja swój-obcy przed oddaniem strzału (sprawdź pozycję PLI w ATAK).\n• Zakaz używania pirotechniki poza wyznaczonymi strefami.";
 
-        // 4. SUSTAINMENT
         public string MedevacRules { get; set; } = "Po trafieniu gracz oznacza się czerwoną szmatką i wzywa medyka. W przypadku realnego urazu natychmiast użyć czerwonego przycisku 🚨 SOS MGRS w aplikacji Field TAK Hub.";
         public string RespawnAndSupply { get; set; } = "Punkt Respawn / FOB zgodny z markerem na mapie .GPX / .KMZ. Wyjście z Respawnu co pełne 20 minut lub w grupie min. 3 operatorów.";
 
-        // 5. COMMAND & SIGNAL
         public string SuccessionOfCommand { get; set; } = "1. Dowódca Operacji (HQ-1)  ->  2. Dowódca Sekcji ALFA (ALFA-1)  ->  3. Dowódca Sekcji BRAVO (BRAVO-1)";
         public string ChallengeAndPassword { get; set; } = "Hasło (Challenge): GROM   /   Odzew (Password): BŁYSK   |   Kombinacja liczbowa: 7";
     }
@@ -690,7 +668,6 @@ namespace FieldTakHub.Builder.Services
                 var model = GetOrCreateModel(_activeOpordFaction);
                 string eventName = TacticalConfigPanel.GetEventNameFromWindow(win);
 
-                // PASEK NAGŁÓWKOWY GENERATORA OPORD
                 var topCard = new Border
                 {
                     Background = TacticalConfigPanel.BrushCardBg,
@@ -840,7 +817,6 @@ namespace FieldTakHub.Builder.Services
                 topCard.Child = topStack;
                 mainStack.Children.Add(topCard);
 
-                // 0. METADANE NAGŁÓWKA ROZKAZU
                 var metaCard = CreateSectionCard(BuilderI18n.T("0. METADANE ROZKAZU (NAGŁÓWEK NATO)", "0. ORDER METADATA (NATO HEADER)"));
                 var metaGrid = new UniformGrid { Columns = 4 };
                 metaGrid.Children.Add(CreateLabeledTextBox(BuilderI18n.T("Klasyfikacja", "Classification"), model.Classification, v => { model.Classification = v; PersistModelToAppData(model); }));
@@ -850,7 +826,6 @@ namespace FieldTakHub.Builder.Services
                 ((StackPanel)metaCard.Child).Children.Add(metaGrid);
                 mainStack.Children.Add(metaCard);
 
-                // 1. SYTUACJA (SITUATION) + AUTOMATYCZNY MODUŁ POGODOWY METOC
                 var sec1 = CreateSectionCard(BuilderI18n.T("1. SYTUACJA + DANE POGODOWE I ASTRONOMICZNE METOC (1. SITUATION)", "1. SITUATION & METOC WEATHER / LIGHT INTELLIGENCE"));
                 var sec1Stack = (StackPanel)sec1.Child;
 
@@ -862,7 +837,6 @@ namespace FieldTakHub.Builder.Services
                     BuilderI18n.T("1b. Siły Własne (Friendly Forces — zadanie wyższego szczebla, sąsiedzi, wsparcie)", "1b. Friendly Forces (Higher HQ mission, adjacent units, support)"),
                     model.FriendlyForces, 54, v => { model.FriendlyForces = v; PersistModelToAppData(model); }));
 
-                // PASEK POBIERANIA DANYCH POGODOWYCH I ASTRONOMICZNYCH METOC (LIVE INTERNET + KALKULATOR SŁOŃCA I KSIĘŻYCA)
                 var metocBar = new Border
                 {
                     Background = new SolidColorBrush(Color.FromRgb(12, 31, 38)),
@@ -942,11 +916,9 @@ namespace FieldTakHub.Builder.Services
                     {
                         double lat = 49.8494;
                         double lon = 18.8127;
-                        bool hasValidCoords =
-                            double.TryParse((model.LocationLat ?? "").Replace(',', '.'), NumberStyles.Any, CultureInfo.InvariantCulture, out lat) &&
-                            double.TryParse((model.LocationLon ?? "").Replace(',', '.'), NumberStyles.Any, CultureInfo.InvariantCulture, out lon);
+                        double.TryParse((model.LocationLat ?? "").Replace(',', '.'), NumberStyles.Any, CultureInfo.InvariantCulture, out lat);
+                        double.TryParse((model.LocationLon ?? "").Replace(',', '.'), NumberStyles.Any, CultureInfo.InvariantCulture, out lon);
 
-                        // Jeśli wpisano nazwę miejscowości (inną niż domyślna), spróbuj ją zgeokodować
                         if (!string.IsNullOrWhiteSpace(model.LocationName) &&
                             !model.LocationName.Equals("Rejon Operacji (AO)", StringComparison.OrdinalIgnoreCase))
                         {
@@ -978,7 +950,6 @@ namespace FieldTakHub.Builder.Services
                             "🌡️ Temp: " + rep.TempRangeText + "  |  " + rep.HumidityAndPrecipText + "\n" +
                             "💨 Wiatr: " + rep.WindText;
 
-                        // Dopisz lub zaktualizuj blok METOC w polu 1c. Teren i Pogoda
                         string currentTerrain = (model.TerrainAndWeather ?? "").Trim();
                         int oldIdx = currentTerrain.IndexOf("🌦️ [", StringComparison.Ordinal);
                         if (oldIdx >= 0)
@@ -1020,7 +991,6 @@ namespace FieldTakHub.Builder.Services
                 sec1Stack.Children.Add(terrainBoxPanel);
                 mainStack.Children.Add(sec1);
 
-                // 2. ZADANIE (MISSION — KREATOR 5W)
                 var sec2 = CreateSectionCard(BuilderI18n.T("2. ZADANIE BOJOWE — KREATOR NATO 5W (2. MISSION)", "2. MISSION — NATO 5W STATEMENT BUILDER"));
                 var sec2Stack = (StackPanel)sec2.Child;
 
@@ -1048,7 +1018,6 @@ namespace FieldTakHub.Builder.Services
                 sec2Stack.Children.Add(fullMissionPanel);
                 mainStack.Children.Add(sec2);
 
-                // 3. REALIZACJA (EXECUTION)
                 var sec3 = CreateSectionCard(BuilderI18n.T("3. REALIZACJA (3. EXECUTION)", "3. EXECUTION"));
                 var sec3Stack = (StackPanel)sec3.Child;
                 sec3Stack.Children.Add(CreateLabeledMultilineBox(
@@ -1065,7 +1034,6 @@ namespace FieldTakHub.Builder.Services
                     model.CoordinatingAndRoe, 58, v => { model.CoordinatingAndRoe = v; PersistModelToAppData(model); }));
                 mainStack.Children.Add(sec3);
 
-                // 4. ZABEZPIECZENIE LOGISTYCZNE (SUSTAINMENT)
                 var sec4 = CreateSectionCard(BuilderI18n.T("4. ZABEZPIECZENIE LOGISTYCZNE I MEDYCZNE (4. SUSTAINMENT)", "4. SUSTAINMENT (SERVICE & SUPPORT)"));
                 var sec4Stack = (StackPanel)sec4.Child;
                 sec4Stack.Children.Add(CreateLabeledMultilineBox(
@@ -1076,7 +1044,6 @@ namespace FieldTakHub.Builder.Services
                     model.RespawnAndSupply, 52, v => { model.RespawnAndSupply = v; PersistModelToAppData(model); }));
                 mainStack.Children.Add(sec4);
 
-                // 5. DOWODZENIE I ŁĄCZNOŚĆ (COMMAND & SIGNAL)
                 var sec5 = CreateSectionCard(BuilderI18n.T("5. DOWODZENIE I ŁĄCZNOŚĆ (5. COMMAND & SIGNAL — AUTO-SYNC Z GENERATORA STRON)", "5. COMMAND & SIGNAL (AUTO-SYNCED FROM FACTION GENERATOR)"));
                 var sec5Stack = (StackPanel)sec5.Child;
 

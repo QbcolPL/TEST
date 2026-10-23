@@ -1,16 +1,837 @@
 ﻿#pragma warning disable CS0414, CS8600, CS8601, CS8602, CS8603, CS8604, CS8618, CS8625
 using System;
 using System.Collections.Generic;
+using System.IO;
+using System.IO.Compression;
 using System.Linq;
+using System.Net;
+using System.Net.Sockets;
+using System.Text;
+using System.Text.Json;
+using System.Text.Json.Nodes;
+using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 
 namespace FieldTakHub.Builder.Services
 {
+    internal sealed class CleanVoiceChannelItem
+    {
+        public string RoleName { get; set; } = "";
+        public string BandType { get; set; } = "PMR";
+        public string FreqMhz { get; set; } = "";
+        public string ToneOrCode { get; set; } = "";
+    }
+
+    internal sealed class CleanFactionProfileModel
+    {
+        public string Name { get; set; } = "BLUFOR";
+        public string ColorHex { get; set; } = "#2684FF";
+        public string ChannelName { get; set; } = "BLUFOR-TAK";
+        public string Psk { get; set; } = "";
+        public string ChannelUrl { get; set; } = "";
+        public string LoraRegion { get; set; } = "EU_868";
+        public string LoraModemPreset { get; set; } = "SHORT_FAST";
+        public int HopLimit { get; set; } = 3;
+        public string OtsHost { get; set; } = "";
+        public string EnrollmentUri { get; set; } = "";
+        public string EmergencyPhone { get; set; } = "";
+        public string PliProfile { get; set; } = "ConstRateUnreliable";
+        public string MeshProfile { get; set; } = "StationaryMesh";
+        public List<CleanVoiceChannelItem> VoiceChannels { get; set; } = new List<CleanVoiceChannelItem>();
+    }
+
+    internal sealed class CleanWorkspaceSnapshot
+    {
+        public string EventName { get; set; } = "OPERACJA";
+        public List<CleanFactionProfileModel> Factions { get; set; } = new List<CleanFactionProfileModel>();
+    }
+
+    internal static class CleanFactionPackageEngine
+    {
+        private static TcpListener _pcHotspotListener;
+        private static volatile bool _pcServerRunning;
+        private static int _pcServerPort = 8766;
+        private static readonly Dictionary<string, string> ServedFtakPathsByFaction = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+        public static async Task<string> BuildIsolatedFactionPackagesAsync(
+            Window win,
+            string onlyFactionName,
+            bool showQrModalAfter,
+            Action<string> onStatusUpdated = null)
+        {
+            try
+            {
+                OpordBuilderManager.SaveAllOpordsToDisk(win);
+
+                var snapshot = ExtractWorkspaceSnapshot(win);
+                string eventName = snapshot.EventName;
+                string sourceDir = TacticalConfigPanel.GetPrimarySourceDirectory(win);
+                string outBaseDir = Path.GetDirectoryName(Path.TrimEndingDirectorySeparator(sourceDir)) ?? AppDomain.CurrentDomain.BaseDirectory;
+                string releaseDir = Path.Combine(outBaseDir, "out", "release_factions");
+                Directory.CreateDirectory(releaseDir);
+
+                var targetFactions = snapshot.Factions;
+                if (!string.IsNullOrWhiteSpace(onlyFactionName))
+                {
+                    var filtered = targetFactions
+                        .Where(f => f.Name.Equals(onlyFactionName.Trim(), StringComparison.OrdinalIgnoreCase))
+                        .ToList();
+                    if (filtered.Count > 0) targetFactions = filtered;
+                }
+
+                if (targetFactions.Count == 0)
+                {
+                    onStatusUpdated?.Invoke(BuilderI18n.T("⚠️ Brak skonfigurowanych stron konfliktu!", "⚠️ No factions configured!"));
+                    return "";
+                }
+
+                string lastBuiltFtakPath = "";
+                CleanFactionProfileModel lastBuiltFaction = null;
+                int totalIncludedFiles = 0;
+
+                await Task.Run(() =>
+                {
+                    foreach (var fac in targetFactions)
+                    {
+                        string safeEv = TacticalConfigPanel.SanitizeFileName(eventName);
+                        string safeFac = TacticalConfigPanel.SanitizeFileName(fac.Name);
+                        string ftakPath = Path.Combine(releaseDir, safeEv + "_" + safeFac + ".ftak");
+
+                        int filesCount = WriteSingleAuditedFactionFtakArchive(win, ftakPath, eventName, fac, sourceDir);
+                        ServedFtakPathsByFaction[fac.Name] = ftakPath;
+                        lastBuiltFtakPath = ftakPath;
+                        lastBuiltFaction = fac;
+                        totalIncludedFiles += filesCount;
+                    }
+                });
+
+                string serverBaseUrl = EnsurePcFtakHttpServerStarted();
+
+                if (lastBuiltFaction != null)
+                {
+                    string otsLabel = string.IsNullOrWhiteSpace(lastBuiltFaction.OtsHost) ? "Mesh" : lastBuiltFaction.OtsHost;
+                    string msg = BuilderI18n.T(
+                        "✓ Zbudowano paczkę .FTAK: " + Path.GetFileName(lastBuiltFtakPath) + "  |  Strona: " + lastBuiltFaction.Name + "  |  OTS: " + otsLabel + "  |  Kanały radiowe: " + lastBuiltFaction.VoiceChannels.Count + "  |  Załączniki (Mapy + OPORD): " + totalIncludedFiles,
+                        "✓ Built .FTAK package: " + Path.GetFileName(lastBuiltFtakPath) + "  |  Faction: " + lastBuiltFaction.Name + "  |  OTS: " + otsLabel + "  |  Voice channels: " + lastBuiltFaction.VoiceChannels.Count + "  |  Assets (Maps + OPORD): " + totalIncludedFiles);
+                    onStatusUpdated?.Invoke(msg);
+                }
+
+                if (showQrModalAfter && lastBuiltFaction != null)
+                {
+                    ShowActiveFactionQrModal(win, eventName, lastBuiltFaction, lastBuiltFtakPath, serverBaseUrl);
+                }
+                else if (!string.IsNullOrEmpty(releaseDir) && Directory.Exists(releaseDir))
+                {
+                    TacticalConfigPanel.TryOpenFolderInExplorer(releaseDir);
+                }
+
+                return lastBuiltFtakPath;
+            }
+            catch (Exception ex)
+            {
+                onStatusUpdated?.Invoke("⚠️ Błąd budowy .FTAK: " + ex.Message);
+                return "";
+            }
+        }
+
+        private static int WriteSingleAuditedFactionFtakArchive(
+            Window win,
+            string ftakZipPath,
+            string eventName,
+            CleanFactionProfileModel fac,
+            string sourceDir)
+        {
+            if (File.Exists(ftakZipPath)) File.Delete(ftakZipPath);
+
+            string deepLinkUrl = BuildMeshtasticChannelSetUrl(fac);
+            fac.ChannelUrl = deepLinkUrl;
+
+            var voiceArray = new JsonArray();
+            foreach (var vc in fac.VoiceChannels)
+            {
+                voiceArray.Add(new JsonObject
+                {
+                    ["roleName"] = vc.RoleName,
+                    ["bandType"] = vc.BandType,
+                    ["freqMhz"] = vc.FreqMhz,
+                    ["toneOrCode"] = vc.ToneOrCode
+                });
+            }
+
+            var opordModel = OpordBuilderManager.GetOrCreateModel(fac.Name);
+            var opordSummaryNode = new JsonObject
+            {
+                ["operationNumber"] = opordModel.OperationNumber,
+                ["operationDate"] = opordModel.OperationDateIso,
+                ["locationName"] = opordModel.LocationName,
+                ["missionStatement"] = string.IsNullOrWhiteSpace(opordModel.MissionFullStatement)
+                    ? OpordBuilderManager.Compose5WMissionText(opordModel)
+                    : opordModel.MissionFullStatement,
+                ["weatherCondition"] = opordModel.MetocCondition,
+                ["temperature"] = opordModel.MetocTemperature,
+                ["wind"] = opordModel.MetocWind,
+                ["sunTimes"] = opordModel.MetocSunTimes,
+                ["moonPhase"] = opordModel.MetocMoonPhase,
+                ["challengePassword"] = opordModel.ChallengeAndPassword
+            };
+
+            JsonObject MakeFactionNode() => new JsonObject
+            {
+                ["Name"] = fac.Name,
+                ["ColorHex"] = fac.ColorHex,
+                ["ChannelName"] = fac.ChannelName,
+                ["Psk"] = fac.Psk,
+                ["ChannelUrl"] = deepLinkUrl,
+                ["LoraRegion"] = fac.LoraRegion,
+                ["LoraModemPreset"] = fac.LoraModemPreset,
+                ["HopLimit"] = fac.HopLimit,
+                ["OtsHost"] = fac.OtsHost,
+                ["EnrollmentUri"] = fac.EnrollmentUri,
+                ["EmergencyPhone"] = fac.EmergencyPhone,
+                ["PliProfile"] = fac.PliProfile,
+                ["MeshProfile"] = fac.MeshProfile,
+                ["VoiceChannels"] = JsonNode.Parse(voiceArray.ToJsonString()),
+                ["OpordSummary"] = JsonNode.Parse(opordSummaryNode.ToJsonString())
+            };
+
+            var rootJson = new JsonObject
+            {
+                ["schemaVersion"] = "2.5",
+                ["eventName"] = eventName,
+                ["activeFaction"] = fac.Name,
+                ["Name"] = fac.Name,
+                ["ColorHex"] = fac.ColorHex,
+                ["ChannelName"] = fac.ChannelName,
+                ["Psk"] = fac.Psk,
+                ["ChannelUrl"] = deepLinkUrl,
+                ["LoraRegion"] = fac.LoraRegion,
+                ["LoraModemPreset"] = fac.LoraModemPreset,
+                ["HopLimit"] = fac.HopLimit,
+                ["OtsHost"] = fac.OtsHost,
+                ["EnrollmentUri"] = fac.EnrollmentUri,
+                ["EmergencyPhone"] = fac.EmergencyPhone,
+                ["PliProfile"] = fac.PliProfile,
+                ["MeshProfile"] = fac.MeshProfile,
+                ["VoiceChannels"] = voiceArray,
+                ["OpordSummary"] = opordSummaryNode,
+                ["factions"] = new JsonArray { MakeFactionNode() }
+            };
+
+            string jsonFormatted = rootJson.ToJsonString(new JsonSerializerOptions { WriteIndented = true });
+            byte[] jsonBytes = Encoding.UTF8.GetBytes(jsonFormatted);
+
+            int includedAssetsCount = 0;
+            string facSlug = TacticalConfigPanel.SanitizeFileName(fac.Name).ToLowerInvariant();
+            string facSpecificDir = Path.Combine(sourceDir, "factions", facSlug);
+            bool hasFactionSpecificVectors = Directory.Exists(facSpecificDir) &&
+                Directory.GetFiles(facSpecificDir, "*.*", SearchOption.AllDirectories)
+                    .Any(f => f.EndsWith(".kmz", StringComparison.OrdinalIgnoreCase) || f.EndsWith(".gpx", StringComparison.OrdinalIgnoreCase));
+
+            using var fs = new FileStream(ftakZipPath, FileMode.CreateNew, FileAccess.Write);
+            using var zip = new ZipArchive(fs, ZipArchiveMode.Create, false, Encoding.UTF8);
+
+            foreach (string metaName in new[] { "config.json", "manifest.json" })
+            {
+                var e = zip.CreateEntry(metaName, CompressionLevel.Optimal);
+                using var s = e.Open();
+                s.Write(jsonBytes, 0, jsonBytes.Length);
+            }
+
+            if (Directory.Exists(sourceDir))
+            {
+                var allSourceFiles = Directory.GetFiles(sourceDir, "*.*", SearchOption.AllDirectories);
+                foreach (string filePath in allSourceFiles)
+                {
+                    string ext = Path.GetExtension(filePath).ToLowerInvariant();
+                    bool isAllowedAsset =
+                        ext == ".mbtiles" || ext == ".sqlite" ||
+                        ext == ".kmz" || ext == ".kml" || ext == ".gpx" ||
+                        ext == ".p12" || ext == ".pref" || ext == ".html";
+
+                    if (!isAllowedAsset) continue;
+
+                    string relPath = Path.GetRelativePath(sourceDir, filePath).Replace('\\', '/').TrimStart('/');
+                    string relLower = relPath.ToLowerInvariant();
+
+                    if (relLower.StartsWith("factions/"))
+                    {
+                        string[] parts = relLower.Split('/');
+                        if (parts.Length >= 2 && parts[1] != facSlug)
+                            continue;
+                    }
+                    else
+                    {
+                        if (hasFactionSpecificVectors && (ext == ".kmz" || ext == ".gpx"))
+                            continue;
+                    }
+
+                    var fileEntry = zip.CreateEntry(relPath, CompressionLevel.Optimal);
+                    using var entryStream = fileEntry.Open();
+                    using var srcStream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+                    srcStream.CopyTo(entryStream);
+                    includedAssetsCount++;
+                }
+            }
+
+            return includedAssetsCount;
+        }
+
+        public static string BuildMeshtasticChannelSetUrl(CleanFactionProfileModel fac)
+        {
+            if (!string.IsNullOrWhiteSpace(fac.ChannelUrl) &&
+                fac.ChannelUrl.StartsWith("https://meshtastic.org/e/#", StringComparison.OrdinalIgnoreCase))
+            {
+                return fac.ChannelUrl;
+            }
+
+            byte[] pskBytes;
+            try
+            {
+                pskBytes = !string.IsNullOrWhiteSpace(fac.Psk) ? Convert.FromBase64String(fac.Psk.Trim()) : new byte[] { 1 };
+            }
+            catch
+            {
+                pskBytes = new byte[] { 1 };
+            }
+
+            string cleanChName = (fac.ChannelName ?? fac.Name ?? "TAK").Trim();
+            if (cleanChName.Length > 11) cleanChName = cleanChName.Substring(0, 11);
+            byte[] nameBytes = Encoding.UTF8.GetBytes(cleanChName);
+
+            using var chSettings = new MemoryStream();
+            WriteProtoBytes(chSettings, 0x12, pskBytes);
+            if (nameBytes.Length > 0) WriteProtoBytes(chSettings, 0x1A, nameBytes);
+            WriteProtoVarintField(chSettings, 0x28, 1);
+            WriteProtoVarintField(chSettings, 0x30, 1);
+
+            using var loraCfg = new MemoryStream();
+            WriteProtoVarintField(loraCfg, 0x08, 1);
+            int presetEnum = (fac.LoraModemPreset ?? "SHORT_FAST").ToUpperInvariant() switch
+            {
+                "LONG_FAST" => 0,
+                "LONG_SLOW" => 1,
+                "VERY_LONG_SLOW" => 2,
+                "MEDIUM_SLOW" => 3,
+                "MEDIUM_FAST" => 4,
+                "SHORT_SLOW" => 5,
+                "SHORT_FAST" => 6,
+                "LONG_MODERATE" => 7,
+                "SHORT_TURBO" => 8,
+                _ => 6
+            };
+            if (presetEnum != 0) WriteProtoVarintField(loraCfg, 0x10, presetEnum);
+
+            int regionEnum = (fac.LoraRegion ?? "EU_868").ToUpperInvariant() switch
+            {
+                "US" => 1,
+                "EU_433" => 2,
+                "EU_868" => 3,
+                "UA_433" => 14,
+                "UA_868" => 15,
+                _ => 3
+            };
+            WriteProtoVarintField(loraCfg, 0x38, regionEnum);
+            WriteProtoVarintField(loraCfg, 0x40, Math.Clamp(fac.HopLimit, 1, 7));
+            WriteProtoVarintField(loraCfg, 0x48, 1);
+
+            using var channelSet = new MemoryStream();
+            WriteProtoBytes(channelSet, 0x0A, chSettings.ToArray());
+            WriteProtoBytes(channelSet, 0x12, loraCfg.ToArray());
+
+            string b64Url = Convert.ToBase64String(channelSet.ToArray())
+                .TrimEnd('=')
+                .Replace('+', '-')
+                .Replace('/', '_');
+
+            return "https://meshtastic.org/e/#" + b64Url;
+        }
+
+        private static void WriteProtoVarint(Stream s, int val)
+        {
+            uint v = (uint)val;
+            while ((v & ~0x7Fu) != 0)
+            {
+                s.WriteByte((byte)((v & 0x7Fu) | 0x80u));
+                v >>= 7;
+            }
+            s.WriteByte((byte)(v & 0x7Fu));
+        }
+
+        private static void WriteProtoVarintField(Stream s, byte tag, int val)
+        {
+            s.WriteByte(tag);
+            WriteProtoVarint(s, val);
+        }
+
+        private static void WriteProtoBytes(Stream s, byte tag, byte[] data)
+        {
+            s.WriteByte(tag);
+            WriteProtoVarint(s, data.Length);
+            s.Write(data, 0, data.Length);
+        }
+
+        public static string EnsurePcFtakHttpServerStarted()
+        {
+            if (!_pcServerRunning || _pcHotspotListener == null)
+            {
+                foreach (int port in new[] { 8766, 8767, 8768 })
+                {
+                    try
+                    {
+                        var listener = new TcpListener(IPAddress.Any, port);
+                        listener.Start();
+                        _pcHotspotListener = listener;
+                        _pcServerPort = port;
+                        _pcServerRunning = true;
+                        _ = Task.Run(() => AcceptPcHttpClientsLoop(listener));
+                        break;
+                    }
+                    catch { }
+                }
+            }
+
+            string localIp = GetBestLocalLanIpAddress();
+            return "http://" + localIp + ":" + _pcServerPort;
+        }
+
+        public static void StopPcFtakHttpServer()
+        {
+            _pcServerRunning = false;
+            try { _pcHotspotListener?.Stop(); } catch { }
+            _pcHotspotListener = null;
+        }
+
+        private static async Task AcceptPcHttpClientsLoop(TcpListener listener)
+        {
+            while (_pcServerRunning)
+            {
+                try
+                {
+                    var client = await listener.AcceptTcpClientAsync();
+                    _ = Task.Run(() => HandlePcHttpClient(client));
+                }
+                catch
+                {
+                    if (!_pcServerRunning) break;
+                }
+            }
+        }
+
+        private static void HandlePcHttpClient(TcpClient client)
+        {
+            using (client)
+            {
+                try
+                {
+                    using var stream = client.GetStream();
+                    using var reader = new StreamReader(stream, Encoding.UTF8, false, 4096, true);
+                    string reqLine = reader.ReadLine();
+                    if (string.IsNullOrEmpty(reqLine)) return;
+
+                    string[] parts = reqLine.Split(' ');
+                    string path = parts.Length >= 2 ? Uri.UnescapeDataString(parts[1]) : "/";
+
+                    string targetFile = null;
+                    foreach (var kv in ServedFtakPathsByFaction)
+                    {
+                        if (path.Contains(kv.Key, StringComparison.OrdinalIgnoreCase) && File.Exists(kv.Value))
+                        {
+                            targetFile = kv.Value;
+                            break;
+                        }
+                    }
+                    if (targetFile == null)
+                    {
+                        targetFile = ServedFtakPathsByFaction.Values.FirstOrDefault(File.Exists);
+                    }
+
+                    if (targetFile != null && File.Exists(targetFile))
+                    {
+                        byte[] fileBytes = File.ReadAllBytes(targetFile);
+                        string fileName = Path.GetFileName(targetFile);
+                        string headers =
+                            "HTTP/1.1 200 OK\r\n" +
+                            "Content-Type: application/octet-stream\r\n" +
+                            "Content-Disposition: attachment; filename=\"" + fileName + "\"\r\n" +
+                            "Content-Length: " + fileBytes.Length + "\r\n" +
+                            "Connection: close\r\n\r\n";
+                        byte[] hdrBytes = Encoding.UTF8.GetBytes(headers);
+                        stream.Write(hdrBytes, 0, hdrBytes.Length);
+                        stream.Write(fileBytes, 0, fileBytes.Length);
+                        stream.Flush();
+                    }
+                }
+                catch { }
+            }
+        }
+
+        private static string GetBestLocalLanIpAddress()
+        {
+            try
+            {
+                var host = Dns.GetHostEntry(Dns.GetHostName());
+                foreach (var ip in host.AddressList)
+                {
+                    if (ip.AddressFamily == AddressFamily.InterNetwork && !IPAddress.IsLoopback(ip))
+                    {
+                        string s = ip.ToString();
+                        if (s.StartsWith("192.168.") || s.StartsWith("10.") || s.StartsWith("172."))
+                            return s;
+                    }
+                }
+            }
+            catch { }
+            return "127.0.0.1";
+        }
+
+        public static void ShowActiveFactionQrModal(
+            Window owner,
+            string eventName,
+            CleanFactionProfileModel fac,
+            string ftakFilePath,
+            string serverBaseUrl)
+        {
+            string safeFac = Uri.EscapeDataString(fac.Name);
+            string wifiDownloadUrl = serverBaseUrl + "/deploy/" + safeFac + ".ftak";
+
+            var offlineJsonObj = new JsonObject
+            {
+                ["eventName"] = eventName,
+                ["activeFaction"] = fac.Name,
+                ["factions"] = new JsonArray
+                {
+                    new JsonObject
+                    {
+                        ["Name"] = fac.Name,
+                        ["ColorHex"] = fac.ColorHex,
+                        ["ChannelName"] = fac.ChannelName,
+                        ["Psk"] = fac.Psk,
+                        ["ChannelUrl"] = fac.ChannelUrl,
+                        ["LoraRegion"] = fac.LoraRegion,
+                        ["LoraModemPreset"] = fac.LoraModemPreset,
+                        ["HopLimit"] = fac.HopLimit,
+                        ["OtsHost"] = fac.OtsHost,
+                        ["EmergencyPhone"] = fac.EmergencyPhone,
+                        ["VoiceChannels"] = new JsonArray(
+                            fac.VoiceChannels.Select(v => (JsonNode)new JsonObject
+                            {
+                                ["roleName"] = v.RoleName,
+                                ["bandType"] = v.BandType,
+                                ["freqMhz"] = v.FreqMhz,
+                                ["toneOrCode"] = v.ToneOrCode
+                            }).ToArray())
+                    }
+                }
+            };
+            string offlineJsonPayload = offlineJsonObj.ToJsonString();
+
+            var dlg = new Window
+            {
+                Title = BuilderI18n.T(
+                    "📱 Kod QR Aktywnej Strony: " + fac.Name + " (" + eventName + ")",
+                    "📱 Active Faction QR Code: " + fac.Name + " (" + eventName + ")"),
+                Width = 500,
+                Height = 620,
+                WindowStartupLocation = WindowStartupLocation.CenterOwner,
+                Owner = owner,
+                Background = TacticalConfigPanel.BrushCardBg,
+                Foreground = Brushes.White,
+                ResizeMode = ResizeMode.NoResize,
+                WindowStyle = WindowStyle.ToolWindow
+            };
+
+            var root = new StackPanel { Margin = new Thickness(18, 14, 18, 14) };
+
+            var hdrBorder = new Border
+            {
+                Background = TacticalConfigPanel.BrushItemBg,
+                BorderBrush = TacticalConfigPanel.BrushFromHex(fac.ColorHex, Color.FromRgb(31, 224, 197)),
+                BorderThickness = new Thickness(2),
+                CornerRadius = new CornerRadius(8),
+                Padding = new Thickness(12, 8, 12, 8),
+                Margin = new Thickness(0, 0, 0, 10)
+            };
+            var hdrStack = new StackPanel();
+            hdrStack.Children.Add(new TextBlock
+            {
+                Text = "🛡️ " + fac.Name + "   •   " + eventName,
+                Foreground = TacticalConfigPanel.BrushAccent,
+                FontWeight = FontWeights.Bold,
+                FontSize = 14,
+                HorizontalAlignment = HorizontalAlignment.Center
+            });
+            long kbSize = File.Exists(ftakFilePath) ? Math.Max(1, new FileInfo(ftakFilePath).Length / 1024) : 0;
+            string otsInfo = string.IsNullOrEmpty(fac.OtsHost) ? "Off-Grid Mesh" : fac.OtsHost;
+            hdrStack.Children.Add(new TextBlock
+            {
+                Text = "LoRa: " + fac.ChannelName + " (" + fac.LoraRegion + ")  |  OTS: " + otsInfo + "  |  .FTAK: " + kbSize + " KB",
+                Foreground = Brushes.White,
+                FontSize = 10.5,
+                HorizontalAlignment = HorizontalAlignment.Center,
+                Margin = new Thickness(0, 3, 0, 0)
+            });
+            hdrBorder.Child = hdrStack;
+            root.Children.Add(hdrBorder);
+
+            var modeGrid = new UniformGrid { Columns = 2, Margin = new Thickness(0, 0, 0, 10) };
+            var btnModeWifi = new Button
+            {
+                Content = BuilderI18n.T("📡 Tryb 1: Pobierz pełny .FTAK po Wi-Fi", "📡 Mode 1: Full .FTAK via Wi-Fi"),
+                Height = 30,
+                Margin = new Thickness(0, 0, 4, 0),
+                Background = TacticalConfigPanel.BrushButtonAccent,
+                Foreground = TacticalConfigPanel.BrushDarkFg,
+                FontWeight = FontWeights.Bold,
+                FontSize = 10.5,
+                Cursor = Cursors.Hand
+            };
+            var btnModeOffline = new Button
+            {
+                Content = BuilderI18n.T("📴 Tryb 2: Kod QR Offline (Sam JSON)", "📴 Mode 2: Offline Config QR (JSON)"),
+                Height = 30,
+                Margin = new Thickness(4, 0, 0, 0),
+                Background = TacticalConfigPanel.BrushInputBg,
+                Foreground = Brushes.White,
+                FontWeight = FontWeights.Bold,
+                FontSize = 10.5,
+                Cursor = Cursors.Hand
+            };
+            modeGrid.Children.Add(btnModeWifi);
+            modeGrid.Children.Add(btnModeOffline);
+            root.Children.Add(modeGrid);
+
+            var qrFrame = new Border
+            {
+                Width = 280,
+                Height = 280,
+                Background = Brushes.White,
+                BorderBrush = TacticalConfigPanel.BrushAccent,
+                BorderThickness = new Thickness(3),
+                CornerRadius = new CornerRadius(12),
+                Padding = new Thickness(12),
+                HorizontalAlignment = HorizontalAlignment.Center,
+                Margin = new Thickness(0, 0, 0, 10)
+            };
+            var qrImg = new Image { Stretch = Stretch.Uniform };
+            RenderOptions.SetBitmapScalingMode(qrImg, BitmapScalingMode.NearestNeighbor);
+            qrFrame.Child = qrImg;
+            root.Children.Add(qrFrame);
+
+            var payloadBox = new TextBox
+            {
+                Text = wifiDownloadUrl,
+                IsReadOnly = true,
+                Height = 26,
+                FontSize = 10.5,
+                FontFamily = new FontFamily("Consolas"),
+                HorizontalContentAlignment = HorizontalAlignment.Center,
+                VerticalContentAlignment = VerticalAlignment.Center,
+                Background = TacticalConfigPanel.BrushInputBg,
+                Foreground = TacticalConfigPanel.BrushAccent,
+                BorderBrush = TacticalConfigPanel.BrushInputBorder,
+                Margin = new Thickness(0, 0, 0, 10)
+            };
+            root.Children.Add(payloadBox);
+
+            void LoadQrPayload(string dataStr, bool isWifiMode)
+            {
+                payloadBox.Text = isWifiMode
+                    ? wifiDownloadUrl
+                    : ("[Offline JSON: " + fac.Name + " | LoRa: " + fac.ChannelName + " | Voice: " + fac.VoiceChannels.Count + "]");
+                btnModeWifi.Background = isWifiMode ? TacticalConfigPanel.BrushButtonAccent : TacticalConfigPanel.BrushInputBg;
+                btnModeWifi.Foreground = isWifiMode ? TacticalConfigPanel.BrushDarkFg : Brushes.White;
+                btnModeOffline.Background = !isWifiMode ? TacticalConfigPanel.BrushButtonAccent : TacticalConfigPanel.BrushInputBg;
+                btnModeOffline.Foreground = !isWifiMode ? TacticalConfigPanel.BrushDarkFg : Brushes.White;
+
+                _ = Task.Run(async () =>
+                {
+                    try
+                    {
+                        string cacheKey = "QR_CLEAN_" + dataStr;
+                        byte[] bytes = GeoportalLidarEngine.TryReadDiskCache(cacheKey);
+                        if (bytes == null)
+                        {
+                            string api = "https://api.qrserver.com/v1/create-qr-code/?size=420x420&margin=10&data=" + Uri.EscapeDataString(dataStr);
+                            bytes = await GeoportalLidarEngine.FastHttp.GetByteArrayAsync(api);
+                            if (GeoportalLidarEngine.IsValidImageBytes(bytes))
+                                GeoportalLidarEngine.SaveDiskCacheAsync(cacheKey, bytes);
+                        }
+                        if (GeoportalLidarEngine.IsValidImageBytes(bytes) && Application.Current != null)
+                        {
+                            await Application.Current.Dispatcher.InvokeAsync(() =>
+                            {
+                                var bmp = new BitmapImage();
+                                using var ms = new MemoryStream(bytes);
+                                bmp.BeginInit();
+                                bmp.CacheOption = BitmapCacheOption.OnLoad;
+                                bmp.StreamSource = ms;
+                                bmp.EndInit();
+                                bmp.Freeze();
+                                qrImg.Source = bmp;
+                            });
+                        }
+                    }
+                    catch { }
+                });
+            }
+
+            btnModeWifi.Click += (_, __) => LoadQrPayload(wifiDownloadUrl, true);
+            btnModeOffline.Click += (_, __) => LoadQrPayload(offlineJsonPayload, false);
+            LoadQrPayload(wifiDownloadUrl, true);
+
+            var bottomBtns = new UniformGrid { Columns = 2 };
+            var btnOpenDir = new Button
+            {
+                Content = BuilderI18n.T("📂 Otwórz folder z plikiem .FTAK", "📂 Open .FTAK Output Folder"),
+                Height = 32,
+                Margin = new Thickness(0, 0, 5, 0),
+                Background = TacticalConfigPanel.BrushItemBg,
+                Foreground = Brushes.White,
+                BorderBrush = TacticalConfigPanel.BrushAccent,
+                FontWeight = FontWeights.Bold,
+                Cursor = Cursors.Hand
+            };
+            btnOpenDir.Click += (_, __) =>
+            {
+                string dir = Path.GetDirectoryName(ftakFilePath);
+                if (!string.IsNullOrEmpty(dir)) TacticalConfigPanel.TryOpenFolderInExplorer(dir);
+            };
+
+            var btnClose = new Button
+            {
+                Content = BuilderI18n.T("Zamknij", "Close"),
+                Height = 32,
+                Margin = new Thickness(5, 0, 0, 0),
+                Background = TacticalConfigPanel.BrushInputBg,
+                Foreground = Brushes.White,
+                Cursor = Cursors.Hand
+            };
+            btnClose.Click += (_, __) => dlg.Close();
+
+            bottomBtns.Children.Add(btnOpenDir);
+            bottomBtns.Children.Add(btnClose);
+            root.Children.Add(bottomBtns);
+
+            dlg.Content = root;
+            dlg.ShowDialog();
+        }
+
+        public static CleanWorkspaceSnapshot ExtractWorkspaceSnapshot(Window win)
+        {
+            try { TacticalConfigPanel.SaveSessionStateAuto(win); } catch { }
+
+            var state = new CleanWorkspaceSnapshot
+            {
+                EventName = TacticalConfigPanel.GetEventNameFromWindow(win)
+            };
+
+            JsonObject sessionJson = TryReadSavedWorkspaceJson();
+            if (sessionJson != null)
+            {
+                string ev = sessionJson["eventName"]?.ToString();
+                if (!string.IsNullOrWhiteSpace(ev)) state.EventName = ev;
+
+                if (sessionJson["factions"] is JsonArray fArr && fArr.Count > 0)
+                {
+                    foreach (var item in fArr.OfType<JsonObject>())
+                    {
+                        var fm = new CleanFactionProfileModel
+                        {
+                            Name = item["Name"]?.ToString() ?? item["name"]?.ToString() ?? "BLUFOR",
+                            ColorHex = item["ColorHex"]?.ToString() ?? item["colorHex"]?.ToString() ?? "#2684FF",
+                            ChannelName = item["ChannelName"]?.ToString() ?? item["channelName"]?.ToString() ?? "TAK",
+                            Psk = item["Psk"]?.ToString() ?? item["psk"]?.ToString() ?? "",
+                            ChannelUrl = item["ChannelUrl"]?.ToString() ?? item["channelUrl"]?.ToString() ?? "",
+                            LoraRegion = item["LoraRegion"]?.ToString() ?? item["loraRegion"]?.ToString() ?? "EU_868",
+                            LoraModemPreset = item["LoraModemPreset"]?.ToString() ?? item["loraModemPreset"]?.ToString() ?? "SHORT_FAST",
+                            HopLimit = int.TryParse(item["HopLimit"]?.ToString() ?? item["hopLimit"]?.ToString(), out int hl) ? hl : 3,
+                            OtsHost = item["OtsHost"]?.ToString() ?? item["otsHost"]?.ToString() ?? "",
+                            EnrollmentUri = item["EnrollmentUri"]?.ToString() ?? item["enrollmentUri"]?.ToString() ?? "",
+                            EmergencyPhone = item["EmergencyPhone"]?.ToString() ?? item["emergencyPhone"]?.ToString() ?? "",
+                            PliProfile = item["PliProfile"]?.ToString() ?? "ConstRateUnreliable",
+                            MeshProfile = item["MeshProfile"]?.ToString() ?? "StationaryMesh"
+                        };
+
+                        if ((item["VoiceChannels"] ?? item["voiceChannels"]) is JsonArray vArr)
+                        {
+                            foreach (var vo in vArr.OfType<JsonObject>())
+                            {
+                                fm.VoiceChannels.Add(new CleanVoiceChannelItem
+                                {
+                                    RoleName = vo["roleName"]?.ToString() ?? vo["RoleName"]?.ToString() ?? "Kanał",
+                                    BandType = vo["bandType"]?.ToString() ?? vo["BandType"]?.ToString() ?? "PMR",
+                                    FreqMhz = vo["freqMhz"]?.ToString() ?? vo["FreqMhz"]?.ToString() ?? "-",
+                                    ToneOrCode = vo["toneOrCode"]?.ToString() ?? vo["ToneOrCode"]?.ToString() ?? "-"
+                                });
+                            }
+                        }
+                        state.Factions.Add(fm);
+                    }
+                }
+            }
+
+            if (state.Factions.Count == 0)
+            {
+                foreach (var basic in TacticalConfigPanel.GetConfiguredFactions())
+                {
+                    state.Factions.Add(new CleanFactionProfileModel
+                    {
+                        Name = basic.Name,
+                        ChannelName = basic.Channel,
+                        ColorHex = basic.ColorHex,
+                        Psk = basic.Psk
+                    });
+                }
+            }
+
+            return state;
+        }
+
+        private static JsonObject TryReadSavedWorkspaceJson()
+        {
+            try
+            {
+                if (!string.IsNullOrWhiteSpace(TacticalConfigPanel.CurrentDraftProjectPath) &&
+                    File.Exists(TacticalConfigPanel.CurrentDraftProjectPath))
+                {
+                    if (JsonNode.Parse(File.ReadAllText(TacticalConfigPanel.CurrentDraftProjectPath, Encoding.UTF8)) is JsonObject draftObj)
+                        return draftObj;
+                }
+
+                string appData = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "FieldTakHub");
+                if (Directory.Exists(appData))
+                {
+                    var jsonFiles = Directory.GetFiles(appData, "*.json", SearchOption.TopDirectoryOnly)
+                        .Concat(Directory.GetFiles(appData, "*.fthproj", SearchOption.TopDirectoryOnly))
+                        .OrderByDescending(File.GetLastWriteTimeUtc)
+                        .ToList();
+
+                    foreach (string jf in jsonFiles)
+                    {
+                        try
+                        {
+                            string raw = File.ReadAllText(jf, Encoding.UTF8);
+                            if (raw.Contains("\"factions\"", StringComparison.OrdinalIgnoreCase) &&
+                                JsonNode.Parse(raw) is JsonObject obj)
+                            {
+                                return obj;
+                            }
+                        }
+                        catch { }
+                    }
+                }
+            }
+            catch { }
+            return null;
+        }
+    }
+
     internal static class BuilderUiSimplifier
     {
         private static readonly HashSet<int> AttachedWindows = new HashSet<int>();
@@ -70,32 +891,19 @@ namespace FieldTakHub.Builder.Services
             {
                 var allElements = GetAllVisualDescendants(win).ToList();
 
-                // 1. Poczekaj, aż TacticalConfigPanel wstrzyknie główny moduł Generatora Stron Konfliktu
                 FrameworkElement factionGeneratorRoot = FindFactionGeneratorRoot(allElements);
                 if (factionGeneratorRoot == null)
                 {
                     return;
                 }
 
-                // 2. Upewnij się, że Generator Stron jest w 100% widoczny (gdy nie jesteśmy w zakładce Mapy lub OPORD)
                 EnsureFactionGeneratorVisible(factionGeneratorRoot);
-
-                // 3. Wstrzyknij widok OPORD oraz przyciski górnego paska (📋 Generator Rozkazu OPORD + 🌐 PL/EN)
                 InjectOpordTabAndLanguageToggle(win, allElements);
-
-                // 4. Wstrzyknij na górze Generatora Stron zintegrowany pasek Aktywnej Strony (.FTAK 1:1 + OPORD + Kod QR)
                 InjectOrUpdateActiveFactionAuditBar(win, factionGeneratorRoot);
-
-                // 5. Ukryj przyciski przełącznika "Tryb prosty" / "Tryb zaawansowany"
                 CollapseSimpleAdvancedModeButtonsOnly(allElements, factionGeneratorRoot);
-
-                // 6. Ukryj wyłącznie małe karty sekcji "3. Dodatkowe opcje" (Package ID, Wersja, Publisher, Max downloads)
                 CollapseSection3LeafCardsOnly(allElements, factionGeneratorRoot);
-
-                // 7. Ukryj stary przycisk "Generuj paczkę .FTAK" + "v" oraz stary panel QR (:8765)
                 CollapseLegacyV23ButtonsAndQrOnly(allElements, factionGeneratorRoot);
 
-                // 8. Zastosuj wybrany język interfejsu (PL / EN)
                 if (string.Equals(BuilderI18n.CurrentLang, "EN", StringComparison.OrdinalIgnoreCase))
                 {
                     BuilderI18n.ApplyLanguageToVisualTree(win);
@@ -108,14 +916,10 @@ namespace FieldTakHub.Builder.Services
             }
         }
 
-        // =========================================================================
-        // 1. ZAKŁADKA GENERATORA OPORD + PRZEŁĄCZNIK JĘZYKA PL/EN W PASKU GÓRNYM
-        // =========================================================================
         private static void InjectOpordTabAndLanguageToggle(Window win, List<DependencyObject> allElements)
         {
             var opordOverlay = OpordBuilderManager.CreateOrGetOpordOverlayView(win);
 
-            // Znajdź istniejącą nakładkę Generatora Map 1:1, aby umieścić nakładkę OPORD w tym samym kontenerze Grid
             FrameworkElement mapOverlay = allElements
                 .OfType<FrameworkElement>()
                 .FirstOrDefault(fe => string.Equals(fe.Tag?.ToString(), "INJECTED_MAP_OVERLAY", StringComparison.Ordinal));
@@ -143,7 +947,6 @@ namespace FieldTakHub.Builder.Services
                 rootGrid.Children.Add(opordOverlay);
             }
 
-            // Znajdź górny pasek nawigacji z przyciskami zakładek ("Konfigurator Paczek" / "Generator Map Taktycznych 1:1")
             Button mapTabBtn = null;
             Button builderTabBtn = null;
 
@@ -216,7 +1019,6 @@ namespace FieldTakHub.Builder.Services
                     topNavPanel.Children.Add(_topLangToggleBtn);
                 }
 
-                // Gdy użytkownik kliknie zakładkę "Konfigurator Paczek (.ftak)" lub "Generator Map 1:1", zamknij widok OPORD
                 if (builderTabBtn != null && builderTabBtn.Tag?.ToString() != "OPORD_HOOKED")
                 {
                     builderTabBtn.Tag = "OPORD_HOOKED";
@@ -235,7 +1037,6 @@ namespace FieldTakHub.Builder.Services
             var opordOverlay = OpordBuilderManager.CreateOrGetOpordOverlayView(win);
             if (showOpord)
             {
-                // Ukryj nakładkę mapy, jeśli była otwarta
                 foreach (var fe in GetAllVisualDescendants(win).OfType<FrameworkElement>())
                 {
                     if (string.Equals(fe.Tag?.ToString(), "INJECTED_MAP_OVERLAY", StringComparison.Ordinal))
@@ -261,9 +1062,6 @@ namespace FieldTakHub.Builder.Services
             }
         }
 
-        // =========================================================================
-        // 2. WYSZUKIWANIE I OCHRONA GENERATORA STRON KONFLIKTU
-        // =========================================================================
         private static FrameworkElement FindFactionGeneratorRoot(List<DependencyObject> allElements)
         {
             foreach (var fe in allElements.OfType<FrameworkElement>())
@@ -343,9 +1141,6 @@ namespace FieldTakHub.Builder.Services
             }
         }
 
-        // =========================================================================
-        // 3. CHIRURGICZNE UKRYWANIE POZOSTAŁOŚCI V2.3 (SEKCJA 3, TRYBY, PRZYCISK .FTAK)
-        // =========================================================================
         private static void CollapseSimpleAdvancedModeButtonsOnly(List<DependencyObject> allElements, FrameworkElement factionRoot)
         {
             foreach (var btn in allElements.OfType<ButtonBase>())
@@ -494,9 +1289,6 @@ namespace FieldTakHub.Builder.Services
             fe.IsEnabled = false;
         }
 
-        // =========================================================================
-        // 4. ZINTEGROWANY PASEK AKTYWNEJ STRONY (.FTAK 1:1 + OPORD + KOD QR)
-        // =========================================================================
         private static TextBlock _bannerTitleBlock;
         private static TextBlock _bannerDescBlock;
         private static Button _btnBuildSingleFaction;
