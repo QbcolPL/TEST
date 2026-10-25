@@ -1065,7 +1065,7 @@ namespace FieldTakHub.Builder.Services
     internal static class GeoportalLidarEngine
     {
         private static readonly ConcurrentDictionary<string, byte[]> RawBgraSectorCache = new ConcurrentDictionary<string, byte[]>();
-        private static readonly SemaphoreSlim LidarThrottle = new SemaphoreSlim(4, 4);
+        private static readonly SemaphoreSlim LidarThrottle = new SemaphoreSlim(32, 32);
         private static readonly string DiskCacheDir = InitializeDiskCacheDirectory();
         private static volatile int _preferredLidarCandidateIdx = 0;
 
@@ -1097,7 +1097,7 @@ namespace FieldTakHub.Builder.Services
                     AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate,
                     PooledConnectionLifetime = TimeSpan.FromMinutes(2),
                     PooledConnectionIdleTimeout = TimeSpan.FromSeconds(30),
-                    MaxConnectionsPerServer = 12,
+                    MaxConnectionsPerServer = 64,
                     EnableMultipleHttp2Connections = false,
                     ConnectTimeout = TimeSpan.FromSeconds(3.5)
                 };

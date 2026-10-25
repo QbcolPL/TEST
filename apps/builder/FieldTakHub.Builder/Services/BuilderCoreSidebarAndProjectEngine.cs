@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Reflection;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -30,22 +31,34 @@ namespace FieldTakHub.Builder.Services
         private static readonly HashSet<int> InitializedWindows = new HashSet<int>();
         private static bool _zeroStateAppliedOnBoot;
         private static bool _isUpdatingNav;
+        private static bool _hasUserLoadedProject;
 
         private static Grid _rootDockGrid;
+        private static ColumnDefinition _rootSidebarColumnDef;
         private static Grid _rightWorkspaceGrid;
         private static Border _injectedSidebarContainer;
+        private static DockPanel _expandedSidebarContent;
+        private static StackPanel _collapsedSidebarStrip;
         private static FrameworkElement _originalMainWindowContentHost;
 
+        private static bool _isSidebarCollapsed;
         private static BuilderActiveModule _currentModule = BuilderActiveModule.PackageGenerator;
 
         private static ButtonBase _originalBuilderTabButton;
         private static ButtonBase _originalMapTabButton;
         private static ButtonBase _originalUsbProgrammerButton;
+        private static ButtonBase _originalLoadProjectButton;
+        private static ButtonBase _originalSaveProjectButton;
 
         private static Button _navBtnPackages;
         private static Button _navBtnMaps;
         private static Button _navBtnOpord;
         private static Button _navBtnUsb;
+
+        private static Button _miniBtnPackages;
+        private static Button _miniBtnMaps;
+        private static Button _miniBtnOpord;
+        private static Button _miniBtnUsb;
 
         private static Button _projBtnNew;
         private static Button _projBtnOpen;
@@ -75,7 +88,14 @@ namespace FieldTakHub.Builder.Services
             if (InitializedWindows.Add(hash))
             {
                 BuilderI18n.LanguageChanged += _ => RefreshSidebarLocalization(win);
-                win.Loaded += (_, __) => EnsureRootDockSidebar(win);
+                win.Loaded += (_, __) =>
+                {
+                    EnsureRootDockSidebar(win);
+                    if (!_hasUserLoadedProject)
+                    {
+                        ResetMainWindowTextBoxesToZeroState(win);
+                    }
+                };
                 win.ContentRendered += (_, __) => EnsureRootDockSidebar(win);
                 win.LayoutUpdated += (_, __) => EnforceRootSidebarColumnBounds(win);
             }
@@ -84,7 +104,7 @@ namespace FieldTakHub.Builder.Services
         }
 
         // =========================================================================
-        // 1. START ZEROWY (ZERO-STATE) + ZARZĄDZANIE PROJEKTEM (NOWY / OTWÓRZ / ZAPISZ)
+        // 1. START ZEROWY (ZERO-STATE) + WCZYTYWANIE I ZAPIS PROJEKTU (Z MAPSTATE)
         // =========================================================================
         private static void ApplyZeroStateOnApplicationStartup(Window win)
         {
@@ -204,7 +224,9 @@ namespace FieldTakHub.Builder.Services
                 }
             };
 
-            File.WriteAllText(zeroDraftPath, zeroJson.ToJsonString(new JsonSerializerOptions { WriteIndented = true }), Encoding.UTF8);
+            string jsonText = zeroJson.ToJsonString(new JsonSerializerOptions { WriteIndented = true });
+            File.WriteAllText(zeroDraftPath, jsonText, Encoding.UTF8);
+            File.WriteAllText(Path.Combine(appData, "draft_session.json"), jsonText, Encoding.UTF8);
             TacticalConfigPanel.CurrentDraftProjectPath = zeroDraftPath;
             return zeroDraftPath;
         }
@@ -222,9 +244,10 @@ namespace FieldTakHub.Builder.Services
 
             if (res != MessageBoxResult.Yes) return;
 
+            _hasUserLoadedProject = false;
             CurrentProjectFilePath = "";
             string zeroPath = WriteCleanZeroStateDraftFile();
-            TryReloadProjectIntoPanel(win, zeroPath);
+            ReloadProjectAndMapStateEverywhere(win, zeroPath);
             ResetMainWindowTextBoxesToZeroState(win);
 
             if (_activeProjectFileLabel != null)
@@ -243,122 +266,157 @@ namespace FieldTakHub.Builder.Services
                 Filter = "Field TAK Hub Project (*.fthproj;*.json)|*.fthproj;*.json|All Files (*.*)|*.*"
             };
 
-            if (dlg.ShowDialog(win) == true && File.Exists(dlg.FileName))
-            {
-                CurrentProjectFilePath = dlg.FileName;
-                TacticalConfigPanel.CurrentDraftProjectPath = dlg.FileName;
-                TryReloadProjectIntoPanel(win, dlg.FileName);
+            if (dlg.ShowDialog(win) != true || !File.Exists(dlg.FileName))
+                return;
 
-                if (_activeProjectFileLabel != null)
+            _hasUserLoadedProject = true;
+            CurrentProjectFilePath = dlg.FileName;
+
+            // 1. Oczysc plik z niewidocznych znakow zero-width (\u200B) i zsynchronizuj ze wszystkimi plikami sesji
+            ReloadProjectAndMapStateEverywhere(win, dlg.FileName);
+
+            // 2. Ustaw PendingSidebarProjectPath i wywolaj natywne handlery przyciskow 'Wczytaj projekt' w TacticalConfigPanel,
+            //    aby zaladowaly zarowno strony konfliktu (factions), jak i pelny stan mapy (mapState: AO, Infil, Kod, Parking)!
+            var allElements = GetAllVisualDescendants(win).ToList();
+            CaptureAndCollapseTopMenuBar(allElements);
+
+            foreach (var btn in allElements.OfType<ButtonBase>())
+            {
+                if (_injectedSidebarContainer != null && IsDescendantOf(_injectedSidebarContainer, btn))
+                    continue;
+
+                string txt = GetCombinedText(btn);
+                if (txt.Contains("Wczytaj projekt", StringComparison.OrdinalIgnoreCase) ||
+                    txt.Contains("Load Workspace", StringComparison.OrdinalIgnoreCase) ||
+                    txt.Contains("Wczytaj (.fthproj)", StringComparison.OrdinalIgnoreCase))
                 {
-                    _activeProjectFileLabel.Text = BuilderI18n.T("Projekt: ", "Project: ") + Path.GetFileName(dlg.FileName);
-                }
-            }
-        }
-
-        public static void SaveProjectInteractive(Window win)
-        {
-            try { TacticalConfigPanel.SaveSessionStateAuto(win); } catch { }
-            try { OpordBuilderManager.SaveAllOpordsToDisk(win); } catch { }
-
-            string evName = TacticalConfigPanel.GetEventNameFromWindow(win);
-            string safeEv = TacticalConfigPanel.SanitizeFileName(string.IsNullOrWhiteSpace(evName) ? "operacja" : evName);
-
-            var dlg = new SaveFileDialog
-            {
-                Title = BuilderI18n.T("Zapisz projekt roboczy (.fthproj)", "Save Workspace Project (.fthproj)"),
-                Filter = "Field TAK Hub Project (*.fthproj)|*.fthproj|JSON (*.json)|*.json",
-                FileName = safeEv + ".fthproj"
-            };
-
-            if (dlg.ShowDialog(win) == true)
-            {
-                CurrentProjectFilePath = dlg.FileName;
-                var snap = CleanFactionPackageEngine.ExtractWorkspaceSnapshot(win);
-
-                var fArr = new JsonArray();
-                foreach (var fac in snap.Factions)
-                {
-                    var vArr = new JsonArray();
-                    foreach (var vc in fac.VoiceChannels)
+                    try
                     {
-                        vArr.Add(new JsonObject
-                        {
-                            ["roleName"] = vc.RoleName,
-                            ["bandType"] = vc.BandType,
-                            ["freqMhz"] = vc.FreqMhz,
-                            ["toneOrCode"] = vc.ToneOrCode
-                        });
+                        TacticalConfigPanel.PendingSidebarProjectPath = dlg.FileName;
+                        btn.IsEnabled = true;
+                        btn.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
                     }
-
-                    fArr.Add(new JsonObject
-                    {
-                        ["Name"] = fac.Name,
-                        ["ColorHex"] = fac.ColorHex,
-                        ["ChannelName"] = fac.ChannelName,
-                        ["Psk"] = fac.Psk,
-                        ["ChannelUrl"] = CleanFactionPackageEngine.BuildMeshtasticChannelSetUrl(fac),
-                        ["LoraRegion"] = fac.LoraRegion,
-                        ["LoraModemPreset"] = fac.LoraModemPreset,
-                        ["HopLimit"] = fac.HopLimit,
-                        ["OtsHost"] = fac.OtsHost,
-                        ["EnrollmentUri"] = fac.EnrollmentUri,
-                        ["EmergencyPhone"] = fac.EmergencyPhone,
-                        ["PliProfile"] = fac.PliProfile,
-                        ["MeshProfile"] = fac.MeshProfile,
-                        ["VoiceChannels"] = vArr
-                    });
+                    catch { }
                 }
-
-                var rootObj = new JsonObject
-                {
-                    ["schemaVersion"] = "3.1",
-                    ["savedAtUtc"] = DateTime.UtcNow.ToString("o"),
-                    ["eventName"] = snap.EventName,
-                    ["factions"] = fArr
-                };
-
-                File.WriteAllText(dlg.FileName, rootObj.ToJsonString(new JsonSerializerOptions { WriteIndented = true }), Encoding.UTF8);
-                TacticalConfigPanel.CurrentDraftProjectPath = dlg.FileName;
-
-                if (_activeProjectFileLabel != null)
-                {
-                    _activeProjectFileLabel.Text = BuilderI18n.T("Projekt: ", "Project: ") + Path.GetFileName(dlg.FileName);
-                }
-
-                MessageBox.Show(
-                    win,
-                    BuilderI18n.T("Pomyślnie zapisano projekt:\n" + dlg.FileName, "Project saved successfully:\n" + dlg.FileName),
-                    BuilderI18n.T("Zapisano projekt", "Project Saved"),
-                    MessageBoxButton.OK,
-                    MessageBoxImage.Information);
             }
+            TacticalConfigPanel.PendingSidebarProjectPath = "";
+
+            if (_activeProjectFileLabel != null)
+            {
+                _activeProjectFileLabel.Text = BuilderI18n.T("Projekt: ", "Project: ") + Path.GetFileName(dlg.FileName);
+            }
+
+            // 3. Jesli uzytkownik jest na zakladce Generatora Map 1:1, odswiez widok mapy natychmiast
+            if (_currentModule == BuilderActiveModule.MapGenerator && _originalMapTabButton != null)
+            {
+                try
+                {
+                    _originalMapTabButton.IsEnabled = true;
+                    _originalMapTabButton.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
+                }
+                catch { }
+            }
+
+            RemoveDuplicateInnerSidebars(win, GetAllVisualDescendants(win).ToList());
         }
 
-        private static void TryReloadProjectIntoPanel(Window win, string filePath)
+        private static void ReloadProjectAndMapStateEverywhere(Window win, string filePath)
         {
+            if (string.IsNullOrWhiteSpace(filePath) || !File.Exists(filePath)) return;
+
             try
             {
-                var panelType = typeof(TacticalConfigPanel);
-                var methods = panelType.GetMethods(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
-                for (int i = 0; i < methods.Length; i++)
+                // 1. Oczyść plik z niewidocznych znaków zero-width space (\u200B) i skopiuj do wszystkich ścieżek sesji roboczej
+                string rawJson = File.ReadAllText(filePath, Encoding.UTF8).Replace("\u200B", "");
+                File.WriteAllText(filePath, rawJson, Encoding.UTF8);
+
+                string appData = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "FieldTakHub");
+                Directory.CreateDirectory(appData);
+                File.WriteAllText(Path.Combine(appData, "draft_session.json"), rawJson, Encoding.UTF8);
+                File.WriteAllText(Path.Combine(appData, "zero_state_workspace.fthproj"), rawJson, Encoding.UTF8);
+
+                foreach (string existingJson in Directory.GetFiles(appData, "*.json", SearchOption.TopDirectoryOnly))
                 {
-                    var m = methods[i];
-                    if (m.Name.Contains("Load", StringComparison.OrdinalIgnoreCase) && m.GetParameters().Length == 2)
+                    if (!Path.GetFileName(existingJson).StartsWith("opord_", StringComparison.OrdinalIgnoreCase))
                     {
-                        var p0 = m.GetParameters()[0].ParameterType;
-                        var p1 = m.GetParameters()[1].ParameterType;
-                        if (p0 == typeof(Window) && p1 == typeof(string))
+                        try { File.WriteAllText(existingJson, rawJson, Encoding.UTF8); } catch { }
+                    }
+                }
+
+                TacticalConfigPanel.CurrentDraftProjectPath = filePath;
+
+                JsonObject parsedRoot = null;
+                JsonObject parsedMapState = null;
+                try
+                {
+                    parsedRoot = JsonNode.Parse(rawJson) as JsonObject;
+                    parsedMapState = parsedRoot?["mapState"] as JsonObject;
+                }
+                catch { }
+
+                // 2. Wywołaj metody wczytujące projekt i mapState w TacticalConfigPanel (2-argumentowe oraz 1-argumentowe)
+                var panelType = typeof(TacticalConfigPanel);
+                var methods = panelType.GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
+
+                foreach (var m in methods)
+                {
+                    string name = m.Name;
+                    bool isLoadLike =
+                        name.Contains("Load", StringComparison.OrdinalIgnoreCase) ||
+                        name.Contains("Restore", StringComparison.OrdinalIgnoreCase) ||
+                        name.Contains("Import", StringComparison.OrdinalIgnoreCase) ||
+                        name.Contains("Apply", StringComparison.OrdinalIgnoreCase);
+
+                    if (!isLoadLike) continue;
+                    if (name.Contains("Interactive", StringComparison.OrdinalIgnoreCase) ||
+                        name.Contains("Dialog", StringComparison.OrdinalIgnoreCase))
+                        continue;
+
+                    var pars = m.GetParameters();
+                    try
+                    {
+                        if (pars.Length == 2)
                         {
-                            m.Invoke(null, new object[] { win, filePath });
-                            return;
+                            if (pars[0].ParameterType == typeof(Window) && pars[1].ParameterType == typeof(string))
+                                m.Invoke(null, new object[] { win, filePath });
+                            else if (pars[0].ParameterType == typeof(string) && pars[1].ParameterType == typeof(Window))
+                                m.Invoke(null, new object[] { filePath, win });
+                            else if (pars[0].ParameterType == typeof(Window) && pars[1].ParameterType == typeof(JsonObject) && parsedRoot != null)
+                                m.Invoke(null, new object[] { win, name.Contains("Map", StringComparison.OrdinalIgnoreCase) ? (parsedMapState ?? parsedRoot) : parsedRoot });
                         }
-                        if (p0 == typeof(string) && p1 == typeof(Window))
+                        else if (pars.Length == 1)
                         {
-                            m.Invoke(null, new object[] { filePath, win });
-                            return;
+                            if (pars[0].ParameterType == typeof(string))
+                                m.Invoke(null, new object[] { filePath });
+                            else if (pars[0].ParameterType == typeof(Window))
+                                m.Invoke(null, new object[] { win });
+                            else if (pars[0].ParameterType == typeof(JsonObject) && parsedRoot != null)
+                                m.Invoke(null, new object[] { name.Contains("Map", StringComparison.OrdinalIgnoreCase) ? (parsedMapState ?? parsedRoot) : parsedRoot });
                         }
                     }
+                    catch { }
+                }
+
+                // 3. Jeśli w oknie istniała wcześniej nakładka mapy (INJECTED_MAP_OVERLAY), zresetuj jej cache,
+                //    aby przy przejściu do Generatora Map 1:1 wczytała nowy mapState (AO, Infil, Kod, Parking) z CurrentDraftProjectPath!
+                var fields = panelType.GetFields(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
+                foreach (var f in fields)
+                {
+                    if (f.Name.Contains("MapOverlay", StringComparison.OrdinalIgnoreCase) && typeof(UIElement).IsAssignableFrom(f.FieldType))
+                    {
+                        if (f.GetValue(null) is UIElement oldOverlay && VisualTreeHelper.GetParent(oldOverlay) is Panel parentPanel)
+                        {
+                            parentPanel.Children.Remove(oldOverlay);
+                        }
+                        f.SetValue(null, null);
+                    }
+                }
+
+                // Jeśli użytkownik jest aktualnie w Generatorze Map 1:1, odśwież widok mapy natychmiast
+                if (_currentModule == BuilderActiveModule.MapGenerator && _originalMapTabButton != null)
+                {
+                    _originalMapTabButton.IsEnabled = true;
+                    _originalMapTabButton.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
                 }
             }
             catch { }
@@ -366,6 +424,9 @@ namespace FieldTakHub.Builder.Services
 
         private static void ResetMainWindowTextBoxesToZeroState(Window win)
         {
+            if (_hasUserLoadedProject || !string.IsNullOrEmpty(CurrentProjectFilePath))
+                return;
+
             foreach (var tb in GetAllVisualDescendants(win).OfType<TextBox>())
             {
                 string val = (tb.Text ?? "").Trim();
@@ -378,28 +439,75 @@ namespace FieldTakHub.Builder.Services
         }
 
         // =========================================================================
-        // 2. STAŁE ZAKOTWICZENIE PASKA BOCZNEGO (KOLUMNA 0) I OBSZARU ROBOCZEGO (KOLUMNA 1)
+        // 2. CHOWANY PASEK BOCZNY (STRZAŁKA ◀ / ▶) + CAŁKOWITE USUNIĘCIE DUPLIKATÓW
         // =========================================================================
+        public static void ToggleSidebarCollapsed()
+        {
+            _isSidebarCollapsed = !_isSidebarCollapsed;
+            ApplySidebarCollapseState();
+        }
+
+        private static void ApplySidebarCollapseState()
+        {
+            double targetWidth = _isSidebarCollapsed ? 42.0 : 255.0;
+
+            if (_rootSidebarColumnDef != null)
+            {
+                _rootSidebarColumnDef.Width = new GridLength(targetWidth);
+            }
+
+            if (_injectedSidebarContainer != null)
+            {
+                _injectedSidebarContainer.Width = targetWidth;
+                _injectedSidebarContainer.Padding = _isSidebarCollapsed
+                    ? new Thickness(4, 12, 4, 12)
+                    : new Thickness(12, 16, 12, 14);
+            }
+
+            if (_expandedSidebarContent != null)
+            {
+                _expandedSidebarContent.Visibility = _isSidebarCollapsed ? Visibility.Collapsed : Visibility.Visible;
+            }
+
+            if (_collapsedSidebarStrip != null)
+            {
+                _collapsedSidebarStrip.Visibility = _isSidebarCollapsed ? Visibility.Visible : Visibility.Collapsed;
+            }
+        }
+
         private static void EnsureRootDockSidebar(Window win)
         {
             if (_isUpdatingNav) return;
             _isUpdatingNav = true;
             try
             {
-                ResetMainWindowTextBoxesToZeroState(win);
                 var allElements = GetAllVisualDescendants(win).ToList();
 
                 CaptureAndCollapseTopMenuBar(allElements);
                 CollapseLegacyLeftSidebarColumn(win, allElements);
 
-                if (win.Content is Grid existingRoot && string.Equals(existingRoot.Tag?.ToString(), "FTH_ROOT_LAYOUT_GRID", StringComparison.Ordinal))
+                // Jeśli główne okno ma już nasz zewnętrzny _rootDockGrid na samej górze (win.Content),
+                // wyczyść tylko ewentualne wewnętrzne duplikaty i wyjdź!
+                if (win.Content is Grid currentTopGrid && string.Equals(currentTopGrid.Tag?.ToString(), "FTH_ROOT_LAYOUT_GRID", StringComparison.Ordinal))
                 {
-                    if (_injectedSidebarContainer != null)
-                    {
-                        _injectedSidebarContainer.Visibility = Visibility.Visible;
-                        Panel.SetZIndex(_injectedSidebarContainer, 9999);
-                    }
+                    _rootDockGrid = currentTopGrid;
+                    RemoveDuplicateInnerSidebars(win, allElements);
+                    ApplySidebarCollapseState();
                     return;
+                }
+
+                // Jeśli wcześniej utworzony _rootDockGrid został opakowany przez TacticalConfigPanel (powód podwójnego paska bocznego!),
+                // odepnij stary wewnętrzny pasek boczny przed utworzeniem pojedynczego zewnętrznego układu!
+                foreach (var oldSide in allElements.OfType<Border>().Where(b => string.Equals(b.Tag?.ToString(), "FTH_TACTICAL_SIDEBAR_V31", StringComparison.Ordinal)).ToList())
+                {
+                    oldSide.Visibility = Visibility.Collapsed;
+                    oldSide.Width = 0;
+                    if (VisualTreeHelper.GetParent(oldSide) is Grid oldParentGrid && oldParentGrid.ColumnDefinitions.Count >= 2)
+                    {
+                        oldParentGrid.ColumnDefinitions[0].Width = new GridLength(0);
+                        oldParentGrid.ColumnDefinitions[0].MinWidth = 0;
+                        oldParentGrid.Children.Remove(oldSide);
+                    }
                 }
 
                 UIElement previousWindowContent = win.Content as UIElement;
@@ -413,11 +521,12 @@ namespace FieldTakHub.Builder.Services
                     Tag = "FTH_ROOT_LAYOUT_GRID",
                     Background = new SolidColorBrush(Color.FromRgb(7, 17, 21))
                 };
-                _rootDockGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(255) });
+                _rootSidebarColumnDef = new ColumnDefinition { Width = new GridLength(255) };
+                _rootDockGrid.ColumnDefinitions.Add(_rootSidebarColumnDef);
                 _rootDockGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
 
                 _injectedSidebarContainer = BuildTacticalSidebarControl(win);
-                Panel.SetZIndex(_injectedSidebarContainer, 9999);
+                Panel.SetZIndex(_injectedSidebarContainer, 99999);
                 Grid.SetColumn(_injectedSidebarContainer, 0);
                 _rootDockGrid.Children.Add(_injectedSidebarContainer);
 
@@ -438,6 +547,8 @@ namespace FieldTakHub.Builder.Services
                 _rootDockGrid.Children.Add(_rightWorkspaceGrid);
                 win.Content = _rootDockGrid;
 
+                RemoveDuplicateInnerSidebars(win, GetAllVisualDescendants(win).ToList());
+                ApplySidebarCollapseState();
                 RefreshSidebarLocalization(win);
                 UpdateSidebarActiveButtonHighlight();
             }
@@ -446,6 +557,84 @@ namespace FieldTakHub.Builder.Services
             {
                 _isUpdatingNav = false;
             }
+        }
+
+        private static void RemoveDuplicateInnerSidebars(Window win, List<DependencyObject> allElements)
+        {
+            foreach (var b in allElements.OfType<Border>())
+            {
+                if (b == _injectedSidebarContainer) continue;
+
+                string tagStr = b.Tag?.ToString() ?? "";
+                if (tagStr.StartsWith("FTH_TACTICAL_SIDEBAR", StringComparison.OrdinalIgnoreCase))
+                {
+                    b.Visibility = Visibility.Collapsed;
+                    b.Width = 0;
+                    if (VisualTreeHelper.GetParent(b) is Grid parentGrid && parentGrid != _rootDockGrid && parentGrid.ColumnDefinitions.Count >= 2)
+                    {
+                        parentGrid.ColumnDefinitions[0].Width = new GridLength(0);
+                        parentGrid.ColumnDefinitions[0].MinWidth = 0;
+                    }
+                }
+            }
+
+            foreach (var tb in allElements.OfType<TextBlock>())
+            {
+                if (_injectedSidebarContainer != null && IsDescendantOf(_injectedSidebarContainer, tb))
+                    continue;
+
+                string t = (tb.Text ?? "").Trim();
+                if (string.Equals(t, "MODUŁY OPERACYJNE", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(t, "OPERATIONAL MODULES", StringComparison.OrdinalIgnoreCase))
+                {
+                    DependencyObject curr = tb;
+                    while (curr != null && curr != win && curr != _rootDockGrid && curr != _rightWorkspaceGrid)
+                    {
+                        DependencyObject parent = VisualTreeHelper.GetParent(curr);
+                        if (curr is Border dupBorder && dupBorder != _injectedSidebarContainer && dupBorder.ActualWidth <= 320)
+                        {
+                            dupBorder.Visibility = Visibility.Collapsed;
+                            dupBorder.Width = 0;
+                        }
+                        if (parent is Grid g && g != _rootDockGrid && g.ColumnDefinitions.Count >= 2 && curr is FrameworkElement fe && Grid.GetColumn(fe) == 0)
+                        {
+                            g.ColumnDefinitions[0].Width = new GridLength(0);
+                            g.ColumnDefinitions[0].MinWidth = 0;
+                            fe.Visibility = Visibility.Collapsed;
+                            fe.Width = 0;
+                            break;
+                        }
+                        curr = parent;
+                    }
+                }
+            }
+        }
+
+        private static void EnforceRootSidebarColumnBounds(Window win)
+        {
+            if (_isUpdatingNav || _rootDockGrid == null || _injectedSidebarContainer == null) return;
+            try
+            {
+                if (_injectedSidebarContainer.Visibility != Visibility.Visible)
+                    _injectedSidebarContainer.Visibility = Visibility.Visible;
+                if (Grid.GetColumn(_injectedSidebarContainer) != 0)
+                    Grid.SetColumn(_injectedSidebarContainer, 0);
+                if (Panel.GetZIndex(_injectedSidebarContainer) != 99999)
+                    Panel.SetZIndex(_injectedSidebarContainer, 99999);
+
+                for (int i = 0; i < _rootDockGrid.Children.Count; i++)
+                {
+                    UIElement ch = _rootDockGrid.Children[i];
+                    if (ch != null && ch != _injectedSidebarContainer)
+                    {
+                        if (Grid.GetColumn(ch) != 1)
+                            Grid.SetColumn(ch, 1);
+                        if (Grid.GetColumnSpan(ch) > 1)
+                            Grid.SetColumnSpan(ch, 1);
+                    }
+                }
+            }
+            catch { }
         }
 
         private static void CaptureAndCollapseTopMenuBar(List<DependencyObject> allElements)
@@ -472,6 +661,16 @@ namespace FieldTakHub.Builder.Services
                          txt.Contains("Bulk USB LoRa", StringComparison.OrdinalIgnoreCase))
                 {
                     _originalUsbProgrammerButton = btn;
+                }
+                else if (txt.Contains("Wczytaj projekt", StringComparison.OrdinalIgnoreCase) ||
+                         txt.Contains("Load Workspace", StringComparison.OrdinalIgnoreCase))
+                {
+                    _originalLoadProjectButton = btn;
+                }
+                else if (txt.Contains("Zapisz projekt roboczy", StringComparison.OrdinalIgnoreCase) ||
+                         txt.Contains("Save Workspace", StringComparison.OrdinalIgnoreCase))
+                {
+                    _originalSaveProjectButton = btn;
                 }
 
                 bool isTopBarButton =
@@ -583,7 +782,7 @@ namespace FieldTakHub.Builder.Services
         }
 
         // =========================================================================
-        // 3. BUDOWA NOWEGO TAKTYCZNEGO PASKA BOCZNEGO (Z IKONAMI WEKTOROWYMI)
+        // 3. BUDOWA CHOWANEGO PASKA BOCZNEGO (Z PRZYCISKIEM STRZAŁKI ◀ / ▶)
         // =========================================================================
         private static Border BuildTacticalSidebarControl(Window win)
         {
@@ -597,7 +796,10 @@ namespace FieldTakHub.Builder.Services
                 Padding = new Thickness(12, 16, 12, 14)
             };
 
-            var mainDock = new DockPanel { LastChildFill = false };
+            var rootContainerGrid = new Grid();
+
+            // A. WIDOK ROZWINIĘTY (PEŁNY PASEK BOCZNY 255px)
+            _expandedSidebarContent = new DockPanel { LastChildFill = false };
 
             var topStack = new StackPanel { Margin = new Thickness(0, 0, 0, 14) };
             DockPanel.SetDock(topStack, Dock.Top);
@@ -608,16 +810,24 @@ namespace FieldTakHub.Builder.Services
                 BorderBrush = TacticalConfigPanel.BrushAccent,
                 BorderThickness = new Thickness(1.5),
                 CornerRadius = new CornerRadius(10),
-                Padding = new Thickness(12, 10, 12, 10),
+                Padding = new Thickness(10, 8, 8, 8),
                 Margin = new Thickness(0, 0, 0, 16)
             };
 
-            var brandRow = new DockPanel();
+            var brandRow = new DockPanel { LastChildFill = true };
+
+            var collapseArrowBtn = CreateArrowToggleButton(
+                isCollapseLeft: true,
+                BuilderI18n.T("Zwiń pasek boczny (◀)", "Collapse sidebar (◀)"),
+                ToggleSidebarCollapsed);
+            DockPanel.SetDock(collapseArrowBtn, Dock.Right);
+            brandRow.Children.Add(collapseArrowBtn);
+
             var radarIcon = CreateTacticalVectorIcon(
                 "M12,2A10,10 0 1,0 22,12A10,10 0 0,0 12,2M12,4A8,8 0 0,1 19.93,11H17.91A6,6 0 0,0 13,6.09V4.07C12.67,4.03 12.34,4 12,4M11,4.07V6.09A6,6 0 0,0 6.09,11H4.07A8,8 0 0,1 11,4.07M12,8A4,4 0 0,0 8,12A4,4 0 0,0 12,16A4,4 0 0,0 16,12A4,4 0 0,0 12,8M12,10A2,2 0 0,1 14,12A2,2 0 0,1 12,14A2,2 0 0,1 10,12A2,2 0 0,1 12,10M4.07,13H6.09A6,6 0 0,0 11,17.91V19.93A8,8 0 0,1 4.07,13M17.91,13H19.93A8,8 0 0,1 13,19.93V17.91A6,6 0 0,0 17.91,13Z",
                 TacticalConfigPanel.BrushAccent,
-                28);
-            radarIcon.Margin = new Thickness(0, 0, 10, 0);
+                24);
+            radarIcon.Margin = new Thickness(0, 0, 8, 0);
             DockPanel.SetDock(radarIcon, Dock.Left);
             brandRow.Children.Add(radarIcon);
 
@@ -627,14 +837,14 @@ namespace FieldTakHub.Builder.Services
                 Text = "FIELD TAK HUB",
                 Foreground = Brushes.White,
                 FontWeight = FontWeights.Bold,
-                FontSize = 14.5
+                FontSize = 13
             };
             _sidebarSubtitleBlock = new TextBlock
             {
                 Text = "connect · deploy · operate",
                 Foreground = TacticalConfigPanel.BrushAccent,
                 FontWeight = FontWeights.SemiBold,
-                FontSize = 10
+                FontSize = 9.5
             };
             brandTextStack.Children.Add(_sidebarTitleBlock);
             brandTextStack.Children.Add(_sidebarSubtitleBlock);
@@ -652,28 +862,21 @@ namespace FieldTakHub.Builder.Services
             };
             topStack.Children.Add(_navGroupHeader);
 
-            _navBtnPackages = CreateSidebarNavButton(
-                "M12,1L3,5V11C3,16.55 6.84,21.74 12,23C17.16,21.74 21,16.55 21,11V5L12,1M12,5.3L18,7.9V11.2C18,15.1 15.4,18.7 12,20C8.6,18.7 6,15.1 6,11.2V7.9L12,5.3M11,8V11H8V13H11V16H13V13H16V11H13V8H11Z",
-                "Generator Paczek (.ftak)",
-                () => SwitchActiveModule(win, BuilderActiveModule.PackageGenerator));
+            string iconPkg = "M12,1L3,5V11C3,16.55 6.84,21.74 12,23C17.16,21.74 21,16.55 21,11V5L12,1M12,5.3L18,7.9V11.2C18,15.1 15.4,18.7 12,20C8.6,18.7 6,15.1 6,11.2V7.9L12,5.3M11,8V11H8V13H11V16H13V13H16V11H13V8H11Z";
+            string iconMap = "M15,19L9,16.89V5L15,7.11M20.5,3C20.44,3 20.39,3 20.34,3L15,5.1L9,3L3.36,4.9C3.15,4.97 3,5.15 3,5.38V20.5A0.5,0.5 0 0,0 3.5,21C3.55,21 3.61,21 3.66,20.97L9,18.9L15,21L20.64,19.1C20.85,19 21,18.85 21,18.62V3.5A0.5,0.5 0 0,0 20.5,3Z";
+            string iconOpord = "M19,3H14.82C14.4,1.84 13.3,1 12,1C10.7,1 9.6,1.84 9.18,3H5A2,2 0 0,0 3,5V19A2,2 0 0,0 5,21H19A2,2 0 0,0 21,19V5A2,2 0 0,0 19,3M12,3A1,1 0 0,1 13,4A1,1 0 0,1 12,5A1,1 0 0,1 11,4A1,1 0 0,1 12,3M7,7H17V9H7V7M7,11H17V13H7V11M7,15H14V17H7V15Z";
+            string iconUsb = "M9,3V5H7A2,2 0 0,0 5,7V9H3V11H5V13H3V15H5V17A2,2 0 0,0 7,19H9V21H11V19H13V21H15V19H17A2,2 0 0,0 19,17V15H21V13H19V11H21V9H19V7A2,2 0 0,0 17,5H15V3H13V5H11V3H9M7,7H17V17H7V7M9,9V15H15V9H9Z";
+
+            _navBtnPackages = CreateSidebarNavButton(iconPkg, "Generator Paczek (.ftak)", () => SwitchActiveModule(win, BuilderActiveModule.PackageGenerator));
             topStack.Children.Add(_navBtnPackages);
 
-            _navBtnMaps = CreateSidebarNavButton(
-                "M15,19L9,16.89V5L15,7.11M20.5,3C20.44,3 20.39,3 20.34,3L15,5.1L9,3L3.36,4.9C3.15,4.97 3,5.15 3,5.38V20.5A0.5,0.5 0 0,0 3.5,21C3.55,21 3.61,21 3.66,20.97L9,18.9L15,21L20.64,19.1C20.85,19 21,18.85 21,18.62V3.5A0.5,0.5 0 0,0 20.5,3Z",
-                "Generator Map 1:1",
-                () => SwitchActiveModule(win, BuilderActiveModule.MapGenerator));
+            _navBtnMaps = CreateSidebarNavButton(iconMap, "Generator Map 1:1", () => SwitchActiveModule(win, BuilderActiveModule.MapGenerator));
             topStack.Children.Add(_navBtnMaps);
 
-            _navBtnOpord = CreateSidebarNavButton(
-                "M19,3H14.82C14.4,1.84 13.3,1 12,1C10.7,1 9.6,1.84 9.18,3H5A2,2 0 0,0 3,5V19A2,2 0 0,0 5,21H19A2,2 0 0,0 21,19V5A2,2 0 0,0 19,3M12,3A1,1 0 0,1 13,4A1,1 0 0,1 12,5A1,1 0 0,1 11,4A1,1 0 0,1 12,3M7,7H17V9H7V7M7,11H17V13H7V11M7,15H14V17H7V15Z",
-                "Generator OPORD",
-                () => SwitchActiveModule(win, BuilderActiveModule.OpordGenerator));
+            _navBtnOpord = CreateSidebarNavButton(iconOpord, "Generator OPORD", () => SwitchActiveModule(win, BuilderActiveModule.OpordGenerator));
             topStack.Children.Add(_navBtnOpord);
 
-            _navBtnUsb = CreateSidebarNavButton(
-                "M9,3V5H7A2,2 0 0,0 5,7V9H3V11H5V13H3V15H5V17A2,2 0 0,0 7,19H9V21H11V19H13V21H15V19H17A2,2 0 0,0 19,17V15H21V13H19V11H21V9H19V7A2,2 0 0,0 17,5H15V3H13V5H11V3H9M7,7H17V17H7V7M9,9V15H15V9H9Z",
-                "Programator Płytek USB",
-                () => SwitchActiveModule(win, BuilderActiveModule.UsbProgrammer));
+            _navBtnUsb = CreateSidebarNavButton(iconUsb, "Programator Płytek USB", () => SwitchActiveModule(win, BuilderActiveModule.UsbProgrammer));
             topStack.Children.Add(_navBtnUsb);
 
             topStack.Children.Add(new Border
@@ -695,7 +898,9 @@ namespace FieldTakHub.Builder.Services
 
             _activeProjectFileLabel = new TextBlock
             {
-                Text = "Projekt: Nowy (Stan zerowy)",
+                Text = string.IsNullOrEmpty(CurrentProjectFilePath)
+                    ? "Projekt: Nowy (Stan zerowy)"
+                    : ("Projekt: " + Path.GetFileName(CurrentProjectFilePath)),
                 Foreground = TacticalConfigPanel.BrushAccent,
                 FontSize = 10.5,
                 FontWeight = FontWeights.SemiBold,
@@ -737,7 +942,7 @@ namespace FieldTakHub.Builder.Services
                 });
             topStack.Children.Add(_projBtnSourceDir);
 
-            mainDock.Children.Add(topStack);
+            _expandedSidebarContent.Children.Add(topStack);
 
             var bottomStack = new StackPanel { VerticalAlignment = VerticalAlignment.Bottom };
             DockPanel.SetDock(bottomStack, Dock.Bottom);
@@ -749,42 +954,83 @@ namespace FieldTakHub.Builder.Services
                 () => BuilderI18n.ToggleLanguage(win));
             bottomStack.Children.Add(_langSwitchBtn);
 
-            mainDock.Children.Add(bottomStack);
-            sidebarBorder.Child = mainDock;
+            _expandedSidebarContent.Children.Add(bottomStack);
+            rootContainerGrid.Children.Add(_expandedSidebarContent);
+
+            // B. WIDOK ZWINIĘTY (WĄSKA LISTWA 42px Z PRZYCISKIEM STRZAŁKI ▶ ORAZ IKONAMI MODUŁÓW)
+            _collapsedSidebarStrip = new StackPanel
+            {
+                Visibility = Visibility.Collapsed,
+                HorizontalAlignment = HorizontalAlignment.Center
+            };
+
+            var expandArrowBtn = CreateArrowToggleButton(
+                isCollapseLeft: false,
+                BuilderI18n.T("Rozwiń pasek boczny (▶)", "Expand sidebar (▶)"),
+                ToggleSidebarCollapsed);
+            expandArrowBtn.Margin = new Thickness(0, 0, 0, 14);
+            _collapsedSidebarStrip.Children.Add(expandArrowBtn);
+
+            _miniBtnPackages = CreateCollapsedIconOnlyButton(iconPkg, "Generator Paczek (.ftak)", () => SwitchActiveModule(win, BuilderActiveModule.PackageGenerator));
+            _miniBtnMaps = CreateCollapsedIconOnlyButton(iconMap, "Generator Map 1:1", () => SwitchActiveModule(win, BuilderActiveModule.MapGenerator));
+            _miniBtnOpord = CreateCollapsedIconOnlyButton(iconOpord, "Generator OPORD", () => SwitchActiveModule(win, BuilderActiveModule.OpordGenerator));
+            _miniBtnUsb = CreateCollapsedIconOnlyButton(iconUsb, "Programator Płytek USB", () => SwitchActiveModule(win, BuilderActiveModule.UsbProgrammer));
+
+            _collapsedSidebarStrip.Children.Add(_miniBtnPackages);
+            _collapsedSidebarStrip.Children.Add(_miniBtnMaps);
+            _collapsedSidebarStrip.Children.Add(_miniBtnOpord);
+            _collapsedSidebarStrip.Children.Add(_miniBtnUsb);
+
+            rootContainerGrid.Children.Add(_collapsedSidebarStrip);
+            sidebarBorder.Child = rootContainerGrid;
             return sidebarBorder;
         }
 
-        // =========================================================================
-        // 4. NIEZAWODNE PRZEŁĄCZANIE MODUŁÓW WEWNĄTRZ KOLUMNY 1 (BEZ UKRYWANIA SIDEBARA)
-        // =========================================================================
-
-        private static void EnforceRootSidebarColumnBounds(Window win)
+        private static Button CreateArrowToggleButton(bool isCollapseLeft, string toolTipText, Action onClick)
         {
-            if (_isUpdatingNav || _rootDockGrid == null || _injectedSidebarContainer == null) return;
-            try
-            {
-                if (_injectedSidebarContainer.Visibility != Visibility.Visible)
-                    _injectedSidebarContainer.Visibility = Visibility.Visible;
-                if (Grid.GetColumn(_injectedSidebarContainer) != 0)
-                    Grid.SetColumn(_injectedSidebarContainer, 0);
-                if (Panel.GetZIndex(_injectedSidebarContainer) != 99999)
-                    Panel.SetZIndex(_injectedSidebarContainer, 99999);
+            string arrowPath = isCollapseLeft
+                ? "M15.41,16.58L10.83,12L15.41,7.41L14,6L8,12L14,18L15.41,16.58Z"
+                : "M8.59,16.58L13.17,12L8.59,7.41L10,6L16,12L10,18L8.59,16.58Z";
 
-                for (int i = 0; i < _rootDockGrid.Children.Count; i++)
-                {
-                    UIElement ch = _rootDockGrid.Children[i];
-                    if (ch != null && ch != _injectedSidebarContainer)
-                    {
-                        if (Grid.GetColumn(ch) != 1)
-                            Grid.SetColumn(ch, 1);
-                        if (Grid.GetColumnSpan(ch) > 1)
-                            Grid.SetColumnSpan(ch, 1);
-                    }
-                }
-            }
-            catch { }
+            var btn = new Button
+            {
+                Width = 28,
+                Height = 28,
+                Padding = new Thickness(0),
+                ToolTip = toolTipText,
+                Background = new SolidColorBrush(Color.FromRgb(14, 36, 45)),
+                BorderBrush = TacticalConfigPanel.BrushAccent,
+                BorderThickness = new Thickness(1.2),
+                Cursor = Cursors.Hand,
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            btn.Content = CreateTacticalVectorIcon(arrowPath, TacticalConfigPanel.BrushAccent, 16);
+            btn.Click += (_, __) => onClick?.Invoke();
+            return btn;
         }
 
+        private static Button CreateCollapsedIconOnlyButton(string svgPathData, string toolTipText, Action onClick)
+        {
+            var btn = new Button
+            {
+                Width = 32,
+                Height = 36,
+                Margin = new Thickness(0, 0, 0, 6),
+                Padding = new Thickness(0),
+                ToolTip = toolTipText,
+                Background = new SolidColorBrush(Color.FromRgb(10, 24, 30)),
+                BorderBrush = new SolidColorBrush(Color.FromRgb(24, 50, 62)),
+                BorderThickness = new Thickness(1),
+                Cursor = Cursors.Hand
+            };
+            btn.Content = CreateTacticalVectorIcon(svgPathData, TacticalConfigPanel.BrushAccent, 17);
+            btn.Click += (_, __) => onClick?.Invoke();
+            return btn;
+        }
+
+        // =========================================================================
+        // 4. PRZEŁĄCZANIE MODUŁÓW WEWNĄTRZ KOLUMNY 1 (BEZ UKRYWANIA SIDEBARA)
+        // =========================================================================
         public static void SwitchActiveModule(Window win, BuilderActiveModule targetModule)
         {
             EnsureRootDockSidebar(win);
@@ -795,6 +1041,7 @@ namespace FieldTakHub.Builder.Services
             var allElements = GetAllVisualDescendants(win).ToList();
             CaptureAndCollapseTopMenuBar(allElements);
             CollapseLegacyLeftSidebarColumn(win, allElements);
+            RemoveDuplicateInnerSidebars(win, allElements);
 
             var opordOverlay = OpordBuilderManager.CreateOrGetOpordOverlayView(win);
             if (opordOverlay != null && _rightWorkspaceGrid != null)
@@ -873,10 +1120,11 @@ namespace FieldTakHub.Builder.Services
                     break;
             }
 
+            RemoveDuplicateInnerSidebars(win, GetAllVisualDescendants(win).ToList());
             if (_injectedSidebarContainer != null)
             {
                 _injectedSidebarContainer.Visibility = Visibility.Visible;
-                Panel.SetZIndex(_injectedSidebarContainer, 9999);
+                Panel.SetZIndex(_injectedSidebarContainer, 99999);
             }
         }
 
@@ -904,6 +1152,11 @@ namespace FieldTakHub.Builder.Services
             SetNavButtonActiveState(_navBtnMaps, _currentModule == BuilderActiveModule.MapGenerator);
             SetNavButtonActiveState(_navBtnOpord, _currentModule == BuilderActiveModule.OpordGenerator);
             SetNavButtonActiveState(_navBtnUsb, _currentModule == BuilderActiveModule.UsbProgrammer);
+
+            SetNavButtonActiveState(_miniBtnPackages, _currentModule == BuilderActiveModule.PackageGenerator);
+            SetNavButtonActiveState(_miniBtnMaps, _currentModule == BuilderActiveModule.MapGenerator);
+            SetNavButtonActiveState(_miniBtnOpord, _currentModule == BuilderActiveModule.OpordGenerator);
+            SetNavButtonActiveState(_miniBtnUsb, _currentModule == BuilderActiveModule.UsbProgrammer);
         }
 
         private static void SetNavButtonActiveState(Button btn, bool isActive)

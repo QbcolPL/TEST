@@ -122,9 +122,32 @@ namespace FieldTakHub.Builder.Services
 
     public static class TacticalConfigPanel
     {
+
+        public static string PendingSidebarProjectPath = "";
+
+        public static bool ShowDialogWithSidebarSupport(Microsoft.Win32.OpenFileDialog dlg, Window owner = null)
+        {
+            if (dlg != null && !string.IsNullOrEmpty(PendingSidebarProjectPath) && System.IO.File.Exists(PendingSidebarProjectPath))
+            {
+                string filter = dlg.Filter ?? "";
+                if (filter.Contains("fthproj", StringComparison.OrdinalIgnoreCase) || filter.Contains("json", StringComparison.OrdinalIgnoreCase))
+                {
+                    dlg.FileName = PendingSidebarProjectPath;
+                    return true;
+                }
+            }
+            return owner != null ? (ShowDialogWithSidebarSupport(dlg, owner)) : (ShowDialogWithSidebarSupport(dlg));
+        }
+
+        public static bool ShowDialogWithSidebarSupport(Microsoft.Win32.SaveFileDialog dlg, Window owner = null)
+        {
+            return owner != null ? (ShowDialogWithSidebarSupport(dlg, owner)) : (ShowDialogWithSidebarSupport(dlg));
+        }
+
         public static TacticalConfigModel Current { get; set; } = new TacticalConfigModel();
         public static string LastKnownSourceDir { get; set; } = "";
         public static string LastExportDirectory { get; set; } = "";
+        
         public static string CurrentDraftProjectPath { get; set; } = "";
         public static string SavedEventName { get; set; } = "";
         public static bool IsWorkspaceDirty { get; set; } = false;
