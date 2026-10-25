@@ -187,7 +187,7 @@ public partial class MainWindow : Window
         Mode = (MeshtasticModeBox.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? "hybrid",
         DeviceRole = (MeshtasticDeviceRoleBox.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? "auto",
         DeviceModel = string.IsNullOrWhiteSpace(MeshtasticDeviceModelBox.Text) ? "generic_meshtastic" : MeshtasticDeviceModelBox.Text.Trim(),
-        ChannelName = string.IsNullOrWhiteSpace(MeshtasticChannelNameBox.Text) ? "GGZS-TAK" : MeshtasticChannelNameBox.Text.Trim(),
+        ChannelName = string.IsNullOrWhiteSpace(MeshtasticChannelNameBox.Text) ? "BLUFOR-MESH" : MeshtasticChannelNameBox.Text.Trim(),
         Region = string.IsNullOrWhiteSpace(MeshtasticRegionBox.Text) ? "EU_868" : MeshtasticRegionBox.Text.Trim(),
         ModemPreset = string.IsNullOrWhiteSpace(MeshtasticPresetBox.Text) ? "SHORT_FAST" : MeshtasticPresetBox.Text.Trim(),
         HopLimit = int.TryParse(MeshtasticHopBox.Text, out var hop) ? Math.Clamp(hop,1,7) : 3,

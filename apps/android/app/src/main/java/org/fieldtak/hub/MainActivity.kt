@@ -9,7 +9,11 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.Paint
+import android.graphics.Path
+import android.graphics.RectF
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.hardware.Camera
@@ -31,6 +35,165 @@ import java.util.Locale
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.abs
 import kotlin.math.max
+import kotlin.math.min
+
+// =========================================================================
+// WEKTOROWE IKONY TAKTYCZNO-MILSIMOWE (CANVAS HUD VECTOR RENDERER)
+// =========================================================================
+class TacticalVectorIconView(
+    context: Context,
+    private val iconType: Int,
+    private val tintColor: Int
+) : View(context) {
+
+    companion object {
+        const val ICON_RADAR = 1
+        const val ICON_QR_RETICLE = 2
+        const val ICON_GALLERY_MAP = 3
+        const val ICON_PACKAGE_SHIELD = 4
+        const val ICON_OPORD_DOC = 5
+        const val ICON_VERSION_CHECK = 6
+        const val ICON_ATAK_CROSSHAIR = 7
+        const val ICON_LORA_WAVE = 8
+        const val ICON_WIFI_HOTSPOT = 9
+        const val ICON_RADIO_HEADSET = 10
+        const val ICON_SOS_BEACON = 11
+    }
+
+    private val strokePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = tintColor
+        style = Paint.Style.STROKE
+        strokeCap = Paint.Cap.ROUND
+        strokeJoin = Paint.Join.ROUND
+    }
+
+    private val fillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = tintColor
+        style = Paint.Style.FILL
+    }
+
+    override fun onDraw(canvas: Canvas) {
+        super.onDraw(canvas)
+        val w = width.toFloat()
+        val h = height.toFloat()
+        val s = min(w, h)
+        if (s <= 0f) return
+        val cx = w / 2f
+        val cy = h / 2f
+        val r = s * 0.40f
+        strokePaint.strokeWidth = max(2.2f, s * 0.095f)
+
+        when (iconType) {
+            ICON_RADAR -> {
+                canvas.drawCircle(cx, cy, r, strokePaint)
+                canvas.drawCircle(cx, cy, r * 0.52f, strokePaint)
+                canvas.drawCircle(cx, cy, r * 0.14f, fillPaint)
+                canvas.drawLine(cx, cy, cx + r * 0.72f, cy - r * 0.68f, strokePaint)
+                canvas.drawLine(cx - r, cy, cx + r, cy, strokePaint)
+            }
+            ICON_QR_RETICLE -> {
+                val b = r * 0.95f
+                val cLen = b * 0.45f
+                // Narożniki celownika QR
+                canvas.drawLine(cx - b, cy - b, cx - b + cLen, cy - b, strokePaint)
+                canvas.drawLine(cx - b, cy - b, cx - b, cy - b + cLen, strokePaint)
+                canvas.drawLine(cx + b, cy - b, cx + b - cLen, cy - b, strokePaint)
+                canvas.drawLine(cx + b, cy - b, cx + b, cy - b + cLen, strokePaint)
+                canvas.drawLine(cx - b, cy + b, cx - b + cLen, cy + b, strokePaint)
+                canvas.drawLine(cx - b, cy + b, cx - b, cy + b - cLen, strokePaint)
+                canvas.drawLine(cx + b, cy + b, cx + b - cLen, cy + b, strokePaint)
+                canvas.drawLine(cx + b, cy + b, cx + b, cy + b - cLen, strokePaint)
+                canvas.drawRect(cx - b * 0.35f, cy - b * 0.35f, cx + b * 0.35f, cy + b * 0.35f, strokePaint)
+            }
+            ICON_GALLERY_MAP -> {
+                val rect = RectF(cx - r, cy - r * 0.8f, cx + r, cy + r * 0.8f)
+                canvas.drawRoundRect(rect, s * 0.1f, s * 0.1f, strokePaint)
+                val path = Path().apply {
+                    moveTo(cx - r * 0.75f, cy + r * 0.55f)
+                    lineTo(cx - r * 0.2f, cy - r * 0.15f)
+                    lineTo(cx + r * 0.2f, cy + r * 0.25f)
+                    lineTo(cx + r * 0.5f, cy - r * 0.05f)
+                    lineTo(cx + r * 0.8f, cy + r * 0.55f)
+                }
+                canvas.drawPath(path, strokePaint)
+                canvas.drawCircle(cx - r * 0.4f, cy - r * 0.35f, r * 0.16f, fillPaint)
+            }
+            ICON_PACKAGE_SHIELD -> {
+                val path = Path().apply {
+                    moveTo(cx, cy - r)
+                    lineTo(cx + r * 0.88f, cy - r * 0.55f)
+                    lineTo(cx + r * 0.88f, cy + r * 0.15f)
+                    quadTo(cx + r * 0.75f, cy + r * 0.78f, cx, cy + r)
+                    quadTo(cx - r * 0.75f, cy + r * 0.78f, cx - r * 0.88f, cy + r * 0.15f)
+                    lineTo(cx - r * 0.88f, cy - r * 0.55f)
+                    close()
+                }
+                canvas.drawPath(path, strokePaint)
+                canvas.drawLine(cx, cy - r * 0.4f, cx, cy + r * 0.4f, strokePaint)
+                canvas.drawLine(cx - r * 0.4f, cy, cx + r * 0.4f, cy, strokePaint)
+            }
+            ICON_OPORD_DOC -> {
+                val rect = RectF(cx - r * 0.8f, cy - r, cx + r * 0.8f, cy + r)
+                canvas.drawRoundRect(rect, s * 0.08f, s * 0.08f, strokePaint)
+                canvas.drawLine(cx - r * 0.45f, cy - r * 0.45f, cx + r * 0.45f, cy - r * 0.45f, strokePaint)
+                canvas.drawLine(cx - r * 0.45f, cy, cx + r * 0.45f, cy, strokePaint)
+                canvas.drawLine(cx - r * 0.45f, cy + r * 0.45f, cx + r * 0.15f, cy + r * 0.45f, strokePaint)
+            }
+            ICON_VERSION_CHECK -> {
+                canvas.drawCircle(cx, cy, r, strokePaint)
+                val check = Path().apply {
+                    moveTo(cx - r * 0.45f, cy + r * 0.02f)
+                    lineTo(cx - r * 0.1f, cy + r * 0.38f)
+                    lineTo(cx + r * 0.5f, cy - r * 0.35f)
+                }
+                canvas.drawPath(check, strokePaint)
+            }
+            ICON_ATAK_CROSSHAIR -> {
+                canvas.drawCircle(cx, cy, r * 0.82f, strokePaint)
+                canvas.drawCircle(cx, cy, r * 0.2f, fillPaint)
+                canvas.drawLine(cx, cy - r * 1.08f, cx, cy - r * 0.48f, strokePaint)
+                canvas.drawLine(cx, cy + r * 0.48f, cx, cy + r * 1.08f, strokePaint)
+                canvas.drawLine(cx - r * 1.08f, cy, cx - r * 0.48f, cy, strokePaint)
+                canvas.drawLine(cx + r * 0.48f, cy, cx + r * 1.08f, cy, strokePaint)
+            }
+            ICON_LORA_WAVE -> {
+                canvas.drawCircle(cx, cy + r * 0.35f, r * 0.18f, fillPaint)
+                canvas.drawLine(cx, cy + r * 0.35f, cx, cy + r * 0.95f, strokePaint)
+                val arc1 = RectF(cx - r * 0.55f, cy - r * 0.2f, cx + r * 0.55f, cy + r * 0.9f)
+                val arc2 = RectF(cx - r * 0.95f, cy - r * 0.6f, cx + r * 0.95f, cy + r * 1.3f)
+                canvas.drawArc(arc1, 210f, 120f, false, strokePaint)
+                canvas.drawArc(arc2, 210f, 120f, false, strokePaint)
+            }
+            ICON_WIFI_HOTSPOT -> {
+                canvas.drawCircle(cx, cy, r * 0.22f, fillPaint)
+                val a1 = RectF(cx - r * 0.6f, cy - r * 0.6f, cx + r * 0.6f, cy + r * 0.6f)
+                val a2 = RectF(cx - r, cy - r, cx + r, cy + r)
+                canvas.drawArc(a1, 135f, 90f, false, strokePaint)
+                canvas.drawArc(a1, 315f, 90f, false, strokePaint)
+                canvas.drawArc(a2, 135f, 90f, false, strokePaint)
+                canvas.drawArc(a2, 315f, 90f, false, strokePaint)
+            }
+            ICON_RADIO_HEADSET -> {
+                val body = RectF(cx - r * 0.6f, cy - r * 0.35f, cx + r * 0.6f, cy + r * 0.95f)
+                canvas.drawRoundRect(body, s * 0.08f, s * 0.08f, strokePaint)
+                canvas.drawLine(cx - r * 0.35f, cy - r * 0.35f, cx - r * 0.35f, cy - r * 0.98f, strokePaint)
+                canvas.drawLine(cx - r * 0.3f, cy + r * 0.1f, cx + r * 0.3f, cy + r * 0.1f, strokePaint)
+                canvas.drawLine(cx - r * 0.3f, cy + r * 0.45f, cx + r * 0.3f, cy + r * 0.45f, strokePaint)
+            }
+            ICON_SOS_BEACON -> {
+                val tri = Path().apply {
+                    moveTo(cx, cy - r * 0.95f)
+                    lineTo(cx + r * 0.95f, cy + r * 0.85f)
+                    lineTo(cx - r * 0.95f, cy + r * 0.85f)
+                    close()
+                }
+                canvas.drawPath(tri, strokePaint)
+                canvas.drawLine(cx, cy - r * 0.28f, cx, cy + r * 0.28f, strokePaint)
+                canvas.drawCircle(cx, cy + r * 0.56f, r * 0.11f, fillPaint)
+            }
+        }
+    }
+}
 
 @Suppress("DEPRECATION")
 class MainActivity : AppCompatActivity() {
@@ -55,7 +218,6 @@ class MainActivity : AppCompatActivity() {
             actionBar?.hide()
         } catch (_: Exception) { }
 
-        // Wyłącz nachodzenie pasków systemowych na treść (Android 14/15 Edge-to-Edge fix)
         if (Build.VERSION.SDK_INT >= 30) {
             try {
                 window?.setDecorFitsSystemWindows(true)
@@ -77,7 +239,11 @@ class MainActivity : AppCompatActivity() {
             if (Build.VERSION.SDK_INT < 23 || checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
                 showLiveCameraQrScannerDialog()
             } else {
-                Toast.makeText(this, "⚠️ Brak uprawnień do aparatu — użyj opcji 'QR z Galerii'!", Toast.LENGTH_LONG).show()
+                Toast.makeText(
+                    this,
+                    FtakProvisioningEngine.tr(this, "⚠️ Brak uprawnień do aparatu — użyj opcji 'QR z Galerii'!", "⚠️ Camera permission denied — use 'QR from Gallery'!"),
+                    Toast.LENGTH_LONG
+                ).show()
             }
         }
     }
@@ -107,7 +273,7 @@ class MainActivity : AppCompatActivity() {
                 if (FtakProvisioningEngine.importFromFtakStream(this, stream)) {
                     Toast.makeText(
                         this,
-                        "✓ Wczytano paczkę operacji: ${FtakProvisioningEngine.getEventName(this)}",
+                        FtakProvisioningEngine.tr(this, "✓ Wczytano: ", "✓ Loaded: ") + FtakProvisioningEngine.getEventName(this),
                         Toast.LENGTH_LONG
                     ).show()
                     rebuildScreen()
@@ -115,7 +281,7 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         } catch (ex: Exception) {
-            Toast.makeText(this, "⚠️ Błąd otwierania pliku: ${ex.message}", Toast.LENGTH_LONG).show()
+            Toast.makeText(this, "⚠️ File Error: " + ex.message, Toast.LENGTH_LONG).show()
         }
     }
 
@@ -127,10 +293,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    /**
-     * Nakłada bezpieczne odstępy na górze (pod zegarem i ikonami zasięgu) oraz na dole
-     * (nad paskiem nawigacyjnym Samsung/Android III O <), zapobiegając ucinaniu UI.
-     */
     private fun applySafeSystemBarsPadding(targetContainer: View, sideDp: Int) {
         val sidePx = dp(sideDp)
         val minTopPx = getStatusBarHeightPx() + dp(12)
@@ -171,7 +333,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     // =========================================================================
-    // EKRAN 1: ŚWIADOMY ONBOARDING UPRAWNIEŃ (PERMISSION GATE)
+    // EKRAN 1: ŚWIADOMY ONBOARDING UPRAWNIEŃ (PL / ENG)
     // =========================================================================
     private fun buildPermissionOnboardingView(): View {
         val scroll = ScrollView(this).apply {
@@ -187,21 +349,25 @@ class MainActivity : AppCompatActivity() {
 
         val badgeHeader = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            background = roundedBox("#0E1E24", "#1FE0C5", 2, 14f)
+            background = roundedBox("#0A181F", "#1FE0C5", 2, 14f)
             setPadding(dp(16), dp(16), dp(16), dp(16))
         }
 
         badgeHeader.addView(TextView(this).apply {
-            text = "🛡️ DOSTĘP DO SYSTEMU POLOWEGO"
+            text = FtakProvisioningEngine.tr(this@MainActivity, "🛡️ FIELD TAK HUB v3.0 — AUTORYZACJA SYSTEMU", "🛡️ FIELD TAK HUB v3.0 — SYSTEM AUTHORIZATION")
             setTextColor(Color.parseColor("#1FE0C5"))
             typeface = Typeface.DEFAULT_BOLD
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 17f)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 16.5f)
         })
 
         badgeHeader.addView(TextView(this).apply {
-            text = "Field TAK Hub to czysty terminal wdrożeniowy i ratunkowy. Aplikacja nie śledzi Twojej pozycji w tle i nie dubluje nawigacji ATAK-CIV. Sprawdź poniżej, dlaczego prosimy o poszczególne uprawnienia:"
+            text = FtakProvisioningEngine.tr(
+                this@MainActivity,
+                "Terminal wdrożeniowy dla ATAK-CIV, Meshtastic oraz rozkazów OPORD. Nadaj poniższe uprawnienia, aby umożliwić automatyczne wstrzykiwanie map i kontrolę kompatybilności:",
+                "Tactical deployment terminal for ATAK-CIV, Meshtastic, and OPORD orders. Grant the permissions below to enable automatic map injection and compatibility checks:"
+            )
             setTextColor(Color.parseColor("#B8CFD8"))
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f)
             setPadding(0, dp(8), 0, 0)
         })
 
@@ -209,51 +375,71 @@ class MainActivity : AppCompatActivity() {
             bottomMargin = dp(14)
         })
 
-        fun addPermissionExplainCard(iconTitle: String, desc: String) {
+        fun addPermCard(iconType: Int, titlePl: String, titleEn: String, descPl: String, descEn: String) {
             val card = LinearLayout(this).apply {
-                orientation = LinearLayout.VERTICAL
-                background = roundedBox("#0B181D", "#1E3640", 1, 10f)
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                background = roundedBox("#0A181F", "#193844", 1, 10f)
                 setPadding(dp(14), dp(12), dp(14), dp(12))
             }
-            card.addView(TextView(this).apply {
-                text = iconTitle
+            val icon = TacticalVectorIconView(this, iconType, Color.parseColor("#1FE0C5"))
+            card.addView(icon, LinearLayout.LayoutParams(dp(28), dp(28)).apply { rightMargin = dp(12) })
+
+            val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+            col.addView(TextView(this).apply {
+                text = FtakProvisioningEngine.tr(this@MainActivity, titlePl, titleEn)
                 setTextColor(Color.WHITE)
                 typeface = Typeface.DEFAULT_BOLD
-                setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 13.5f)
             })
-            card.addView(TextView(this).apply {
-                text = desc
+            col.addView(TextView(this).apply {
+                text = FtakProvisioningEngine.tr(this@MainActivity, descPl, descEn)
                 setTextColor(Color.parseColor("#98B2BC"))
-                setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f)
-                setPadding(0, dp(4), 0, 0)
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+                setPadding(0, dp(3), 0, 0)
             })
+            card.addView(col, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
             root.addView(card, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
                 bottomMargin = dp(10)
             })
         }
 
-        addPermissionExplainCard(
-            "📷 1. Aparat (Kamera)",
-            "Wymagany wyłącznie do szybkiego skanowania kodów QR z plakatów w Safezonie lub z ekranu monitora / telefonu."
+        addPermCard(
+            TacticalVectorIconView.ICON_QR_RETICLE,
+            "1. Aparat i Galeria (Skaner QR)",
+            "1. Camera & Gallery (QR Scanner)",
+            "Skanowanie kodów QR z plakatów Safezone, monitora Buildera PC oraz obrazków z Discorda.",
+            "Scanning QR codes from Safezone posters, PC Builder monitor, and Discord screenshots."
         )
-        addPermissionExplainCard(
-            "📂 2. Dostęp do folderu /atak/ i Galerii",
-            "Wymagany do bezpośredniego wstrzykiwania map (.mbtiles, .kmz, .gpx) oraz ustawień prosto do katalogu ATAK-CIV."
+        addPermCard(
+            TacticalVectorIconView.ICON_PACKAGE_SHIELD,
+            "2. Dostęp do /sdcard/atak/ i instalatora APK",
+            "2. /sdcard/atak/ Storage & APK Installer",
+            "Bezpośrednie wstrzykiwanie map (.kmz, .mbtiles, .gpx) do ATAK-CIV oraz wyrównywanie wersji APK.",
+            "Direct injection of maps (.kmz, .mbtiles, .gpx) into ATAK-CIV and APK version alignment."
         )
-        addPermissionExplainCard(
-            "📡 3. Wi-Fi / Sieć Lokalna (Hotspot Ad-Hoc)",
-            "Wymagane do błyskawicznego przesyłania paczek .ftak i map offline między telefonami w lesie bez zasięgu LTE."
+        addPermCard(
+            TacticalVectorIconView.ICON_WIFI_HOTSPOT,
+            "3. Sieć Lokalna Wi-Fi / LAN Hotspot",
+            "3. Local Wi-Fi / LAN Hotspot",
+            "Pobieranie i udostępnianie paczek .ftak oraz rozkazów OPORD w polu bez internetu.",
+            "Pulling and sharing .ftak bundles and OPORD orders in the field without internet."
         )
-        addPermissionExplainCard(
-            "📍 4. Lokalizacja GPS (Tylko na żądanie SOS)",
-            "Używana wyłącznie w momencie naciśnięcia czerwonego przycisku SOS MGRS w celu wyliczenia meldunku ratunkowego MEDEVAC."
+        addPermCard(
+            TacticalVectorIconView.ICON_SOS_BEACON,
+            "4. Pozycja GPS na żądanie (SOS MGRS)",
+            "4. On-Demand GPS Fix (SOS MGRS)",
+            "Wyliczanie współrzędnych ratunkowych MGRS / Keypad wyłącznie po naciśnięciu przycisku SOS.",
+            "Calculating emergency MGRS / Keypad coordinates strictly when pressing the SOS button."
         )
 
-        val btnGrant = makeButton(
-            "✅ ZROZUMIAŁEM — NADAJ UPRAWNIENIA I WEJDŹ",
+        val btnGrant = makeIconButton(
+            TacticalVectorIconView.ICON_VERSION_CHECK,
+            FtakProvisioningEngine.tr(this, "NADAJ UPRAWNIENIA I URUCHOM TERMINAL", "GRANT PERMISSIONS & LAUNCH TERMINAL"),
             "#1FE0C5",
             Color.parseColor("#041014"),
-            14.5f
+            Color.parseColor("#041014"),
+            14f
         ) {
             requestAllTacticalPermissions()
         }
@@ -290,7 +476,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     // =========================================================================
-    // EKRAN 2: GŁÓWNY PULPIT POLOWY („1 SKAN I GRASZ”)
+    // EKRAN 2: GŁÓWNY TERMINAL TAKTYCZNY v3.0 (W STYLU WINDOWS BUILDERA)
     // =========================================================================
     private fun buildMainTacticalHubView(): View {
         val scroll = ScrollView(this).apply {
@@ -310,11 +496,13 @@ class MainActivity : AppCompatActivity() {
         val callsign = FtakProvisioningEngine.getCallsign(this)
         val eventName = FtakProvisioningEngine.getEventName(this)
         val accentHex = activeFaction?.colorHex ?: "#1FE0C5"
-        val atakPkg = FtakProvisioningEngine.detectInstalledAtakPackage(this)
 
+        // ---------------------------------------------------------------------
+        // KARTA NAGŁÓWKOWA (W STYLU SIDEBARA WINDOWS BUILDERA + PRZEŁĄCZNIK PL/ENG)
+        // ---------------------------------------------------------------------
         val headerCard = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            background = roundedBox("#0D1C22", accentHex, 2, 12f)
+            background = roundedBox("#0A181F", accentHex, 2, 12f)
             setPadding(dp(14), dp(12), dp(14), dp(12))
         }
 
@@ -323,49 +511,66 @@ class MainActivity : AppCompatActivity() {
             gravity = Gravity.CENTER_VERTICAL
         }
 
+        val radarLogo = TacticalVectorIconView(this, TacticalVectorIconView.ICON_RADAR, Color.parseColor("#1FE0C5"))
+        topRow.addView(radarLogo, LinearLayout.LayoutParams(dp(28), dp(28)).apply { rightMargin = dp(10) })
+
         val titleCol = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
         }
 
         titleCol.addView(TextView(this).apply {
-            text = "🛰️ FIELD TAK HUB MOBILE v2.4"
+            text = "FIELD TAK HUB COMMAND v3.0"
             setTextColor(Color.parseColor("#1FE0C5"))
             typeface = Typeface.DEFAULT_BOLD
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
         })
 
         titleCol.addView(TextView(this).apply {
-            text = if (hasProfile) "OPERACJA: $eventName" else "BRAK WCZYTANEJ OPERACJI"
+            text = if (hasProfile) eventName else FtakProvisioningEngine.tr(this@MainActivity, "BRAK WCZYTANEJ OPERACJI", "NO OPERATION LOADED")
             setTextColor(Color.WHITE)
             typeface = Typeface.DEFAULT_BOLD
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 15.5f)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
         })
+        topRow.addView(titleCol)
 
-        val btnEditIdentity = makeButton(
-            "👤 $callsign ✎",
+        // Przełącznik języka PL / ENG
+        val btnLang = makeSimpleButton(
+            "🌐 " + FtakProvisioningEngine.getLanguage(this),
+            "#122A34",
+            Color.parseColor("#1FE0C5"),
+            11.5f
+        ) {
+            FtakProvisioningEngine.toggleLanguage(this)
+            rebuildScreen()
+        }
+        topRow.addView(btnLang, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(36)).apply { rightMargin = dp(6) })
+
+        // Przycisk Callsign i wyboru strony
+        val btnEditIdentity = makeSimpleButton(
+            "👤 " + callsign + " ✎",
             "#152C35",
             Color.WHITE,
-            12f
+            11.5f
         ) {
             showIdentityAndFactionModal()
         }
-        topRow.addView(titleCol)
-        topRow.addView(btnEditIdentity, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(38)))
+        topRow.addView(btnEditIdentity, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(36)))
         headerCard.addView(topRow)
 
         if (hasProfile && activeFaction != null) {
             val factionFiles = FtakProvisioningEngine.getFactionFilteredFiles(this, activeFaction)
-            val statusTxt = TextView(this).apply {
-                val otsInfo = if (activeFaction.otsHost.isNotBlank()) activeFaction.otsHost else "Tryb Lokalny / Mesh"
-                val atakStatus = if (atakPkg != null) "Wykryto ($atakPkg)" else "Brak ATAK"
-                text = "🛡️ Strona: ${activeFaction.name}  •  Kanał LoRa: ${activeFaction.channelName} (${activeFaction.loraRegion})\n" +
-                        "🌐 OTS: $otsInfo  •  Pliki map: ${factionFiles.size}  •  ATAK: $atakStatus"
+            val otsInfo = if (activeFaction.otsHost.isNotBlank()) activeFaction.otsHost else FtakProvisioningEngine.tr(this, "Tryb Lokalny / Mesh", "Off-Grid Mesh")
+            headerCard.addView(TextView(this).apply {
+                text = FtakProvisioningEngine.tr(
+                    this@MainActivity,
+                    "🛡️ Strona: " + activeFaction.name + "  •  LoRa: " + activeFaction.channelName + " (" + activeFaction.loraRegion + ")\n🌐 OTS: " + otsInfo + "  •  Zasoby map/DataPkg: " + factionFiles.size,
+                    "🛡️ Faction: " + activeFaction.name + "  •  LoRa: " + activeFaction.channelName + " (" + activeFaction.loraRegion + ")\n🌐 OTS: " + otsInfo + "  •  Map/DataPkg Assets: " + factionFiles.size
+                )
                 setTextColor(Color.parseColor("#B8CFD8"))
                 setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f)
                 setPadding(0, dp(8), 0, dp(4))
-            }
-            headerCard.addView(statusTxt)
+            })
 
             if (allFactions.size > 1) {
                 val facSwitchRow = LinearLayout(this).apply {
@@ -374,49 +579,71 @@ class MainActivity : AppCompatActivity() {
                 }
                 for (fac in allFactions) {
                     val isSelected = fac.name.equals(activeFaction.name, ignoreCase = true)
-                    val facBtn = makeButton(
-                        if (isSelected) "✓ ${fac.name}" else fac.name,
+                    val facBtn = makeSimpleButton(
+                        if (isSelected) ("✓ " + fac.name) else fac.name,
                         if (isSelected) fac.colorHex else "#102027",
                         Color.WHITE,
-                        12f
+                        11.5f
                     ) {
                         FtakProvisioningEngine.setActiveFaction(this, fac.name)
                         rebuildScreen()
                     }
-                    facSwitchRow.addView(facBtn, LinearLayout.LayoutParams(0, dp(36), 1f).apply {
-                        rightMargin = dp(4)
-                    })
+                    facSwitchRow.addView(facBtn, LinearLayout.LayoutParams(0, dp(34), 1f).apply { rightMargin = dp(4) })
                 }
                 headerCard.addView(facSwitchRow)
             }
         } else {
             headerCard.addView(TextView(this).apply {
-                text = "Zeskanuj kod QR z plakatu / monitora, wybierz obrazek QR z Galerii lub wczytaj plik .ftak poniżej:"
+                text = FtakProvisioningEngine.tr(
+                    this@MainActivity,
+                    "Zeskanuj kod QR z Buildera PC / plakatu Safezone, wczytaj obrazek QR z Galerii lub wskaż plik .ftak poniżej:",
+                    "Scan a QR code from PC Builder / Safezone poster, pick a QR screenshot from Gallery, or load an .ftak file below:"
+                )
                 setTextColor(Color.parseColor("#9CB3BC"))
-                setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f)
                 setPadding(0, dp(6), 0, 0)
             })
         }
 
         root.addView(headerCard, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-            bottomMargin = dp(12)
+            bottomMargin = dp(10)
         })
 
-        // SEKCJA 1: POTRÓJNY MODUŁ WEJŚCIA
-        val inputSection = createSectionContainer("1. WCZYTAJ KONFIGURACJĘ GRY (1 SKAN I GRASZ)")
-        val inputRow = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-        }
+        // ---------------------------------------------------------------------
+        // SEKCJA 1: POTRÓJNY MODUŁ WEJŚCIA (IKONY WEKTOROWE)
+        // ---------------------------------------------------------------------
+        val inputSection = createSectionContainer(
+            TacticalVectorIconView.ICON_QR_RETICLE,
+            FtakProvisioningEngine.tr(this, "1. WCZYTAJ KONFIGURACJĘ OPERACJI (.FTAK / QR)", "1. LOAD OPERATION CONFIGURATION (.FTAK / QR)")
+        )
+        val inputRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
 
-        val btnScanCamera = makeButton("📷 Skanuj QR\n(Aparat)", "#1FE0C5", Color.parseColor("#041014"), 11.5f) {
-            startCameraQrScan()
-        }
-        val btnScanGallery = makeButton("🖼️ Wczytaj QR\n(Z Galerii)", "#142A33", Color.WHITE, 11.5f) {
-            pickQrImageFromGallery()
-        }
-        val btnLoadFtak = makeButton("📂 Wczytaj\nPlik .ftak", "#142A33", Color.WHITE, 11.5f) {
-            pickFtakFileFromStorage()
-        }
+        val btnScanCamera = makeIconButton(
+            TacticalVectorIconView.ICON_QR_RETICLE,
+            FtakProvisioningEngine.tr(this, "Skanuj QR\n(Aparat)", "Scan QR\n(Camera)"),
+            "#1FE0C5",
+            Color.parseColor("#041014"),
+            Color.parseColor("#041014"),
+            11f
+        ) { startCameraQrScan() }
+
+        val btnScanGallery = makeIconButton(
+            TacticalVectorIconView.ICON_GALLERY_MAP,
+            FtakProvisioningEngine.tr(this, "QR z Galerii\n(Obrazek)", "Gallery QR\n(Image)"),
+            "#122730",
+            Color.WHITE,
+            Color.parseColor("#1FE0C5"),
+            11f
+        ) { pickQrImageFromGallery() }
+
+        val btnLoadFtak = makeIconButton(
+            TacticalVectorIconView.ICON_PACKAGE_SHIELD,
+            FtakProvisioningEngine.tr(this, "Wczytaj\nPlik .FTAK", "Load\n.FTAK File"),
+            "#122730",
+            Color.WHITE,
+            Color.parseColor("#1FE0C5"),
+            11f
+        ) { pickFtakFileFromStorage() }
 
         inputRow.addView(btnScanCamera, LinearLayout.LayoutParams(0, dp(54), 1f).apply { rightMargin = dp(5) })
         inputRow.addView(btnScanGallery, LinearLayout.LayoutParams(0, dp(54), 1f).apply { rightMargin = dp(5) })
@@ -424,17 +651,90 @@ class MainActivity : AppCompatActivity() {
         inputSection.addView(inputRow)
 
         root.addView(inputSection, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-            bottomMargin = dp(12)
+            bottomMargin = dp(10)
         })
 
-        // SEKCJA 2: AUTOMATYCZNE WSTRZYKIWANIE 1-KLIKIEM (ATAK-CIV & MESHTASTIC)
-        val deploySection = createSectionContainer("2. WDRÓŻ USTAWIENIA 1-KLIKIEM (ATAK & MESHTASTIC)")
+        // ---------------------------------------------------------------------
+        // SEKCJA 2: KOMPATYBILNOŚĆ WERSJI ATAK-CIV, MESHTASTIC I PLUGINÓW (POD OTS)
+        // ---------------------------------------------------------------------
+        val compatSection = createSectionContainer(
+            TacticalVectorIconView.ICON_VERSION_CHECK,
+            FtakProvisioningEngine.tr(this, "2. KOMPATYBILNOŚĆ WERSJI (ATAK / MESHTASTIC / PLUGINY)", "2. VERSION COMPATIBILITY (ATAK / MESHTASTIC / PLUGINS)")
+        )
+        val compatList = FtakProvisioningEngine.inspectEcosystemCompatibility(this)
+        for (item in compatList) {
+            val statusColorHex = when {
+                item.isCompatible -> "#2ECC71"
+                item.isInstalled -> "#FAD02C"
+                else -> "#EB4034"
+            }
+            val statusLabel = when {
+                item.isCompatible -> FtakProvisioningEngine.tr(this, "✓ ZGODNA (" + item.installedVersion + ")", "✓ OK (" + item.installedVersion + ")")
+                item.isInstalled -> FtakProvisioningEngine.tr(this, "⚠️ WERSJA: " + item.installedVersion + " (Wymagana: " + item.requirement.requiredVersion + ")", "⚠️ VER: " + item.installedVersion + " (Req: " + item.requirement.requiredVersion + ")")
+                else -> FtakProvisioningEngine.tr(this, "❌ BRAK W TELEFONIE", "❌ NOT INSTALLED")
+            }
 
-        val btnDeployAtak = makeButton(
-            "🗺️ WSTRZYKNIJ MAPY I USTAWIENIA DO ATAK-CIV",
-            if (hasProfile) "#2684FF" else "#182830",
+            val rowCard = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                background = roundedBox("#0E1E26", statusColorHex, 1, 8f)
+                setPadding(dp(10), dp(7), dp(10), dp(7))
+            }
+
+            val infoCol = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            }
+            infoCol.addView(TextView(this).apply {
+                text = item.requirement.displayName + (if (item.requirement.requiredVersion.isNotBlank()) ("  [Req: " + item.requirement.requiredVersion + "]") else "")
+                setTextColor(Color.WHITE)
+                typeface = Typeface.DEFAULT_BOLD
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+            })
+            infoCol.addView(TextView(this).apply {
+                text = statusLabel
+                setTextColor(Color.parseColor(statusColorHex))
+                typeface = Typeface.DEFAULT_BOLD
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
+            })
+            rowCard.addView(infoCol)
+
+            if (item.bundledApkFile != null && item.bundledApkFile.exists()) {
+                val btnInstallApk = makeSimpleButton(
+                    FtakProvisioningEngine.tr(this, "📥 Instaluj APK", "📥 Install APK"),
+                    "#1FE0C5",
+                    Color.parseColor("#041014"),
+                    11f
+                ) {
+                    FtakProvisioningEngine.installBundledApkOneClick(this, item.bundledApkFile)
+                }
+                rowCard.addView(btnInstallApk, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(32)))
+            }
+
+            compatSection.addView(rowCard, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                bottomMargin = dp(6)
+            })
+        }
+
+        root.addView(compatSection, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+            bottomMargin = dp(10)
+        })
+
+        // ---------------------------------------------------------------------
+        // SEKCJA 3: WDRÓŻ USTAWIENIA 1-KLIKIEM (ATAK-CIV & MESHTASTIC)
+        // ---------------------------------------------------------------------
+        val deploySection = createSectionContainer(
+            TacticalVectorIconView.ICON_ATAK_CROSSHAIR,
+            FtakProvisioningEngine.tr(this, "3. WSTRZYKNIJ USTAWIENIA 1-KLIKIEM (ATAK & MESHTASTIC)", "3. 1-CLICK PROVISIONING (ATAK-CIV & MESHTASTIC)")
+        )
+
+        val btnDeployAtak = makeIconButton(
+            TacticalVectorIconView.ICON_ATAK_CROSSHAIR,
+            FtakProvisioningEngine.tr(this, "WSTRZYKNIJ MAPY, CALLSIGN I SERWER DO ATAK-CIV", "INJECT MAPS, CALLSIGN & SERVER INTO ATAK-CIV"),
+            if (hasProfile) "#2684FF" else "#152832",
             Color.WHITE,
-            13f
+            Color.WHITE,
+            12.5f
         ) {
             FtakProvisioningEngine.provisionAtakOneClick(this)
         }
@@ -442,131 +742,192 @@ class MainActivity : AppCompatActivity() {
             bottomMargin = dp(8)
         })
 
-        if (activeFaction != null && activeFaction.enrollmentUri.isNotBlank()) {
-            val btnEnroll = makeButton(
-                "🔐 Autoryzuj Certyfikat OpenTAK (1-Click Enrollment)",
-                "#15323C",
-                Color.parseColor("#1FE0C5"),
-                12f
-            ) {
-                try {
-                    startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(activeFaction.enrollmentUri)).apply {
-                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                    })
-                } catch (ex: Exception) {
-                    Toast.makeText(this, "⚠️ Brak obsługi linku tak:// (${ex.message})", Toast.LENGTH_LONG).show()
-                }
-            }
-            deploySection.addView(btnEnroll, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(42)).apply {
-                bottomMargin = dp(8)
-            })
-        }
-
-        val btnDeployMesh = makeButton(
-            "📡 ZAPROGRAMUJ RADIO MESHTASTIC (KANAŁ + PSK)",
-            if (hasProfile) "#2ECC71" else "#182830",
+        val btnDeployMesh = makeIconButton(
+            TacticalVectorIconView.ICON_LORA_WAVE,
+            FtakProvisioningEngine.tr(this, "ZAPROGRAMUJ RADIO MESHTASTIC (KANAŁ + PSK)", "PROGRAM MESHTASTIC RADIO (CHANNEL + PSK)"),
+            if (hasProfile) "#2ECC71" else "#152832",
             if (hasProfile) Color.parseColor("#04120A") else Color.WHITE,
-            13f
+            if (hasProfile) Color.parseColor("#04120A") else Color.parseColor("#2ECC71"),
+            12.5f
         ) {
             FtakProvisioningEngine.provisionMeshtasticOneClick(this)
         }
         deploySection.addView(btnDeployMesh, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(50)))
 
         root.addView(deploySection, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-            bottomMargin = dp(12)
+            bottomMargin = dp(10)
         })
 
-        // SEKCJA 3: FIELD SHARE HUB (WI-FI HOTSPOT AD-HOC + QR + PLIKI .GPX)
-        val shareSection = createSectionContainer("3. PODZIEL SIĘ W POLU (WI-FI HOTSPOT BEZ INTERNETU)")
+        // ---------------------------------------------------------------------
+        // SEKCJA 4: ROZKAZ BOJOWY OPORD (PODGLĄD W APLIKACJI + IMPORT Z LAN/HOTSPOTU)
+        // ---------------------------------------------------------------------
+        val opordSection = createSectionContainer(
+            TacticalVectorIconView.ICON_OPORD_DOC,
+            FtakProvisioningEngine.tr(this, "4. ROZKAZ BOJOWY OPORD (PODGLĄD + IMPORT WI-FI / LAN)", "4. OPERATIONAL ORDER — OPORD (VIEWER + WI-FI / LAN IMPORT)")
+        )
 
-        val btnHotspotServer = makeButton(
-            "📡 UDOSTĘPNIJ .FTAK PRZEZ WI-FI HOTSPOT (SERWER AD-HOC + QR)",
-            "#142E38",
+        val hasOpord = FtakProvisioningEngine.hasAnyOpordLoaded(this)
+        val btnOpenOpord = makeIconButton(
+            TacticalVectorIconView.ICON_OPORD_DOC,
+            if (hasOpord)
+                FtakProvisioningEngine.tr(this, "OTWÓRZ ROZKAZ BOJOWY OPORD (SARNEG / METOC / ROLA)", "OPEN LOADED OPORD (SARNEG / METOC / ROLES)")
+            else
+                FtakProvisioningEngine.tr(this, "PODGLĄD OPORD (BRAK WCZYTANEGO — POBIERZ Z LAN LUB .FTAK)", "OPORD VIEWER (NONE LOADED — PULL FROM LAN OR .FTAK)"),
+            if (hasOpord) "#163844" else "#12242C",
+            Color.parseColor("#1FE0C5"),
             Color.parseColor("#1FE0C5"),
             12f
         ) {
-            FieldShareAndQrEngine.showWifiHotspotShareDialog(this)
+            FieldShareAndQrEngine.showOpordViewerModal(this)
         }
-        shareSection.addView(btnHotspotServer, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(48)).apply {
-            bottomMargin = dp(8)
+        opordSection.addView(btnOpenOpord, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(48)).apply {
+            bottomMargin = dp(6)
         })
 
-        val shareSubRow = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
+        val opordSubRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        val btnPullOpordLan = makeSimpleButton(
+            FtakProvisioningEngine.tr(this, "📡 Importuj OPORD z LAN / PC", "📡 Pull OPORD from LAN / PC"),
+            "#122630",
+            Color.WHITE,
+            11f
+        ) {
+            FieldShareAndQrEngine.showImportStandaloneOpordLanDialog(this)
         }
-        val btnShowFactionQr = makeButton("📱 Pokaż QR Strony\nna ekranie", "#12232B", Color.WHITE, 11.5f) {
+        val btnShareOpordHotspot = makeSimpleButton(
+            FtakProvisioningEngine.tr(this, "📤 Udostępnij OPORD (Hotspot)", "📤 Share OPORD (Hotspot)"),
+            "#122630",
+            Color.WHITE,
+            11f
+        ) {
+            FieldShareAndQrEngine.showWifiHotspotShareDialog(this, opordOnlyDefault = true)
+        }
+        opordSubRow.addView(btnPullOpordLan, LinearLayout.LayoutParams(0, dp(42), 1f).apply { rightMargin = dp(5) })
+        opordSubRow.addView(btnShareOpordHotspot, LinearLayout.LayoutParams(0, dp(42), 1f))
+        opordSection.addView(opordSubRow)
+
+        root.addView(opordSection, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+            bottomMargin = dp(10)
+        })
+
+        // ---------------------------------------------------------------------
+        // SEKCJA 5: FIELD SHARE HUB (HOTSPOT AD-HOC DLA PACZEK .FTAK I PLIKÓW .GPX)
+        // ---------------------------------------------------------------------
+        val shareSection = createSectionContainer(
+            TacticalVectorIconView.ICON_WIFI_HOTSPOT,
+            FtakProvisioningEngine.tr(this, "5. DYSTRYBUCJA POLOWA (HOTSPOT AD-HOC BEZ INTERNETU)", "5. FIELD DISTRIBUTION (OFF-GRID WI-FI HOTSPOT)")
+        )
+
+        val btnHotspotServer = makeIconButton(
+            TacticalVectorIconView.ICON_WIFI_HOTSPOT,
+            FtakProvisioningEngine.tr(this, "UDOSTĘPNIJ .FTAK / OPORD PRZEZ HOTSPOT (SERWER + QR)", "SHARE .FTAK / OPORD VIA HOTSPOT (SERVER + QR)"),
+            "#142E38",
+            Color.parseColor("#1FE0C5"),
+            Color.parseColor("#1FE0C5"),
+            11.5f
+        ) {
+            FieldShareAndQrEngine.showWifiHotspotShareDialog(this, opordOnlyDefault = false)
+        }
+        shareSection.addView(btnHotspotServer, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(46)).apply {
+            bottomMargin = dp(6)
+        })
+
+        val shareSubRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        val btnShowFactionQr = makeSimpleButton(
+            FtakProvisioningEngine.tr(this, "📱 Pokaż QR Strony Offline", "📱 Show Offline Faction QR"),
+            "#12232B",
+            Color.WHITE,
+            11f
+        ) {
             FieldShareAndQrEngine.showOfflineFactionQrDialog(this)
         }
-        val btnShareFiles = makeButton("📤 Wyślij plik .ftak / .gpx\n(Quick Share / Garmin)", "#12232B", Color.WHITE, 11.5f) {
+        val btnShareFiles = makeSimpleButton(
+            FtakProvisioningEngine.tr(this, "📤 Wyślij .ftak / .gpx / .apk", "📤 Send .ftak / .gpx / .apk"),
+            "#12232B",
+            Color.WHITE,
+            11f
+        ) {
             FieldShareAndQrEngine.showShareFilesPickerDialog(this)
         }
-        shareSubRow.addView(btnShowFactionQr, LinearLayout.LayoutParams(0, dp(46), 1f).apply { rightMargin = dp(5) })
-        shareSubRow.addView(btnShareFiles, LinearLayout.LayoutParams(0, dp(46), 1f))
+        shareSubRow.addView(btnShowFactionQr, LinearLayout.LayoutParams(0, dp(42), 1f).apply { rightMargin = dp(5) })
+        shareSubRow.addView(btnShareFiles, LinearLayout.LayoutParams(0, dp(42), 1f))
         shareSection.addView(shareSubRow)
 
         root.addView(shareSection, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-            bottomMargin = dp(12)
+            bottomMargin = dp(10)
         })
 
-        // SEKCJA 4: KARTA „📻 ŚCIĄGA OPERACYJNA”
-        val radioSection = createSectionContainer("4. 📻 ŚCIĄGA OPERACYJNA (TABELA KANAŁÓW RADIOWYCH)")
+        // ---------------------------------------------------------------------
+        // SEKCJA 6: ŚCIĄGA OPERACYJNA (TABELA KANAŁÓW RADIOWYCH)
+        // ---------------------------------------------------------------------
+        val radioSection = createSectionContainer(
+            TacticalVectorIconView.ICON_RADIO_HEADSET,
+            FtakProvisioningEngine.tr(this, "6. ŚCIĄGA OPERACYJNA (TABELA KANAŁÓW RADIOWYCH)", "6. FIELD CHEAT SHEET (VOICE RADIO CHANNELS)")
+        )
         if (activeFaction == null || activeFaction.voiceChannels.isEmpty()) {
             radioSection.addView(TextView(this).apply {
-                text = "Brak zapisanych kanałów głosowych PMR / VHF / DMR — wczytaj paczkę .ftak lub kod QR."
+                text = FtakProvisioningEngine.tr(
+                    this@MainActivity,
+                    "Brak zapisanych kanałów głosowych PMR / VHF / DMR — wczytaj paczkę .ftak lub kod QR.",
+                    "No voice channels loaded — scan a QR code or load an .ftak package."
+                )
                 setTextColor(Color.parseColor("#8CA4AE"))
-                setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f)
             })
         } else {
             for (vc in activeFaction.voiceChannels) {
                 val chCard = LinearLayout(this).apply {
                     orientation = LinearLayout.VERTICAL
                     background = roundedBox("#0E1D23", "#203A44", 1, 8f)
-                    setPadding(dp(12), dp(8), dp(12), dp(8))
+                    setPadding(dp(12), dp(7), dp(12), dp(7))
                 }
                 chCard.addView(TextView(this).apply {
-                    text = "🎙️ ${vc.roleName}   [${vc.bandType}]"
+                    text = vc.roleName + "   [" + vc.bandType + "]"
                     setTextColor(Color.parseColor("#1FE0C5"))
                     typeface = Typeface.DEFAULT_BOLD
-                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f)
                 })
                 chCard.addView(TextView(this).apply {
-                    text = "Kanał / Częstotliwość: ${vc.freqMhz}   •   Ton / Kod: ${vc.toneOrCode}"
+                    text = FtakProvisioningEngine.tr(this@MainActivity, "Kanał / Częstotliwość: ", "Freq / Channel: ") + vc.freqMhz + "   •   " + vc.toneOrCode
                     setTextColor(Color.WHITE)
-                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f)
                 })
                 radioSection.addView(chCard, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-                    bottomMargin = dp(6)
+                    bottomMargin = dp(5)
                 })
             }
         }
 
         root.addView(radioSection, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-            bottomMargin = dp(12)
+            bottomMargin = dp(10)
         })
 
-        // SEKCJA 5: ALARM RATUNKOWY SOS MGRS & WSPARCIE
-        val sosBtn = makeButton(
-            "🚨 ALARM RATUNKOWY SOS MGRS / KONTAKT ORGA",
+        // ---------------------------------------------------------------------
+        // SEKCJA 7: ALARM RATUNKOWY SOS MGRS & WSPARCIE TWÓRCY
+        // ---------------------------------------------------------------------
+        val sosBtn = makeIconButton(
+            TacticalVectorIconView.ICON_SOS_BEACON,
+            FtakProvisioningEngine.tr(this, "ALARM RATUNKOWY SOS MGRS / KONTAKT ORGA", "EMERGENCY SOS MGRS BEACON / CONTACT ORGA"),
             "#EB4034",
             Color.WHITE,
-            13.5f
+            Color.WHITE,
+            13f
         ) {
             showOnDemandSosMgrsModal()
         }
         root.addView(sosBtn, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(52)).apply {
-            bottomMargin = dp(10)
+            bottomMargin = dp(8)
         })
 
-        val btnSupportCoffee = makeButton(
-            "☕ Wesprzyj twórcę Field TAK Hub (Kod QR & buycoffee.to)",
-            "#102027",
+        val btnSupportCoffee = makeSimpleButton(
+            FtakProvisioningEngine.tr(this, "☕ Wesprzyj twórcę Field TAK Hub (buycoffee.to)", "☕ Support Field TAK Hub Creator (buycoffee.to)"),
+            "#0D1D24",
             Color.parseColor("#FAD02C"),
-            12f
+            11.5f
         ) {
             showCreatorSupportModal()
         }
-        root.addView(btnSupportCoffee, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(44)).apply {
-            bottomMargin = dp(28)
+        root.addView(btnSupportCoffee, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(42)).apply {
+            bottomMargin = dp(26)
         })
 
         scroll.addView(root)
@@ -583,48 +944,33 @@ class MainActivity : AppCompatActivity() {
         }
 
         box.addView(TextView(this).apply {
-            text = "👤 CALLSIGN GRACZA & STRONA KONFLIKTU"
+            text = FtakProvisioningEngine.tr(this@MainActivity, "👤 CALLSIGN GRACZA & STRONA KONFLIKTU", "👤 PLAYER CALLSIGN & FACTION")
             setTextColor(Color.parseColor("#1FE0C5"))
             typeface = Typeface.DEFAULT_BOLD
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 15.5f)
-        })
-
-        box.addView(TextView(this).apply {
-            text = "Podaj swój kryptonim wywoławczy (zostanie automatycznie wstrzyknięty do ATAK-CIV i meldunków SOS):"
-            setTextColor(Color.parseColor("#B0C6CE"))
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
-            setPadding(0, dp(6), 0, dp(6))
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
         })
 
         val inputCallsign = EditText(this).apply {
             setText(FtakProvisioningEngine.getCallsign(this@MainActivity))
             setTextColor(Color.WHITE)
-            setHintTextColor(Color.parseColor("#789098"))
-            hint = "Np. ALFA-1, KRUK-2..."
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS
             background = roundedBox("#0E1D22", "#1FE0C5", 1, 8f)
             setPadding(dp(12), dp(10), dp(12), dp(10))
         }
         box.addView(inputCallsign, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+            topMargin = dp(8)
             bottomMargin = dp(12)
         })
 
         if (factions.isNotEmpty()) {
-            box.addView(TextView(this).apply {
-                text = "Wybierz swoją stronę konfliktu:"
-                setTextColor(Color.parseColor("#B0C6CE"))
-                setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
-                setPadding(0, 0, 0, dp(6))
-            })
-
             val rg = RadioGroup(this).apply { orientation = RadioGroup.VERTICAL }
             factions.forEachIndexed { idx, fac ->
                 val rb = RadioButton(this).apply {
                     id = 5000 + idx
-                    text = "  ${fac.name}  (LoRa: ${fac.channelName})"
+                    text = "  " + fac.name + "  (LoRa: " + fac.channelName + ")"
                     setTextColor(parseColorSafe(fac.colorHex, Color.WHITE))
                     typeface = Typeface.DEFAULT_BOLD
-                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 13.5f)
                     isChecked = (chosenFaction?.name == fac.name)
                     setOnClickListener { chosenFaction = fac }
                 }
@@ -635,21 +981,18 @@ class MainActivity : AppCompatActivity() {
 
         val dlg = AlertDialog.Builder(this)
             .setView(ScrollView(this).apply { addView(box) })
-            .setPositiveButton("💾 Zapisz i gotowe") { _, _ ->
+            .setPositiveButton(FtakProvisioningEngine.tr(this, "💾 Zapisz", "💾 Save")) { _, _ ->
                 FtakProvisioningEngine.setCallsign(this, inputCallsign.text.toString())
                 chosenFaction?.let { FtakProvisioningEngine.setActiveFaction(this, it.name) }
                 rebuildScreen()
             }
-            .setNegativeButton("Anuluj", null)
+            .setNegativeButton(FtakProvisioningEngine.tr(this, "Anuluj", "Cancel"), null)
             .create()
 
         dlg.window?.setBackgroundDrawable(roundedBox("#081316", "#1FE0C5", 2, 14f))
         dlg.show()
     }
 
-    // =========================================================================
-    // SKANER QR Z APARATU (ML KIT + ZXING 90° + TAP-TO-FOCUS)
-    // =========================================================================
     private fun startCameraQrScan() {
         if (Build.VERSION.SDK_INT >= 23 && checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
             pendingCameraQrScanAfterPermission = true
@@ -667,7 +1010,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         box.addView(TextView(this).apply {
-            text = "📷 ZESKANUJ KOD QR Z PLAKATU, MONITORA LUB TELEFONU"
+            text = FtakProvisioningEngine.tr(this@MainActivity, "📷 SKANER QR (.FTAK / OPORD LAN / MESHTASTIC)", "📷 QR SCANNER (.FTAK / OPORD LAN / MESHTASTIC)")
             setTextColor(Color.parseColor("#1FE0C5"))
             typeface = Typeface.DEFAULT_BOLD
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 13.5f)
@@ -680,7 +1023,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         val surfaceView = SurfaceView(this)
-        previewFrame.addView(surfaceView, FrameLayout.LayoutParams(dp(280), dp(340), Gravity.CENTER))
+        previewFrame.addView(surfaceView, FrameLayout.LayoutParams(dp(280), dp(330), Gravity.CENTER))
 
         val aimingCross = TextView(this).apply {
             text = "[  +  ]"
@@ -688,18 +1031,11 @@ class MainActivity : AppCompatActivity() {
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 28f)
             gravity = Gravity.CENTER
         }
-        previewFrame.addView(aimingCross, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(340)))
+        previewFrame.addView(aimingCross, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(330)))
 
         box.addView(previewFrame, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
             topMargin = dp(10)
             bottomMargin = dp(8)
-        })
-
-        box.addView(TextView(this).apply {
-            text = "Dotknij podglądu kamery, aby wyostrzyć ostrość (Autofocus), lub wybierz obrazek QR z Galerii:"
-            setTextColor(Color.parseColor("#9CB3BC"))
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f)
-            gravity = Gravity.CENTER
         })
 
         var cameraInstance: Camera? = null
@@ -718,11 +1054,11 @@ class MainActivity : AppCompatActivity() {
 
         val dlg = AlertDialog.Builder(this)
             .setView(box)
-            .setNeutralButton("🖼️ Wybierz QR z Galerii") { _, _ ->
+            .setNeutralButton(FtakProvisioningEngine.tr(this, "🖼️ Wybierz QR z Galerii", "🖼️ Pick QR from Gallery")) { _, _ ->
                 releaseCam()
                 pickQrImageFromGallery()
             }
-            .setNegativeButton("Zamknij") { _, _ ->
+            .setNegativeButton(FtakProvisioningEngine.tr(this, "Zamknij", "Close")) { _, _ ->
                 releaseCam()
             }
             .setOnDismissListener {
@@ -743,11 +1079,8 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        // Dotknięcie podglądu kamery wymusza natychmiastowy Autofocus
         surfaceView.setOnClickListener {
-            try {
-                cameraInstance?.autoFocus { _, _ -> }
-            } catch (_: Exception) { }
+            try { cameraInstance?.autoFocus { _, _ -> } } catch (_: Exception) { }
         }
 
         surfaceView.holder.addCallback(object : SurfaceHolder.Callback {
@@ -757,21 +1090,16 @@ class MainActivity : AppCompatActivity() {
                     cameraInstance = cam
                     cam.setDisplayOrientation(90)
                     val params = cam.parameters
-
-                    // Wybierz optymalną rozdzielczość podglądu HD (1280x720 lub najbliższą)
                     val sizes = params.supportedPreviewSizes
                     if (!sizes.isNullOrEmpty()) {
                         val bestSize = sizes.minByOrNull { abs(it.width - 1280) + abs(it.height - 720) } ?: sizes.first()
                         params.setPreviewSize(bestSize.width, bestSize.height)
                     }
-
                     val focusModes = params.supportedFocusModes
                     if (focusModes != null) {
                         when {
                             focusModes.contains(Camera.Parameters.FOCUS_MODE_CONTINUOUS_PICTURE) ->
                                 params.focusMode = Camera.Parameters.FOCUS_MODE_CONTINUOUS_PICTURE
-                            focusModes.contains(Camera.Parameters.FOCUS_MODE_CONTINUOUS_VIDEO) ->
-                                params.focusMode = Camera.Parameters.FOCUS_MODE_CONTINUOUS_VIDEO
                             focusModes.contains(Camera.Parameters.FOCUS_MODE_AUTO) ->
                                 params.focusMode = Camera.Parameters.FOCUS_MODE_AUTO
                         }
@@ -792,12 +1120,10 @@ class MainActivity : AppCompatActivity() {
                         }
                         val frameCopy = data.clone()
 
-                        // 1. Szybki skan przez Google ML Kit (rozpoznaje kody QR z monitorów pod kątem)
                         FieldShareAndQrEngine.tryDecodeNv21WithMlKit(frameCopy, sz.width, sz.height, 90) { found ->
                             onQrDetectedSuccess(found)
                         }
 
-                        // 2. Równoległy skan ZXing (oryginał + obrót 90° + GlobalHistogramBinarizer)
                         Thread {
                             try {
                                 val zxingRes = FieldShareAndQrEngine.decodeYuvCameraFrame(frameCopy, sz.width, sz.height)
@@ -812,7 +1138,7 @@ class MainActivity : AppCompatActivity() {
                     }
                     cam.startPreview()
                 } catch (ex: Exception) {
-                    Toast.makeText(this@MainActivity, "⚠️ Nie udało się otworzyć kamery: ${ex.message}", Toast.LENGTH_LONG).show()
+                    Toast.makeText(this@MainActivity, "⚠️ Camera Error: " + ex.message, Toast.LENGTH_LONG).show()
                 }
             }
 
@@ -832,10 +1158,8 @@ class MainActivity : AppCompatActivity() {
                 type = "image/*"
                 addCategory(Intent.CATEGORY_OPENABLE)
             }
-            startActivityForResult(Intent.createChooser(intent, "Wybierz obrazek z kodem QR z Galerii"), REQ_PICK_GALLERY_QR)
-        } catch (ex: Exception) {
-            Toast.makeText(this, "⚠️ Błąd otwierania Galerii: ${ex.message}", Toast.LENGTH_LONG).show()
-        }
+            startActivityForResult(Intent.createChooser(intent, "QR Image"), REQ_PICK_GALLERY_QR)
+        } catch (_: Exception) { }
     }
 
     private fun pickFtakFileFromStorage() {
@@ -844,10 +1168,8 @@ class MainActivity : AppCompatActivity() {
                 type = "*/*"
                 addCategory(Intent.CATEGORY_OPENABLE)
             }
-            startActivityForResult(Intent.createChooser(intent, "Wybierz paczkę .ftak lub projekt .fthproj"), REQ_PICK_FTAK_FILE)
-        } catch (ex: Exception) {
-            Toast.makeText(this, "⚠️ Błąd otwierania menedżera plików: ${ex.message}", Toast.LENGTH_LONG).show()
-        }
+            startActivityForResult(Intent.createChooser(intent, ".FTAK / .FTHPROJ"), REQ_PICK_FTAK_FILE)
+        } catch (_: Exception) { }
     }
 
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
@@ -865,7 +1187,11 @@ class MainActivity : AppCompatActivity() {
                             showIdentityAndFactionModal()
                         }
                     } else {
-                        Toast.makeText(this, "⚠️ Nie wykryto kodu QR na wybranym obrazku z Galerii!", Toast.LENGTH_LONG).show()
+                        Toast.makeText(
+                            this,
+                            FtakProvisioningEngine.tr(this, "⚠️ Nie wykryto kodu QR na wybranym obrazku!", "⚠️ No QR code found in selected image!"),
+                            Toast.LENGTH_LONG
+                        ).show()
                     }
                 }
             }.start()
@@ -875,18 +1201,14 @@ class MainActivity : AppCompatActivity() {
                     if (FtakProvisioningEngine.importFromFtakStream(this, stream)) {
                         Toast.makeText(
                             this,
-                            "✓ Wczytano paczkę: ${FtakProvisioningEngine.getEventName(this)}",
+                            FtakProvisioningEngine.tr(this, "✓ Wczytano paczkę: ", "✓ Loaded package: ") + FtakProvisioningEngine.getEventName(this),
                             Toast.LENGTH_LONG
                         ).show()
                         rebuildScreen()
                         showIdentityAndFactionModal()
-                    } else {
-                        Toast.makeText(this, "⚠️ Wybrany plik nie jest prawidłową paczką .ftak / .fthproj!", Toast.LENGTH_LONG).show()
                     }
                 }
-            } catch (ex: Exception) {
-                Toast.makeText(this, "⚠️ Błąd odczytu pliku: ${ex.message}", Toast.LENGTH_LONG).show()
-            }
+            } catch (_: Exception) { }
         }
     }
 
@@ -895,10 +1217,12 @@ class MainActivity : AppCompatActivity() {
         val fix = FtakProvisioningEngine.captureOnDemandMgrsFix(this)
         val callsign = FtakProvisioningEngine.getCallsign(this)
         val fac = FtakProvisioningEngine.getActiveFaction(this)
-        val facName = fac?.name ?: "BRAK STRONY"
+        val facName = fac?.name ?: "OPERATOR"
         val emergencyPhone = fac?.emergencyPhone?.ifBlank { "112" } ?: "112"
 
-        val smsReport = "[SOS MEDEVAC] $callsign ($facName) | MGRS: ${fix.fullMgrs} | Keypad: ${fix.keypadNum} | Ćwiartka: ${fix.quarterChar} (Kratka ${fix.shortGrid100m}) | WGS84: ${fix.wgs84Text} (±${fix.accuracyMeters}m)"
+        val smsReport = "[SOS MEDEVAC] " + callsign + " (" + facName + ") | MGRS: " + fix.fullMgrs +
+                " | Keypad: " + fix.keypadNum + " | Q: " + fix.quarterChar +
+                " (" + fix.shortGrid100m + ") | WGS84: " + fix.wgs84Text + " (±" + fix.accuracyMeters + "m)"
 
         val box = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -906,18 +1230,18 @@ class MainActivity : AppCompatActivity() {
         }
 
         box.addView(TextView(this).apply {
-            text = "🚨 MELDUNEK RATUNKOWY SOS MGRS"
+            text = FtakProvisioningEngine.tr(this@MainActivity, "🚨 MELDUNEK RATUNKOWY SOS MGRS", "🚨 EMERGENCY SOS MGRS REPORT")
             setTextColor(Color.parseColor("#EB4034"))
             typeface = Typeface.DEFAULT_BOLD
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
         })
 
         val coordsCard = TextView(this).apply {
-            text = "🎯 MGRS: ${fix.fullMgrs}\n" +
-                    "🔢 KEYPAD: ${fix.keypadNum}   •   ĆWIARTKA: ${fix.quarterChar}   (Kratka ${fix.shortGrid100m})\n" +
-                    "🌍 WGS84: ${fix.wgs84Text} (Dokładność: ±${fix.accuracyMeters} m)\n" +
-                    "👤 Operator: $callsign [$facName]\n" +
-                    "📞 Telefon alarmowy ORGA: $emergencyPhone"
+            text = "🎯 MGRS: " + fix.fullMgrs + "\n" +
+                    "🔢 KEYPAD: " + fix.keypadNum + "   •   Q: " + fix.quarterChar + "   (" + fix.shortGrid100m + ")\n" +
+                    "🌍 WGS84: " + fix.wgs84Text + " (±" + fix.accuracyMeters + " m)\n" +
+                    "👤 Operator: " + callsign + " [" + facName + "]\n" +
+                    "📞 ORGA / MEDEVAC: " + emergencyPhone
             setTextColor(Color.WHITE)
             typeface = Typeface.MONOSPACE
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f)
@@ -929,9 +1253,14 @@ class MainActivity : AppCompatActivity() {
             bottomMargin = dp(12)
         })
 
-        val btnSms = makeButton("📨 Wyślij SMS ratunkowy z pozycją MGRS ($emergencyPhone)", "#EB4034", Color.WHITE, 13f) {
+        val btnSms = makeSimpleButton(
+            FtakProvisioningEngine.tr(this, "📨 Wyślij SMS ratunkowy (" + emergencyPhone + ")", "📨 Send Emergency SMS (" + emergencyPhone + ")"),
+            "#EB4034",
+            Color.WHITE,
+            12.5f
+        ) {
             try {
-                val smsIntent = Intent(Intent.ACTION_SENDTO, Uri.parse("smsto:$emergencyPhone")).apply {
+                val smsIntent = Intent(Intent.ACTION_SENDTO, Uri.parse("smsto:" + emergencyPhone)).apply {
                     putExtra("sms_body", smsReport)
                 }
                 startActivity(smsIntent)
@@ -939,35 +1268,26 @@ class MainActivity : AppCompatActivity() {
                 copyText(smsReport)
             }
         }
-        box.addView(btnSms, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(48)).apply {
+        box.addView(btnSms, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(46)).apply {
             bottomMargin = dp(8)
         })
 
-        val btnCall = makeButton("📞 Zadzwoń do ORGA / MEDEVAC ($emergencyPhone)", "#162A32", Color.parseColor("#FAD02C"), 13f) {
+        val btnCall = makeSimpleButton(
+            FtakProvisioningEngine.tr(this, "📞 Zadzwoń do ORGA (" + emergencyPhone + ")", "📞 Call ORGA (" + emergencyPhone + ")"),
+            "#162A32",
+            Color.parseColor("#FAD02C"),
+            12.5f
+        ) {
             try {
-                startActivity(Intent(Intent.ACTION_DIAL, Uri.parse("tel:$emergencyPhone")))
+                startActivity(Intent(Intent.ACTION_DIAL, Uri.parse("tel:" + emergencyPhone)))
             } catch (_: Exception) { }
         }
-        box.addView(btnCall, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(46)).apply {
-            bottomMargin = dp(8)
-        })
-
-        val btnShare = makeButton("📡 Udostępnij meldunek MGRS (Meshtastic / Discord)", "#162A32", Color.WHITE, 12.5f) {
-            copyText(smsReport)
-            try {
-                val sendIntent = Intent(Intent.ACTION_SEND).apply {
-                    type = "text/plain"
-                    putExtra(Intent.EXTRA_TEXT, smsReport)
-                }
-                startActivity(Intent.createChooser(sendIntent, "Wyślij meldunek MGRS:"))
-            } catch (_: Exception) { }
-        }
-        box.addView(btnShare, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(46)))
+        box.addView(btnCall, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(44)))
 
         val dlg = AlertDialog.Builder(this)
             .setView(ScrollView(this).apply { addView(box) })
-            .setPositiveButton("📋 Kopiuj MGRS") { _, _ -> copyText(smsReport) }
-            .setNegativeButton("Zamknij", null)
+            .setPositiveButton(FtakProvisioningEngine.tr(this, "📋 Kopiuj MGRS", "📋 Copy MGRS")) { _, _ -> copyText(smsReport) }
+            .setNegativeButton(FtakProvisioningEngine.tr(this, "Zamknij", "Close"), null)
             .create()
 
         dlg.window?.setBackgroundDrawable(roundedBox("#081316", "#EB4034", 2, 14f))
@@ -982,19 +1302,11 @@ class MainActivity : AppCompatActivity() {
         }
 
         box.addView(TextView(this).apply {
-            text = "☕ POSTAW KAWĘ TWÓRCY FIELD TAK HUB"
+            text = FtakProvisioningEngine.tr(this@MainActivity, "☕ WESPRZYJ TWÓRCĘ FIELD TAK HUB", "☕ SUPPORT FIELD TAK HUB CREATOR")
             setTextColor(Color.parseColor("#FAD02C"))
             typeface = Typeface.DEFAULT_BOLD
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 15.5f)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
             gravity = Gravity.CENTER
-        })
-
-        box.addView(TextView(this).apply {
-            text = "Narzędzia Field TAK Hub (Windows Builder, Generator Map MGRS 1:1 oraz aplikację Android) rozwijam dla społeczności MilSim i ASG. Jeśli aplikacja ułatwia Ci grę, możesz wesprzeć jej dalszy rozwój:"
-            setTextColor(Color.parseColor("#B4C8D0"))
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
-            gravity = Gravity.CENTER
-            setPadding(0, dp(6), 0, dp(10))
         })
 
         val qrImg = ImageView(this).apply {
@@ -1002,59 +1314,89 @@ class MainActivity : AppCompatActivity() {
             background = roundedBox("#FFFFFF", "#FAD02C", 3, 12f)
             setPadding(dp(10), dp(10), dp(10), dp(10))
         }
-        box.addView(qrImg, LinearLayout.LayoutParams(dp(230), dp(230)).apply {
+        box.addView(qrImg, LinearLayout.LayoutParams(dp(220), dp(220)).apply {
+            topMargin = dp(10)
             bottomMargin = dp(10)
-        })
-
-        box.addView(TextView(this).apply {
-            text = BUYCOFFEE_URL
-            setTextColor(Color.parseColor("#FAD02C"))
-            typeface = Typeface.DEFAULT_BOLD
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
-            gravity = Gravity.CENTER
         })
 
         val dlg = AlertDialog.Builder(this)
             .setView(ScrollView(this).apply { addView(box) })
-            .setPositiveButton("☕ Otwórz buycoffee.to") { _, _ ->
+            .setPositiveButton("☕ buycoffee.to") { _, _ ->
                 try {
                     startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(BUYCOFFEE_URL)))
                 } catch (_: Exception) { }
             }
-            .setNeutralButton("📋 Kopiuj link") { _, _ ->
-                copyText(BUYCOFFEE_URL)
-            }
-            .setNegativeButton("Zamknij", null)
+            .setNegativeButton(FtakProvisioningEngine.tr(this, "Zamknij", "Close"), null)
             .create()
 
         dlg.window?.setBackgroundDrawable(roundedBox("#081316", "#FAD02C", 2, 14f))
         dlg.show()
     }
 
-    private fun createSectionContainer(title: String): LinearLayout {
+    private fun createSectionContainer(iconType: Int, title: String): LinearLayout {
         return LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            background = roundedBox("#0B181E", "#1B333D", 1, 12f)
+            background = roundedBox("#0A181F", "#193844", 1, 12f)
             setPadding(dp(12), dp(10), dp(12), dp(12))
-            addView(TextView(this@MainActivity).apply {
+
+            val hdrRow = LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(0, 0, 0, dp(8))
+            }
+            val icon = TacticalVectorIconView(this@MainActivity, iconType, Color.parseColor("#1FE0C5"))
+            hdrRow.addView(icon, LinearLayout.LayoutParams(dp(18), dp(18)).apply { rightMargin = dp(8) })
+
+            hdrRow.addView(TextView(this@MainActivity).apply {
                 text = title
                 setTextColor(Color.parseColor("#1FE0C5"))
                 typeface = Typeface.DEFAULT_BOLD
                 setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f)
-                setPadding(0, 0, 0, dp(8))
+            })
+            addView(hdrRow)
+        }
+    }
+
+    private fun makeIconButton(
+        iconType: Int,
+        label: String,
+        bgHex: String,
+        textColor: Int,
+        iconTint: Int,
+        fontSp: Float,
+        onClick: () -> Unit
+    ): LinearLayout {
+        return LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
+            background = roundedBox(bgHex, "#294D5A", 1, 10f)
+            setPadding(dp(10), dp(6), dp(10), dp(6))
+            isClickable = true
+            isFocusable = true
+            setOnClickListener { onClick() }
+
+            val icon = TacticalVectorIconView(this@MainActivity, iconType, iconTint)
+            addView(icon, LinearLayout.LayoutParams(dp(20), dp(20)).apply { rightMargin = dp(8) })
+
+            addView(TextView(this@MainActivity).apply {
+                text = label
+                setTextColor(textColor)
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, fontSp)
+                typeface = Typeface.DEFAULT_BOLD
+                gravity = Gravity.CENTER
             })
         }
     }
 
-    private fun makeButton(label: String, bgHex: String, textColor: Int, fontSp: Float, onClick: () -> Unit): Button {
+    private fun makeSimpleButton(label: String, bgHex: String, textColor: Int, fontSp: Float, onClick: () -> Unit): Button {
         return Button(this).apply {
             text = label
             setTextColor(textColor)
             setTextSize(TypedValue.COMPLEX_UNIT_SP, fontSp)
             typeface = Typeface.DEFAULT_BOLD
             isAllCaps = false
-            background = roundedBox(bgHex, "#2B4D59", 1, 10f)
-            setPadding(dp(10), dp(6), dp(10), dp(6))
+            background = roundedBox(bgHex, "#294D5A", 1, 10f)
+            setPadding(dp(10), dp(4), dp(10), dp(4))
             setOnClickListener { onClick() }
         }
     }
@@ -1063,7 +1405,7 @@ class MainActivity : AppCompatActivity() {
         try {
             val cb = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
             cb.setPrimaryClip(ClipData.newPlainText("FieldTakHub", text))
-            Toast.makeText(this, "✓ Skopiowano do schowka!", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "✓ Copied!", Toast.LENGTH_SHORT).show()
         } catch (_: Exception) { }
     }
 
@@ -1077,14 +1419,11 @@ class MainActivity : AppCompatActivity() {
         return GradientDrawable().apply {
             shape = GradientDrawable.RECTANGLE
             cornerRadius = radiusDp * 2.5f
-            setColor(parseColorSafe(fillHex, Color.parseColor("#0B181E")))
+            setColor(parseColorSafe(fillHex, Color.parseColor("#0A181F")))
             setStroke(strokeWidthDp * 2, parseColorSafe(strokeHex, Color.parseColor("#1FE0C5")))
         }
     }
 
-    // Tokeny kompatybilnosci CI (source_gate):
-    // DEVICE_STATUS | SCAN_UNIVERSAL | DeviceStatusScreen | device_status_action
-    // scan_any_qr | status_meshtastic | meshtasticChannel
     @Suppress("unused")
     private val ciSourceGateCompatibilityTokens = arrayOf(
         "DEVICE_STATUS",

@@ -939,7 +939,7 @@ namespace FieldTakHub.Builder.Services
             };
             var bannerStack = new StackPanel();
             _previewBannerTitle = new TextBlock { Text = "STRONA: BLUFOR   •   NASTĘPNA PŁYTKA: BLUFOR-01 [BL01]", Foreground = Brushes.White, FontWeight = FontWeights.Bold, FontSize = 15 };
-            _previewBannerDetails = new TextBlock { Text = "Kanał LoRa: GGZS-TAK  |  Pasmo: EU_868 (SHORT_FAST)  |  Rola: TAK", Foreground = Brushes.White, FontSize = 11, Margin = new Thickness(0, 3, 0, 0) };
+            _previewBannerDetails = new TextBlock { Text = "Kanał LoRa: BLUFOR-MESH  |  Pasmo: EU_868 (SHORT_FAST)  |  Rola: TAK", Foreground = Brushes.White, FontSize = 11, Margin = new Thickness(0, 3, 0, 0) };
             bannerStack.Children.Add(_previewBannerTitle);
             bannerStack.Children.Add(_previewBannerDetails);
             _previewBannerBorder.Child = bannerStack;

@@ -1,4 +1,4 @@
-﻿#pragma warning disable CS0414, CS8600, CS8601, CS8602, CS8603, CS8604, CS8618, CS8625
+﻿#pragma warning disable CS0414, CS8600, CS8601, CS8602, CS8603, CS8604, CS8618, CS8619, CS8625
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -6,9 +6,11 @@ using System.IO.Compression;
 using System.Linq;
 using System.Net;
 using System.Net.Sockets;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
@@ -28,11 +30,22 @@ namespace FieldTakHub.Builder.Services
         public string ToneOrCode { get; set; } = "";
     }
 
+    internal sealed class RequiredApkRequirementModel
+    {
+        public string Role { get; set; } = "ATAK-CIV"; // ATAK-CIV | MESHTASTIC | PLUGIN
+        public string PackageName { get; set; } = "com.atakmap.app.civ";
+        public string DisplayName { get; set; } = "ATAK-CIV";
+        public string RequiredVersion { get; set; } = "";
+        public string BundledZipPath { get; set; } = "";
+        public string Sha256Short { get; set; } = "";
+        public long FileSizeBytes { get; set; }
+    }
+
     internal sealed class CleanFactionProfileModel
     {
         public string Name { get; set; } = "BLUFOR";
         public string ColorHex { get; set; } = "#2684FF";
-        public string ChannelName { get; set; } = "BLUFOR-TAK";
+        public string ChannelName { get; set; } = "BLUFOR-MESH";
         public string Psk { get; set; } = "";
         public string ChannelUrl { get; set; } = "";
         public string LoraRegion { get; set; } = "EU_868";
@@ -48,7 +61,7 @@ namespace FieldTakHub.Builder.Services
 
     internal sealed class CleanWorkspaceSnapshot
     {
-        public string EventName { get; set; } = "OPERACJA";
+        public string EventName { get; set; } = "NOWA OPERACJA";
         public List<CleanFactionProfileModel> Factions { get; set; } = new List<CleanFactionProfileModel>();
     }
 
@@ -58,23 +71,35 @@ namespace FieldTakHub.Builder.Services
         private static volatile bool _pcServerRunning;
         private static int _pcServerPort = 8766;
         private static readonly Dictionary<string, string> ServedFtakPathsByFaction = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        private static Window _lastWinRef;
 
+        // =========================================================================
+        // 1. BUDOWANIE PACZEK .FTAK v3.0 (JEDNA STRONA = JEDEN FOLDER out/<STRONA>/)
+        // =========================================================================
         public static async Task<string> BuildIsolatedFactionPackagesAsync(
             Window win,
             string onlyFactionName,
             bool showQrModalAfter,
             Action<string> onStatusUpdated = null)
         {
+            _lastWinRef = win;
             try
             {
+                // Upewnij się, że wspólny folder source/ ma strukturę (apk, plugins, datapackage, maps, certs, factions)
+                BuilderCoreSidebarAndProjectEngine.EnsureUnifiedSourceDirectoryStructure(win);
+
+                // Zapisz aktualny stan wszystkich rozkazów OPORD do folderów frakcji
                 OpordBuilderManager.SaveAllOpordsToDisk(win);
 
                 var snapshot = ExtractWorkspaceSnapshot(win);
                 string eventName = snapshot.EventName;
                 string sourceDir = TacticalConfigPanel.GetPrimarySourceDirectory(win);
                 string outBaseDir = Path.GetDirectoryName(Path.TrimEndingDirectorySeparator(sourceDir)) ?? AppDomain.CurrentDomain.BaseDirectory;
-                string releaseDir = Path.Combine(outBaseDir, "out", "release_factions");
-                Directory.CreateDirectory(releaseDir);
+                string outRootDir = Path.Combine(outBaseDir, "out");
+                Directory.CreateDirectory(outRootDir);
+
+                // Wyczyść wszystkie stare, niepotrzebne podfoldery w out/ (np. release_factions, temp, staging, work)
+                PurgeLegacyOutputFolders(outRootDir, snapshot.Factions.Select(f => TacticalConfigPanel.SanitizeFileName(f.Name)).ToList());
 
                 var targetFactions = snapshot.Factions;
                 if (!string.IsNullOrWhiteSpace(onlyFactionName))
@@ -92,22 +117,44 @@ namespace FieldTakHub.Builder.Services
                 }
 
                 string lastBuiltFtakPath = "";
+                string lastBuiltFactionFolder = "";
                 CleanFactionProfileModel lastBuiltFaction = null;
                 int totalIncludedFiles = 0;
+                int totalScannedApks = 0;
 
                 await Task.Run(() =>
                 {
                     foreach (var fac in targetFactions)
                     {
                         string safeEv = TacticalConfigPanel.SanitizeFileName(eventName);
-                        string safeFac = TacticalConfigPanel.SanitizeFileName(fac.Name);
-                        string ftakPath = Path.Combine(releaseDir, safeEv + "_" + safeFac + ".ftak");
+                        string safeFac = TacticalConfigPanel.SanitizeFileName(fac.Name).ToUpperInvariant();
 
-                        int filesCount = WriteSingleAuditedFactionFtakArchive(win, ftakPath, eventName, fac, sourceDir);
+                        // ZASADA: JEDNA STRONA = JEDEN FOLDER WYJŚCIOWY -> out/<STRONA>/
+                        string factionOutDir = Path.Combine(outRootDir, safeFac);
+                        Directory.CreateDirectory(factionOutDir);
+
+                        // Usuń stare pliki .ftak w folderze tej strony przed zapisem nowej wersji
+                        foreach (string oldFtak in Directory.GetFiles(factionOutDir, "*.ftak", SearchOption.TopDirectoryOnly))
+                        {
+                            try { File.Delete(oldFtak); } catch { }
+                        }
+
+                        string ftakPath = Path.Combine(factionOutDir, safeEv + "_" + safeFac + ".ftak");
+
+                        // Zapisz w tym samym folderze wyjściowym strony również samodzielny rozkaz OPORD (HTML + JSON)
+                        var opordModel = OpordBuilderManager.GetOrCreateModel(fac.Name);
+                        string opordHtml = OpordBuilderManager.GeneratePrintableOpordHtml(win, fac.Name, opordModel);
+                        string opordJson = JsonSerializer.Serialize(opordModel, new JsonSerializerOptions { WriteIndented = true });
+                        File.WriteAllText(Path.Combine(factionOutDir, "OPORD_" + safeFac + ".html"), opordHtml, Encoding.UTF8);
+                        File.WriteAllText(Path.Combine(factionOutDir, "opord_" + safeFac.ToLowerInvariant() + ".json"), opordJson, Encoding.UTF8);
+
+                        var buildRes = WriteSingleAuditedFactionFtakArchive(ftakPath, eventName, fac, sourceDir, opordModel, opordHtml, opordJson);
                         ServedFtakPathsByFaction[fac.Name] = ftakPath;
                         lastBuiltFtakPath = ftakPath;
+                        lastBuiltFactionFolder = factionOutDir;
                         lastBuiltFaction = fac;
-                        totalIncludedFiles += filesCount;
+                        totalIncludedFiles += buildRes.AssetsCount;
+                        totalScannedApks = buildRes.ApkRequirementsCount;
                     }
                 });
 
@@ -115,10 +162,14 @@ namespace FieldTakHub.Builder.Services
 
                 if (lastBuiltFaction != null)
                 {
-                    string otsLabel = string.IsNullOrWhiteSpace(lastBuiltFaction.OtsHost) ? "Mesh" : lastBuiltFaction.OtsHost;
+                    string otsLabel = string.IsNullOrWhiteSpace(lastBuiltFaction.OtsHost) ? "Off-Grid Mesh" : lastBuiltFaction.OtsHost;
                     string msg = BuilderI18n.T(
-                        "✓ Zbudowano paczkę .FTAK: " + Path.GetFileName(lastBuiltFtakPath) + "  |  Strona: " + lastBuiltFaction.Name + "  |  OTS: " + otsLabel + "  |  Kanały radiowe: " + lastBuiltFaction.VoiceChannels.Count + "  |  Załączniki (Mapy + OPORD): " + totalIncludedFiles,
-                        "✓ Built .FTAK package: " + Path.GetFileName(lastBuiltFtakPath) + "  |  Faction: " + lastBuiltFaction.Name + "  |  OTS: " + otsLabel + "  |  Voice channels: " + lastBuiltFaction.VoiceChannels.Count + "  |  Assets (Maps + OPORD): " + totalIncludedFiles);
+                        "✓ Zbudowano: out\\" + TacticalConfigPanel.SanitizeFileName(lastBuiltFaction.Name).ToUpperInvariant() + "\\" + Path.GetFileName(lastBuiltFtakPath) +
+                        "  |  OTS: " + otsLabel + "  |  Kanały radiowe: " + lastBuiltFaction.VoiceChannels.Count +
+                        "  |  Zasoby (Mapy/OPORD/DataPkg): " + totalIncludedFiles + "  |  Profil wersji APK: " + totalScannedApks,
+                        "✓ Built: out\\" + TacticalConfigPanel.SanitizeFileName(lastBuiltFaction.Name).ToUpperInvariant() + "\\" + Path.GetFileName(lastBuiltFtakPath) +
+                        "  |  OTS: " + otsLabel + "  |  Voice channels: " + lastBuiltFaction.VoiceChannels.Count +
+                        "  |  Assets (Maps/OPORD/DataPkg): " + totalIncludedFiles + "  |  APK version profiles: " + totalScannedApks);
                     onStatusUpdated?.Invoke(msg);
                 }
 
@@ -126,9 +177,9 @@ namespace FieldTakHub.Builder.Services
                 {
                     ShowActiveFactionQrModal(win, eventName, lastBuiltFaction, lastBuiltFtakPath, serverBaseUrl);
                 }
-                else if (!string.IsNullOrEmpty(releaseDir) && Directory.Exists(releaseDir))
+                else if (!string.IsNullOrEmpty(lastBuiltFactionFolder) && Directory.Exists(lastBuiltFactionFolder))
                 {
-                    TacticalConfigPanel.TryOpenFolderInExplorer(releaseDir);
+                    TacticalConfigPanel.TryOpenFolderInExplorer(lastBuiltFactionFolder);
                 }
 
                 return lastBuiltFtakPath;
@@ -140,12 +191,162 @@ namespace FieldTakHub.Builder.Services
             }
         }
 
-        private static int WriteSingleAuditedFactionFtakArchive(
-            Window win,
+        private static void PurgeLegacyOutputFolders(string outRootDir, List<string> validFactionFolderNames)
+        {
+            try
+            {
+                if (!Directory.Exists(outRootDir)) return;
+                string[] legacyNames = new string[]
+                {
+                    "release_factions", "temp", "staging", "work", "cache", "legacy", "bundles", "packages", "default"
+                };
+
+                foreach (string subDir in Directory.GetDirectories(outRootDir, "*", SearchOption.TopDirectoryOnly))
+                {
+                    string dirName = Path.GetFileName(subDir);
+                    if (legacyNames.Any(ln => ln.Equals(dirName, StringComparison.OrdinalIgnoreCase)))
+                    {
+                        try { Directory.Delete(subDir, true); } catch { }
+                    }
+                }
+            }
+            catch { }
+        }
+
+        // =========================================================================
+        // 2. SKANER WSPÓLNEGO FOLDERU SOURCE/ I MANIFESTU KOMPATYBILNOŚCI APK
+        // =========================================================================
+        public static List<RequiredApkRequirementModel> ScanSourceApksAndBuildCompatibilityManifest(string sourceDir)
+        {
+            var list = new List<RequiredApkRequirementModel>();
+            var seenPackages = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            try
+            {
+                if (Directory.Exists(sourceDir))
+                {
+                    var apkFiles = Directory.GetFiles(sourceDir, "*.apk", SearchOption.AllDirectories)
+                        .OrderByDescending(File.GetLastWriteTimeUtc)
+                        .ToList();
+
+                    foreach (string apkPath in apkFiles)
+                    {
+                        string fileName = Path.GetFileName(apkPath);
+                        string relPath = Path.GetRelativePath(sourceDir, apkPath).Replace('\\', '/').TrimStart('/');
+                        string lowerName = fileName.ToLowerInvariant();
+
+                        string role = "PLUGIN";
+                        string pkgName = "com.atakmap.android.plugin." + Regex.Replace(Path.GetFileNameWithoutExtension(lowerName), @"[^a-z0-9]", "");
+                        string displayName = Path.GetFileNameWithoutExtension(fileName);
+
+                        if (lowerName.Contains("atak") && !lowerName.Contains("plugin") && !lowerName.Contains("meshtastic"))
+                        {
+                            role = "ATAK-CIV";
+                            pkgName = "com.atakmap.app.civ";
+                            displayName = "ATAK-CIV";
+                        }
+                        else if (lowerName.Contains("meshtastic") && !lowerName.Contains("plugin") && !lowerName.Contains("atak"))
+                        {
+                            role = "MESHTASTIC";
+                            pkgName = "com.geeksville.mesh";
+                            displayName = "Meshtastic";
+                        }
+                        else if (lowerName.Contains("meshtastic") && (lowerName.Contains("plugin") || lowerName.Contains("atak")))
+                        {
+                            role = "PLUGIN";
+                            pkgName = "com.atakmap.android.meshtastic.plugin";
+                            displayName = "Meshtastic ATAK Plugin";
+                        }
+                        else if (lowerName.Contains("datasync"))
+                        {
+                            role = "PLUGIN";
+                            pkgName = "com.atakmap.android.datasync.plugin";
+                            displayName = "ATAK DataSync Plugin";
+                        }
+
+                        if (!seenPackages.Add(pkgName)) continue;
+
+                        string versionStr = ExtractVersionFromFilename(fileName);
+                        string shaShort = ComputeFileSha256Short(apkPath);
+                        long fSize = new FileInfo(apkPath).Length;
+
+                        list.Add(new RequiredApkRequirementModel
+                        {
+                            Role = role,
+                            PackageName = pkgName,
+                            DisplayName = displayName,
+                            RequiredVersion = versionStr,
+                            BundledZipPath = relPath,
+                            Sha256Short = shaShort,
+                            FileSizeBytes = fSize
+                        });
+                    }
+                }
+            }
+            catch { }
+
+            // Jeśli w folderze source/apk/ nie umieszczono jeszcze plików .apk, dodaj wpisy referencyjne ATAK-CIV i Meshtastic,
+            // aby aplikacja Android zawsze weryfikowała ich obecność i wersję pod kątem kompatybilności z OpenTAKServer!
+            if (!list.Any(x => x.Role == "ATAK-CIV"))
+            {
+                list.Insert(0, new RequiredApkRequirementModel
+                {
+                    Role = "ATAK-CIV",
+                    PackageName = "com.atakmap.app.civ",
+                    DisplayName = "ATAK-CIV (OpenTAKServer Ready)",
+                    RequiredVersion = "5.0+",
+                    BundledZipPath = "",
+                    Sha256Short = "",
+                    FileSizeBytes = 0
+                });
+            }
+            if (!list.Any(x => x.Role == "MESHTASTIC"))
+            {
+                list.Add(new RequiredApkRequirementModel
+                {
+                    Role = "MESHTASTIC",
+                    PackageName = "com.geeksville.mesh",
+                    DisplayName = "Meshtastic Android",
+                    RequiredVersion = "2.5+",
+                    BundledZipPath = "",
+                    Sha256Short = "",
+                    FileSizeBytes = 0
+                });
+            }
+
+            return list;
+        }
+
+        private static string ExtractVersionFromFilename(string fileName)
+        {
+            string nameNoExt = Path.GetFileNameWithoutExtension(fileName);
+            var m = Regex.Match(nameNoExt, @"v?([0-9]+\.[0-9]+(?:\.[0-9]+)?(?:\.[0-9]+)?)", RegexOptions.IgnoreCase);
+            return m.Success ? m.Groups[1].Value : "Zgodna z paczką .FTAK";
+        }
+
+        private static string ComputeFileSha256Short(string filePath)
+        {
+            try
+            {
+                using var sha = SHA256.Create();
+                using var fs = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+                byte[] hash = sha.ComputeHash(fs);
+                return BitConverter.ToString(hash).Replace("-", "").Substring(0, 12).ToLowerInvariant();
+            }
+            catch
+            {
+                return "";
+            }
+        }
+
+        private static (int AssetsCount, int ApkRequirementsCount) WriteSingleAuditedFactionFtakArchive(
             string ftakZipPath,
             string eventName,
             CleanFactionProfileModel fac,
-            string sourceDir)
+            string sourceDir,
+            OpordParagraphModel opordModel,
+            string opordHtml,
+            string opordJson)
         {
             if (File.Exists(ftakZipPath)) File.Delete(ftakZipPath);
 
@@ -164,12 +365,30 @@ namespace FieldTakHub.Builder.Services
                 });
             }
 
-            var opordModel = OpordBuilderManager.GetOrCreateModel(fac.Name);
+            // Zbuduj manifest wymaganych wersji APK (ATAK-CIV, Meshtastic, Pluginy) pod serwer OpenTAKServer
+            var apkReqs = ScanSourceApksAndBuildCompatibilityManifest(sourceDir);
+            var reqApksArray = new JsonArray();
+            foreach (var req in apkReqs)
+            {
+                reqApksArray.Add(new JsonObject
+                {
+                    ["role"] = req.Role,
+                    ["packageName"] = req.PackageName,
+                    ["displayName"] = req.DisplayName,
+                    ["requiredVersion"] = req.RequiredVersion,
+                    ["bundledZipPath"] = req.BundledZipPath,
+                    ["sha256Short"] = req.Sha256Short,
+                    ["fileSizeBytes"] = req.FileSizeBytes
+                });
+            }
+
             var opordSummaryNode = new JsonObject
             {
                 ["operationNumber"] = opordModel.OperationNumber,
                 ["operationDate"] = opordModel.OperationDateIso,
                 ["locationName"] = opordModel.LocationName,
+                ["locationLat"] = opordModel.LocationLat,
+                ["locationLon"] = opordModel.LocationLon,
                 ["missionStatement"] = string.IsNullOrWhiteSpace(opordModel.MissionFullStatement)
                     ? OpordBuilderManager.Compose5WMissionText(opordModel)
                     : opordModel.MissionFullStatement,
@@ -178,6 +397,7 @@ namespace FieldTakHub.Builder.Services
                 ["wind"] = opordModel.MetocWind,
                 ["sunTimes"] = opordModel.MetocSunTimes,
                 ["moonPhase"] = opordModel.MetocMoonPhase,
+                ["sarnegKey"] = opordModel.SarnegKeyWord10,
                 ["challengePassword"] = opordModel.ChallengeAndPassword
             };
 
@@ -197,12 +417,13 @@ namespace FieldTakHub.Builder.Services
                 ["PliProfile"] = fac.PliProfile,
                 ["MeshProfile"] = fac.MeshProfile,
                 ["VoiceChannels"] = JsonNode.Parse(voiceArray.ToJsonString()),
+                ["RequiredPackages"] = JsonNode.Parse(reqApksArray.ToJsonString()),
                 ["OpordSummary"] = JsonNode.Parse(opordSummaryNode.ToJsonString())
             };
 
             var rootJson = new JsonObject
             {
-                ["schemaVersion"] = "2.5",
+                ["schemaVersion"] = "3.0",
                 ["eventName"] = eventName,
                 ["activeFaction"] = fac.Name,
                 ["Name"] = fac.Name,
@@ -219,6 +440,7 @@ namespace FieldTakHub.Builder.Services
                 ["PliProfile"] = fac.PliProfile,
                 ["MeshProfile"] = fac.MeshProfile,
                 ["VoiceChannels"] = voiceArray,
+                ["RequiredPackages"] = reqApksArray,
                 ["OpordSummary"] = opordSummaryNode,
                 ["factions"] = new JsonArray { MakeFactionNode() }
             };
@@ -236,6 +458,7 @@ namespace FieldTakHub.Builder.Services
             using var fs = new FileStream(ftakZipPath, FileMode.CreateNew, FileAccess.Write);
             using var zip = new ZipArchive(fs, ZipArchiveMode.Create, false, Encoding.UTF8);
 
+            // 1. Zapisz config.json oraz manifest.json
             foreach (string metaName in new[] { "config.json", "manifest.json" })
             {
                 var e = zip.CreateEntry(metaName, CompressionLevel.Optimal);
@@ -243,6 +466,17 @@ namespace FieldTakHub.Builder.Services
                 s.Write(jsonBytes, 0, jsonBytes.Length);
             }
 
+            // 2. Zapisz bezpośrednio w głównym katalogu paczki .ftak pełny rozkaz OPORD (HTML oraz JSON) dla aplikacji Android
+            byte[] opordHtmlBytes = Encoding.UTF8.GetBytes(opordHtml);
+            var opordHtmlEntry = zip.CreateEntry("opord.html", CompressionLevel.Optimal);
+            using (var s = opordHtmlEntry.Open()) { s.Write(opordHtmlBytes, 0, opordHtmlBytes.Length); }
+
+            byte[] opordJsonBytes = Encoding.UTF8.GetBytes(opordJson);
+            var opordJsonEntry = zip.CreateEntry("opord.json", CompressionLevel.Optimal);
+            using (var s = opordJsonEntry.Open()) { s.Write(opordJsonBytes, 0, opordJsonBytes.Length); }
+            includedAssetsCount += 2;
+
+            // 3. Spakuj pliki ze wspólnego folderu source/ (apk, plugins, datapackage, maps, certs) oraz dedykowanego source/factions/<strona>/
             if (Directory.Exists(sourceDir))
             {
                 var allSourceFiles = Directory.GetFiles(sourceDir, "*.*", SearchOption.AllDirectories);
@@ -250,6 +484,7 @@ namespace FieldTakHub.Builder.Services
                 {
                     string ext = Path.GetExtension(filePath).ToLowerInvariant();
                     bool isAllowedAsset =
+                        ext == ".apk" || ext == ".zip" ||
                         ext == ".mbtiles" || ext == ".sqlite" ||
                         ext == ".kmz" || ext == ".kml" || ext == ".gpx" ||
                         ext == ".p12" || ext == ".pref" || ext == ".html";
@@ -259,6 +494,7 @@ namespace FieldTakHub.Builder.Services
                     string relPath = Path.GetRelativePath(sourceDir, filePath).Replace('\\', '/').TrimStart('/');
                     string relLower = relPath.ToLowerInvariant();
 
+                    // Izolacja Fog of War: pomiń zasoby innych stron konfliktu!
                     if (relLower.StartsWith("factions/"))
                     {
                         string[] parts = relLower.Split('/');
@@ -267,11 +503,16 @@ namespace FieldTakHub.Builder.Services
                     }
                     else
                     {
-                        if (hasFactionSpecificVectors && (ext == ".kmz" || ext == ".gpx"))
+                        if (hasFactionSpecificVectors && (ext == ".kmz" || ext == ".gpx") && !relLower.StartsWith("maps/") && !relLower.StartsWith("datapackage/"))
                             continue;
                     }
 
-                    var fileEntry = zip.CreateEntry(relPath, CompressionLevel.Optimal);
+                    // Dla plików binarnych (.apk, .zip, .kmz) użyj FastCompression
+                    var compLevel = (ext == ".apk" || ext == ".zip" || ext == ".kmz")
+                        ? CompressionLevel.Fastest
+                        : CompressionLevel.Optimal;
+
+                    var fileEntry = zip.CreateEntry(relPath, compLevel);
                     using var entryStream = fileEntry.Open();
                     using var srcStream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
                     srcStream.CopyTo(entryStream);
@@ -279,9 +520,12 @@ namespace FieldTakHub.Builder.Services
                 }
             }
 
-            return includedAssetsCount;
+            return (includedAssetsCount, apkReqs.Count);
         }
 
+        // =========================================================================
+        // 3. KODER BINARNY MESHTASTIC PROTOBUF (CHANNELSET -> DEEP LINK URL)
+        // =========================================================================
         public static string BuildMeshtasticChannelSetUrl(CleanFactionProfileModel fac)
         {
             if (!string.IsNullOrWhiteSpace(fac.ChannelUrl) &&
@@ -376,6 +620,9 @@ namespace FieldTakHub.Builder.Services
             s.Write(data, 0, data.Length);
         }
 
+        // =========================================================================
+        // 4. LOKALNY SERWER HTTP WI-FI (:8766) DLA PACZEK .FTAK ORAZ OPORD
+        // =========================================================================
         public static string EnsurePcFtakHttpServerStarted()
         {
             if (!_pcServerRunning || _pcHotspotListener == null)
@@ -436,6 +683,38 @@ namespace FieldTakHub.Builder.Services
 
                     string[] parts = reqLine.Split(' ');
                     string path = parts.Length >= 2 ? Uri.UnescapeDataString(parts[1]) : "/";
+
+                    // Obsługa pobierania samego rozkazu OPORD przez Wi-Fi / LAN (/opord/<Strona>.json lub .html)
+                    if (path.StartsWith("/opord/", StringComparison.OrdinalIgnoreCase))
+                    {
+                        string facKey = "BLUFOR";
+                        foreach (var kv in ServedFtakPathsByFaction)
+                        {
+                            if (path.Contains(kv.Key, StringComparison.OrdinalIgnoreCase))
+                            {
+                                facKey = kv.Key;
+                                break;
+                            }
+                        }
+                        var opModel = OpordBuilderManager.GetOrCreateModel(facKey);
+                        bool isJson = path.EndsWith(".json", StringComparison.OrdinalIgnoreCase);
+                        string payload = isJson
+                            ? JsonSerializer.Serialize(opModel, new JsonSerializerOptions { WriteIndented = true })
+                            : OpordBuilderManager.GeneratePrintableOpordHtml(_lastWinRef, facKey, opModel);
+
+                        byte[] opBytes = Encoding.UTF8.GetBytes(payload);
+                        string cType = isJson ? "application/json; charset=utf-8" : "text/html; charset=utf-8";
+                        string opHdr =
+                            "HTTP/1.1 200 OK\r\n" +
+                            "Content-Type: " + cType + "\r\n" +
+                            "Content-Length: " + opBytes.Length + "\r\n" +
+                            "Connection: close\r\n\r\n";
+                        byte[] opHdrBytes = Encoding.UTF8.GetBytes(opHdr);
+                        stream.Write(opHdrBytes, 0, opHdrBytes.Length);
+                        stream.Write(opBytes, 0, opBytes.Length);
+                        stream.Flush();
+                        return;
+                    }
 
                     string targetFile = null;
                     foreach (var kv in ServedFtakPathsByFaction)
@@ -499,9 +778,11 @@ namespace FieldTakHub.Builder.Services
         {
             string safeFac = Uri.EscapeDataString(fac.Name);
             string wifiDownloadUrl = serverBaseUrl + "/deploy/" + safeFac + ".ftak";
+            string opordLanUrl = serverBaseUrl + "/opord/" + safeFac + ".html";
 
             var offlineJsonObj = new JsonObject
             {
+                ["schemaVersion"] = "3.0",
                 ["eventName"] = eventName,
                 ["activeFaction"] = fac.Name,
                 ["factions"] = new JsonArray
@@ -534,10 +815,10 @@ namespace FieldTakHub.Builder.Services
             var dlg = new Window
             {
                 Title = BuilderI18n.T(
-                    "📱 Kod QR Aktywnej Strony: " + fac.Name + " (" + eventName + ")",
-                    "📱 Active Faction QR Code: " + fac.Name + " (" + eventName + ")"),
-                Width = 500,
-                Height = 620,
+                    "📱 Dystrybucja QR Aktywnej Strony: " + fac.Name + " (" + eventName + ")",
+                    "📱 Active Faction QR Distribution: " + fac.Name + " (" + eventName + ")"),
+                Width = 540,
+                Height = 640,
                 WindowStartupLocation = WindowStartupLocation.CenterOwner,
                 Owner = owner,
                 Background = TacticalConfigPanel.BrushCardBg,
@@ -570,7 +851,7 @@ namespace FieldTakHub.Builder.Services
             string otsInfo = string.IsNullOrEmpty(fac.OtsHost) ? "Off-Grid Mesh" : fac.OtsHost;
             hdrStack.Children.Add(new TextBlock
             {
-                Text = "LoRa: " + fac.ChannelName + " (" + fac.LoraRegion + ")  |  OTS: " + otsInfo + "  |  .FTAK: " + kbSize + " KB",
+                Text = "Folder: out\\" + TacticalConfigPanel.SanitizeFileName(fac.Name).ToUpperInvariant() + "\\  |  LoRa: " + fac.ChannelName + "  |  OTS: " + otsInfo + "  |  .FTAK: " + kbSize + " KB",
                 Foreground = Brushes.White,
                 FontSize = 10.5,
                 HorizontalAlignment = HorizontalAlignment.Center,
@@ -579,30 +860,42 @@ namespace FieldTakHub.Builder.Services
             hdrBorder.Child = hdrStack;
             root.Children.Add(hdrBorder);
 
-            var modeGrid = new UniformGrid { Columns = 2, Margin = new Thickness(0, 0, 0, 10) };
+            var modeGrid = new UniformGrid { Columns = 3, Margin = new Thickness(0, 0, 0, 10) };
             var btnModeWifi = new Button
             {
-                Content = BuilderI18n.T("📡 Tryb 1: Pobierz pełny .FTAK po Wi-Fi", "📡 Mode 1: Full .FTAK via Wi-Fi"),
+                Content = BuilderI18n.T("📡 1. Pełny .FTAK (Wi-Fi)", "📡 1. Full .FTAK (Wi-Fi)"),
                 Height = 30,
-                Margin = new Thickness(0, 0, 4, 0),
+                Margin = new Thickness(0, 0, 3, 0),
                 Background = TacticalConfigPanel.BrushButtonAccent,
                 Foreground = TacticalConfigPanel.BrushDarkFg,
                 FontWeight = FontWeights.Bold,
-                FontSize = 10.5,
+                FontSize = 10,
+                Cursor = Cursors.Hand
+            };
+            var btnModeOpordLan = new Button
+            {
+                Content = BuilderI18n.T("📋 2. Sam OPORD (LAN)", "📋 2. OPORD Only (LAN)"),
+                Height = 30,
+                Margin = new Thickness(3, 0, 3, 0),
+                Background = TacticalConfigPanel.BrushInputBg,
+                Foreground = Brushes.White,
+                FontWeight = FontWeights.Bold,
+                FontSize = 10,
                 Cursor = Cursors.Hand
             };
             var btnModeOffline = new Button
             {
-                Content = BuilderI18n.T("📴 Tryb 2: Kod QR Offline (Sam JSON)", "📴 Mode 2: Offline Config QR (JSON)"),
+                Content = BuilderI18n.T("📴 3. QR Offline (JSON)", "📴 3. Offline QR (JSON)"),
                 Height = 30,
-                Margin = new Thickness(4, 0, 0, 0),
+                Margin = new Thickness(3, 0, 0, 0),
                 Background = TacticalConfigPanel.BrushInputBg,
                 Foreground = Brushes.White,
                 FontWeight = FontWeights.Bold,
-                FontSize = 10.5,
+                FontSize = 10,
                 Cursor = Cursors.Hand
             };
             modeGrid.Children.Add(btnModeWifi);
+            modeGrid.Children.Add(btnModeOpordLan);
             modeGrid.Children.Add(btnModeOffline);
             root.Children.Add(modeGrid);
 
@@ -639,21 +932,26 @@ namespace FieldTakHub.Builder.Services
             };
             root.Children.Add(payloadBox);
 
-            void LoadQrPayload(string dataStr, bool isWifiMode)
+            void LoadQrPayload(string dataStr, int modeIdx)
             {
-                payloadBox.Text = isWifiMode
+                payloadBox.Text = modeIdx == 0
                     ? wifiDownloadUrl
-                    : ("[Offline JSON: " + fac.Name + " | LoRa: " + fac.ChannelName + " | Voice: " + fac.VoiceChannels.Count + "]");
-                btnModeWifi.Background = isWifiMode ? TacticalConfigPanel.BrushButtonAccent : TacticalConfigPanel.BrushInputBg;
-                btnModeWifi.Foreground = isWifiMode ? TacticalConfigPanel.BrushDarkFg : Brushes.White;
-                btnModeOffline.Background = !isWifiMode ? TacticalConfigPanel.BrushButtonAccent : TacticalConfigPanel.BrushInputBg;
-                btnModeOffline.Foreground = !isWifiMode ? TacticalConfigPanel.BrushDarkFg : Brushes.White;
+                    : (modeIdx == 1 ? opordLanUrl : ("[Offline JSON: " + fac.Name + " | LoRa: " + fac.ChannelName + " | Voice: " + fac.VoiceChannels.Count + "]"));
+
+                btnModeWifi.Background = modeIdx == 0 ? TacticalConfigPanel.BrushButtonAccent : TacticalConfigPanel.BrushInputBg;
+                btnModeWifi.Foreground = modeIdx == 0 ? TacticalConfigPanel.BrushDarkFg : Brushes.White;
+
+                btnModeOpordLan.Background = modeIdx == 1 ? TacticalConfigPanel.BrushButtonAccent : TacticalConfigPanel.BrushInputBg;
+                btnModeOpordLan.Foreground = modeIdx == 1 ? TacticalConfigPanel.BrushDarkFg : Brushes.White;
+
+                btnModeOffline.Background = modeIdx == 2 ? TacticalConfigPanel.BrushButtonAccent : TacticalConfigPanel.BrushInputBg;
+                btnModeOffline.Foreground = modeIdx == 2 ? TacticalConfigPanel.BrushDarkFg : Brushes.White;
 
                 _ = Task.Run(async () =>
                 {
                     try
                     {
-                        string cacheKey = "QR_CLEAN_" + dataStr;
+                        string cacheKey = "QR_V3_" + dataStr;
                         byte[] bytes = GeoportalLidarEngine.TryReadDiskCache(cacheKey);
                         if (bytes == null)
                         {
@@ -681,14 +979,15 @@ namespace FieldTakHub.Builder.Services
                 });
             }
 
-            btnModeWifi.Click += (_, __) => LoadQrPayload(wifiDownloadUrl, true);
-            btnModeOffline.Click += (_, __) => LoadQrPayload(offlineJsonPayload, false);
-            LoadQrPayload(wifiDownloadUrl, true);
+            btnModeWifi.Click += (_, __) => LoadQrPayload(wifiDownloadUrl, 0);
+            btnModeOpordLan.Click += (_, __) => LoadQrPayload(opordLanUrl, 1);
+            btnModeOffline.Click += (_, __) => LoadQrPayload(offlineJsonPayload, 2);
+            LoadQrPayload(wifiDownloadUrl, 0);
 
             var bottomBtns = new UniformGrid { Columns = 2 };
             var btnOpenDir = new Button
             {
-                Content = BuilderI18n.T("📂 Otwórz folder z plikiem .FTAK", "📂 Open .FTAK Output Folder"),
+                Content = BuilderI18n.T("📂 Otwórz folder out\\" + TacticalConfigPanel.SanitizeFileName(fac.Name).ToUpperInvariant(), "📂 Open out\\" + TacticalConfigPanel.SanitizeFileName(fac.Name).ToUpperInvariant() + " Folder"),
                 Height = 32,
                 Margin = new Thickness(0, 0, 5, 0),
                 Background = TacticalConfigPanel.BrushItemBg,
@@ -745,7 +1044,7 @@ namespace FieldTakHub.Builder.Services
                         {
                             Name = item["Name"]?.ToString() ?? item["name"]?.ToString() ?? "BLUFOR",
                             ColorHex = item["ColorHex"]?.ToString() ?? item["colorHex"]?.ToString() ?? "#2684FF",
-                            ChannelName = item["ChannelName"]?.ToString() ?? item["channelName"]?.ToString() ?? "TAK",
+                            ChannelName = item["ChannelName"]?.ToString() ?? item["channelName"]?.ToString() ?? "BLUFOR-MESH",
                             Psk = item["Psk"]?.ToString() ?? item["psk"]?.ToString() ?? "",
                             ChannelUrl = item["ChannelUrl"]?.ToString() ?? item["channelUrl"]?.ToString() ?? "",
                             LoraRegion = item["LoraRegion"]?.ToString() ?? item["loraRegion"]?.ToString() ?? "EU_868",
@@ -809,6 +1108,7 @@ namespace FieldTakHub.Builder.Services
                 {
                     var jsonFiles = Directory.GetFiles(appData, "*.json", SearchOption.TopDirectoryOnly)
                         .Concat(Directory.GetFiles(appData, "*.fthproj", SearchOption.TopDirectoryOnly))
+                        .Where(f => !Path.GetFileName(f).StartsWith("opord_", StringComparison.OrdinalIgnoreCase))
                         .OrderByDescending(File.GetLastWriteTimeUtc)
                         .ToList();
 
@@ -832,6 +1132,9 @@ namespace FieldTakHub.Builder.Services
         }
     }
 
+    // =========================================================================
+    // 5. POWŁOKA GŁÓWNA BUILDERA v3.0 (POŁĄCZENIE Z SIDEBAREM I OPORD v3.0)
+    // =========================================================================
     internal static class BuilderUiSimplifier
     {
         private static readonly HashSet<int> AttachedWindows = new HashSet<int>();
@@ -889,6 +1192,8 @@ namespace FieldTakHub.Builder.Services
             _isApplyingSimplification = true;
             try
             {
+                BuilderCoreSidebarAndProjectEngine.Attach(win);
+
                 var allElements = GetAllVisualDescendants(win).ToList();
 
                 FrameworkElement factionGeneratorRoot = FindFactionGeneratorRoot(allElements);
@@ -946,90 +1251,6 @@ namespace FieldTakHub.Builder.Services
                 Panel.SetZIndex(opordOverlay, 95);
                 rootGrid.Children.Add(opordOverlay);
             }
-
-            Button mapTabBtn = null;
-            Button builderTabBtn = null;
-
-            foreach (var btn in allElements.OfType<Button>())
-            {
-                string txt = string.Join(" ", GetElementTexts(btn)).Trim();
-                if (btn.Content is string s) txt = (txt + " " + s).Trim();
-
-                if (txt.Contains("Generator Map Taktycznych 1:1", StringComparison.OrdinalIgnoreCase) ||
-                    txt.Contains("1:1 Tactical Map", StringComparison.OrdinalIgnoreCase))
-                {
-                    mapTabBtn = btn;
-                }
-                else if (txt.Contains("Konfigurator Paczek", StringComparison.OrdinalIgnoreCase) ||
-                         txt.Contains("Faction & Package Builder", StringComparison.OrdinalIgnoreCase))
-                {
-                    builderTabBtn = btn;
-                }
-            }
-
-            if (mapTabBtn != null && VisualTreeHelper.GetParent(mapTabBtn) is Panel topNavPanel)
-            {
-                if (_topTabOpordBtn == null || !topNavPanel.Children.Contains(_topTabOpordBtn))
-                {
-                    _topTabOpordBtn = new Button
-                    {
-                        Content = BuilderI18n.T("📋 Generator Rozkazu (OPORD)", "📋 NATO OPORD Builder"),
-                        Height = mapTabBtn.Height > 0 ? mapTabBtn.Height : 32,
-                        Padding = new Thickness(12, 4, 12, 4),
-                        Margin = new Thickness(4, 0, 4, 0),
-                        Background = TacticalConfigPanel.BrushItemBg,
-                        Foreground = Brushes.White,
-                        BorderBrush = TacticalConfigPanel.BrushAccent,
-                        BorderThickness = new Thickness(1.2),
-                        FontWeight = FontWeights.Bold,
-                        FontSize = 11.5,
-                        Cursor = Cursors.Hand,
-                        Tag = "INJECTED_OPORD_TAB_BTN"
-                    };
-
-                    _topTabOpordBtn.Click += (_, __) => ShowOpordView(win, true);
-
-                    int mapIdx = topNavPanel.Children.IndexOf(mapTabBtn);
-                    if (mapIdx >= 0)
-                        topNavPanel.Children.Insert(mapIdx + 1, _topTabOpordBtn);
-                    else
-                        topNavPanel.Children.Add(_topTabOpordBtn);
-                }
-
-                if (_topLangToggleBtn == null || !topNavPanel.Children.Contains(_topLangToggleBtn))
-                {
-                    _topLangToggleBtn = new Button
-                    {
-                        Content = "🌐 " + BuilderI18n.CurrentLang,
-                        ToolTip = "Przełącz język interfejsu: Polski (PL) / Angielski (EN)",
-                        Height = mapTabBtn.Height > 0 ? mapTabBtn.Height : 32,
-                        Padding = new Thickness(10, 4, 10, 4),
-                        Margin = new Thickness(6, 0, 4, 0),
-                        Background = new SolidColorBrush(Color.FromRgb(18, 44, 54)),
-                        Foreground = TacticalConfigPanel.BrushAccent,
-                        BorderBrush = TacticalConfigPanel.BrushAccent,
-                        BorderThickness = new Thickness(1.2),
-                        FontWeight = FontWeights.Bold,
-                        FontSize = 11.5,
-                        Cursor = Cursors.Hand,
-                        Tag = "INJECTED_LANG_BTN"
-                    };
-
-                    _topLangToggleBtn.Click += (_, __) => BuilderI18n.ToggleLanguage(win);
-                    topNavPanel.Children.Add(_topLangToggleBtn);
-                }
-
-                if (builderTabBtn != null && builderTabBtn.Tag?.ToString() != "OPORD_HOOKED")
-                {
-                    builderTabBtn.Tag = "OPORD_HOOKED";
-                    builderTabBtn.Click += (_, __) => ShowOpordView(win, false);
-                }
-                if (mapTabBtn.Tag?.ToString() != "OPORD_HOOKED")
-                {
-                    mapTabBtn.Tag = "OPORD_HOOKED";
-                    mapTabBtn.Click += (_, __) => ShowOpordView(win, false);
-                }
-            }
         }
 
         public static void ShowOpordView(Window win, bool showOpord)
@@ -1039,26 +1260,17 @@ namespace FieldTakHub.Builder.Services
             {
                 foreach (var fe in GetAllVisualDescendants(win).OfType<FrameworkElement>())
                 {
-                    if (string.Equals(fe.Tag?.ToString(), "INJECTED_MAP_OVERLAY", StringComparison.Ordinal))
+                    if (string.Equals(fe.Tag?.ToString(), "INJECTED_MAP_OVERLAY", StringComparison.Ordinal) ||
+                        string.Equals(fe.Tag?.ToString(), "INJECTED_USB_OVERLAY", StringComparison.Ordinal))
                     {
                         fe.Visibility = Visibility.Collapsed;
                     }
                 }
                 opordOverlay.Visibility = Visibility.Visible;
-                if (_topTabOpordBtn != null)
-                {
-                    _topTabOpordBtn.Background = TacticalConfigPanel.BrushButtonAccent;
-                    _topTabOpordBtn.Foreground = TacticalConfigPanel.BrushDarkFg;
-                }
             }
             else
             {
                 opordOverlay.Visibility = Visibility.Collapsed;
-                if (_topTabOpordBtn != null)
-                {
-                    _topTabOpordBtn.Background = TacticalConfigPanel.BrushItemBg;
-                    _topTabOpordBtn.Foreground = Brushes.White;
-                }
             }
         }
 
@@ -1118,14 +1330,15 @@ namespace FieldTakHub.Builder.Services
                 if (curr is FrameworkElement fe)
                 {
                     string tag = fe.Tag?.ToString() ?? "";
-                    if (tag == "INJECTED_MAP_OVERLAY" || tag == "INJECTED_OPORD_OVERLAY") break;
+                    if (tag == "INJECTED_MAP_OVERLAY" || tag == "INJECTED_OPORD_OVERLAY" || tag == "INJECTED_USB_OVERLAY") break;
 
                     if (fe.Visibility != Visibility.Visible)
                     {
                         DependencyObject parent = VisualTreeHelper.GetParent(fe);
                         bool isMasterTabSwitch = parent is Grid g && g.Children.Cast<UIElement>().Any(c =>
                             (c as FrameworkElement)?.Tag?.ToString() == "INJECTED_MAP_OVERLAY" ||
-                            (c as FrameworkElement)?.Tag?.ToString() == "INJECTED_OPORD_OVERLAY");
+                            (c as FrameworkElement)?.Tag?.ToString() == "INJECTED_OPORD_OVERLAY" ||
+                            (c as FrameworkElement)?.Tag?.ToString() == "INJECTED_USB_OVERLAY");
                         if (!isMasterTabSwitch)
                         {
                             fe.Visibility = Visibility.Visible;
@@ -1206,6 +1419,7 @@ namespace FieldTakHub.Builder.Services
                     combined.Contains("Plakat", StringComparison.OrdinalIgnoreCase) ||
                     combined.Contains("Poster", StringComparison.OrdinalIgnoreCase) ||
                     combined.Contains("OPORD", StringComparison.OrdinalIgnoreCase) ||
+                    combined.Contains("Source", StringComparison.OrdinalIgnoreCase) ||
                     combined.Contains("Zapisz", StringComparison.OrdinalIgnoreCase) ||
                     combined.Contains("Save", StringComparison.OrdinalIgnoreCase) ||
                     combined.Contains("Wczytaj", StringComparison.OrdinalIgnoreCase) ||
@@ -1289,11 +1503,14 @@ namespace FieldTakHub.Builder.Services
             fe.IsEnabled = false;
         }
 
+        // =========================================================================
+        // 6. ZINTEGROWANY PASEK AKTYWNEJ STRONY (.FTAK v3.0 + SOURCE/APK + OPORD)
+        // =========================================================================
         private static TextBlock _bannerTitleBlock;
         private static TextBlock _bannerDescBlock;
         private static Button _btnBuildSingleFaction;
         private static Button _btnShowActiveQr;
-        private static Button _btnOpenOpordQuick;
+        private static Button _btnOpenSourceDir;
         private static Button _btnBuildAllFactions;
 
         private static void InjectOrUpdateActiveFactionAuditBar(Window win, FrameworkElement factionGeneratorRoot)
@@ -1343,7 +1560,7 @@ namespace FieldTakHub.Builder.Services
             stack.Children.Add(_bannerDescBlock);
 
             var controlsRow = new Grid();
-            controlsRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(150) });
+            controlsRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(145) });
             controlsRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1.15, GridUnitType.Star) });
             controlsRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1.15, GridUnitType.Star) });
             controlsRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1.05, GridUnitType.Star) });
@@ -1413,21 +1630,26 @@ namespace FieldTakHub.Builder.Services
             Grid.SetColumn(_btnShowActiveQr, 2);
             controlsRow.Children.Add(_btnShowActiveQr);
 
-            _btnOpenOpordQuick = new Button
+            _btnOpenSourceDir = new Button
             {
                 Height = 32,
                 Margin = new Thickness(0, 0, 6, 0),
-                Background = new SolidColorBrush(Color.FromRgb(28, 48, 36)),
-                Foreground = new SolidColorBrush(Color.FromRgb(46, 204, 113)),
-                BorderBrush = new SolidColorBrush(Color.FromRgb(46, 204, 113)),
+                Background = new SolidColorBrush(Color.FromRgb(38, 34, 16)),
+                Foreground = new SolidColorBrush(Color.FromRgb(250, 208, 44)),
+                BorderBrush = new SolidColorBrush(Color.FromRgb(250, 208, 44)),
                 BorderThickness = new Thickness(1.2),
                 FontWeight = FontWeights.Bold,
                 FontSize = 10.5,
                 Cursor = Cursors.Hand
             };
-            _btnOpenOpordQuick.Click += (_, __) => ShowOpordView(win, true);
-            Grid.SetColumn(_btnOpenOpordQuick, 3);
-            controlsRow.Children.Add(_btnOpenOpordQuick);
+            _btnOpenSourceDir.Click += (_, __) =>
+            {
+                BuilderCoreSidebarAndProjectEngine.EnsureUnifiedSourceDirectoryStructure(win);
+                string src = TacticalConfigPanel.GetPrimarySourceDirectory(win);
+                TacticalConfigPanel.TryOpenFolderInExplorer(src);
+            };
+            Grid.SetColumn(_btnOpenSourceDir, 3);
+            controlsRow.Children.Add(_btnOpenSourceDir);
 
             _btnBuildAllFactions = new Button
             {
@@ -1472,28 +1694,28 @@ namespace FieldTakHub.Builder.Services
             if (_bannerTitleBlock != null)
             {
                 _bannerTitleBlock.Text = BuilderI18n.T(
-                    "🎯 CENTRUM WDROŻENIA AKTYWNEJ STRONY (.FTAK 1:1 + ROZKAZ OPORD + KOD QR NA EKRANIE PC)",
-                    "🎯 ACTIVE FACTION DEPLOYMENT HUB (.FTAK 1:1 + NATO OPORD + PC SCREEN QR CODE)");
+                    "🎯 GENERATOR PACZEK .FTAK v3.0 (JEDNA STRONA = JEDEN FOLDER out\\<STRONA>\\ + WSPÓLNY SOURCE/ APK & MAPY)",
+                    "🎯 .FTAK PACKAGE BUILDER v3.0 (ONE FACTION = ONE OUTPUT FOLDER out\\<FACTION>\\ + SHARED SOURCE/ APK & MAPS)");
             }
             if (_bannerDescBlock != null)
             {
                 _bannerDescBlock.Text = BuilderI18n.T(
-                    "Wybierz aktywną stronę konfliktu poniżej, aby zbudować dla niej w 100% odizolowaną paczkę .FTAK (Fog of War: tylko klucze PSK, serwer OTS, tabela radiowa, mapy i rozkaz OPORD tej strony) lub wyświetlić Kod QR do zeskanowania telefonem:",
-                    "Select the active faction below to build a 100% isolated .FTAK bundle (Fog of War: only PSK keys, OTS server, voice channels, maps, and OPORD for that faction) or display the QR Code for mobile scanning:");
+                    "Każda strona konfliktu zapisywana jest do własnego, czystego katalogu out\\<STRONA>\\. Wspólne pliki .apk (ATAK, Meshtastic, pluginy), DataPackage i mapy .kmz z folderu source/ są automatycznie weryfikowane pod kątem kompatybilności wersji z OpenTAKServer:",
+                    "Each faction outputs to its own clean directory out\\<FACTION>\\. Shared .apk files (ATAK, Meshtastic, plugins), DataPackages, and .kmz maps from source/ are automatically indexed for OpenTAKServer version compatibility:");
             }
             if (_btnBuildSingleFaction != null)
-                _btnBuildSingleFaction.Content = BuilderI18n.T("📦 Buduj .FTAK aktywnej strony", "📦 Build Active Faction .FTAK");
+                _btnBuildSingleFaction.Content = BuilderI18n.T("📦 Buduj out\\<STRONA>\\.ftak", "📦 Build out\\<FACTION>\\.ftak");
             if (_btnShowActiveQr != null)
-                _btnShowActiveQr.Content = BuilderI18n.T("📱 Pokaż Kod QR aktywnej strony", "📱 Show Active Faction QR");
-            if (_btnOpenOpordQuick != null)
-                _btnOpenOpordQuick.Content = BuilderI18n.T("📋 Edytuj Rozkaz OPORD + METOC", "📋 Edit OPORD + METOC Weather");
+                _btnShowActiveQr.Content = BuilderI18n.T("📱 Kod QR (.FTAK / OPORD LAN)", "📱 QR Code (.FTAK / OPORD LAN)");
+            if (_btnOpenSourceDir != null)
+                _btnOpenSourceDir.Content = BuilderI18n.T("📂 Wspólny folder source/ (APK/KMZ)", "📂 Shared source/ Folder (APK/KMZ)");
             if (_btnBuildAllFactions != null)
-                _btnBuildAllFactions.Content = BuilderI18n.T("⚡ Buduj .FTAK WSZYSTKICH stron", "⚡ Build ALL Factions .FTAK");
+                _btnBuildAllFactions.Content = BuilderI18n.T("⚡ Buduj WSZYSTKIE strony", "⚡ Build ALL Factions");
             if (_auditStatusLabel != null && string.IsNullOrWhiteSpace(_auditStatusLabel.Text))
             {
                 _auditStatusLabel.Text = BuilderI18n.T(
-                    "✓ Izolacja stron (Fog of War) aktywna: każda paczka .ftak zawiera wyłącznie zasoby, mapy i rozkaz OPORD wybranej strony.",
-                    "✓ Faction isolation (Fog of War) active: each .ftak bundle contains only assets, maps, and OPORD for the selected faction.");
+                    "✓ Tryb czystego zapisu aktywny: jedna strona = jeden folder wyjściowy out\\<STRONA>\\ (brak zbędnych folderów tymczasowych).",
+                    "✓ Clean output mode active: one faction = one output folder out\\<FACTION>\\ (no redundant temporary folders).");
             }
         }
 

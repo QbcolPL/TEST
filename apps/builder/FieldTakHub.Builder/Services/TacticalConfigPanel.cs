@@ -62,7 +62,7 @@ namespace FieldTakHub.Builder.Services
         public bool EnableGeoChat { get; set; } = true;
         public bool EnableOtsRelay { get; set; } = true;
         public bool EnableFileTransfer { get; set; } = false;
-        public string ChannelName { get; set; } = "GGZS-TAK";
+        public string ChannelName { get; set; } = "BLUFOR-MESH";
         public string ChannelUrl { get; set; } = "";
         public string Psk { get; set; } = TacticalConfigModel.GenerateRandomBase64Psk();
 
@@ -74,7 +74,7 @@ namespace FieldTakHub.Builder.Services
         public string GatewayTopic { get; set; } = "opentakserver";
         public bool SecretsExternal { get; set; } = true;
         public string EnrollmentUri { get; set; } = "";
-        public string OtsHost { get; set; } = "ggzstak.duckdns.org";
+        public string OtsHost { get; set; } = "";
 
         public string EmergencyPhone { get; set; } = "+48 600 000 000";
         public List<VoiceChannelModel> VoiceChannels { get; set; } = new List<VoiceChannelModel>();
@@ -108,7 +108,7 @@ namespace FieldTakHub.Builder.Services
         public int PackageValidityHours { get; set; } = 0;
         public int QrValidityHours { get; set; } = 0;
         public string ActiveFaction { get; set; } = "BLUFOR";
-        public string DefaultChannelName { get; set; } = "GGZS-TAK";
+        public string DefaultChannelName { get; set; } = "BLUFOR-MESH";
         public string DefaultPsk { get; set; } = GenerateRandomBase64Psk();
         public string DefaultFactionColorHex { get; set; } = "#2684FF";
 
@@ -293,7 +293,7 @@ namespace FieldTakHub.Builder.Services
                 {
                     Name = "BLUFOR",
                     ColorHex = "#2684FF",
-                    ChannelName = "GGZS-TAK",
+                    ChannelName = "BLUFOR-MESH",
                     VoiceChannels = CreateDefaultChannelsForSide("BLUFOR", 0)
                 });
                 _factions.Add(new FactionProfileModel
@@ -343,7 +343,7 @@ namespace FieldTakHub.Builder.Services
                     ["EnableGeoChat"] = f.EnableGeoChat,
                     ["EnableOtsRelay"] = f.EnableOtsRelay,
                     ["EnableFileTransfer"] = f.EnableFileTransfer,
-                    ["ChannelName"] = f.ChannelName ?? "GGZS-TAK",
+                    ["ChannelName"] = f.ChannelName ?? "BLUFOR-MESH",
                     ["ChannelUrl"] = f.ChannelUrl ?? "",
                     ["Psk"] = f.Psk ?? "",
                     ["GatewayEnabled"] = f.GatewayEnabled,
@@ -354,7 +354,7 @@ namespace FieldTakHub.Builder.Services
                     ["GatewayTopic"] = f.GatewayTopic ?? "opentakserver",
                     ["SecretsExternal"] = f.SecretsExternal,
                     ["EnrollmentUri"] = f.EnrollmentUri ?? "",
-                    ["OtsHost"] = f.OtsHost ?? "ggzstak.duckdns.org",
+                    ["OtsHost"] = f.OtsHost ?? "",
                     ["EmergencyPhone"] = f.EmergencyPhone ?? "+48 600 000 000",
                     ["PosterShowQr"] = f.PosterShowQr,
                     ["PosterShowRadioTable"] = f.PosterShowRadioTable,
@@ -406,7 +406,7 @@ namespace FieldTakHub.Builder.Services
                     EnableGeoChat = GetBool(item, "EnableGeoChat", "enableGeoChat", true),
                     EnableOtsRelay = GetBool(item, "EnableOtsRelay", "enableOtsRelay", true),
                     EnableFileTransfer = GetBool(item, "EnableFileTransfer", "enableFileTransfer", false),
-                    ChannelName = GetStr(item, "ChannelName", "channelName", "GGZS-TAK"),
+                    ChannelName = GetStr(item, "ChannelName", "channelName", "BLUFOR-MESH"),
                     ChannelUrl = GetStr(item, "ChannelUrl", "channelUrl", ""),
                     Psk = GetStr(item, "Psk", "psk", TacticalConfigModel.GenerateRandomBase64Psk()),
                     GatewayEnabled = GetBool(item, "GatewayEnabled", "gatewayEnabled", false),
@@ -417,7 +417,7 @@ namespace FieldTakHub.Builder.Services
                     GatewayTopic = GetStr(item, "GatewayTopic", "gatewayTopic", "opentakserver"),
                     SecretsExternal = GetBool(item, "SecretsExternal", "secretsExternal", true),
                     EnrollmentUri = GetStr(item, "EnrollmentUri", "enrollmentUri", ""),
-                    OtsHost = GetStr(item, "OtsHost", "otsHost", "ggzstak.duckdns.org"),
+                    OtsHost = GetStr(item, "OtsHost", "otsHost", ""),
                     EmergencyPhone = GetStr(item, "EmergencyPhone", "emergencyPhone", "+48 600 000 000"),
                     PosterShowQr = GetBool(item, "PosterShowQr", "posterShowQr", true),
                     PosterShowRadioTable = GetBool(item, "PosterShowRadioTable", "posterShowRadioTable", true),
@@ -1711,7 +1711,7 @@ namespace FieldTakHub.Builder.Services
             EnsureDefaultFactions();
             var active = _factions[0];
             Current.ActiveFaction = string.IsNullOrWhiteSpace(active.Name) ? "BLUFOR" : active.Name.Trim();
-            Current.DefaultChannelName = string.IsNullOrWhiteSpace(active.ChannelName) ? "GGZS-TAK" : active.ChannelName.Trim();
+            Current.DefaultChannelName = string.IsNullOrWhiteSpace(active.ChannelName) ? "BLUFOR-MESH" : active.ChannelName.Trim();
             Current.DefaultPsk = string.IsNullOrWhiteSpace(active.Psk) ? Current.DefaultPsk : active.Psk.Trim();
             Current.DefaultFactionColorHex = string.IsNullOrWhiteSpace(active.ColorHex) ? "#2684FF" : active.ColorHex;
         }

@@ -1,4 +1,4 @@
-using System.IO;
+﻿using System.IO;
 using System.Net;
 using FieldTakHub.Builder.Models;
 
@@ -9,7 +9,7 @@ public static class ServerValidator
     public static void Validate(ServerProfile server)
     {
         var host = server.Host.Trim();
-        if (string.IsNullOrWhiteSpace(host)) throw new InvalidDataException("FTH-SRV-001: Enter a TAK server host/domain, e.g. ggzstak.duckdns.org.");
+        if (string.IsNullOrWhiteSpace(host)) throw new InvalidDataException("FTH-SRV-001: Enter a TAK server host/domain, e.g. .");
         if (host.Contains("://", StringComparison.Ordinal) || host.Contains('/') || host.Contains('\\'))
             throw new InvalidDataException("FTH-SRV-002: Host must contain only a DNS name or IP address, without http://, https:// or a path.");
         if (host.Any(char.IsWhiteSpace)) throw new InvalidDataException("FTH-SRV-003: Host cannot contain spaces.");

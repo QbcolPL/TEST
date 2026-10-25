@@ -1,4 +1,4 @@
-using System.IO;
+﻿using System.IO;
 using System.Text;
 using FieldTakHub.Builder.Models;
 
@@ -19,7 +19,7 @@ public sealed class ServerTextConfigService
         sb.AppendLine();
         sb.AppendLine($"SERVER_TYPE={Clean(server.Type, "OpenTAK")}");
         sb.AppendLine($"SERVER_NAME={Clean(server.Name, "TAK Server")}");
-        sb.AppendLine($"HOST={Clean(server.Host, "ggzstak.duckdns.org")}");
+        sb.AppendLine($"HOST={Clean(server.Host, "")}");
         sb.AppendLine($"COT_PORT={server.CotPort}");
         sb.AppendLine($"API_PORT={server.ApiPort}");
         sb.AppendLine($"WEB_PORT={server.WebPort}");

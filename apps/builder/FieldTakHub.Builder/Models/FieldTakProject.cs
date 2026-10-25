@@ -1,4 +1,4 @@
-namespace FieldTakHub.Builder.Models;
+﻿namespace FieldTakHub.Builder.Models;
 
 public sealed class FieldTakProject
 {
@@ -31,7 +31,7 @@ public sealed class ServerProfile
 {
     public string Type { get; set; } = "OpenTAK";
     public string Name { get; set; } = "GGZS OpenTAK";
-    public string Host { get; set; } = "ggzstak.duckdns.org";
+    public string Host { get; set; } = "";
     public int CotPort { get; set; } = 8089;
     public int ApiPort { get; set; } = 8446;
     public int WebPort { get; set; } = 8443;
@@ -43,7 +43,7 @@ public sealed class MeshtasticProfile
     public string Mode { get; set; } = "hybrid";
     public string DeviceRole { get; set; } = "auto";
     public string DeviceModel { get; set; } = "generic_meshtastic";
-    public string ChannelName { get; set; } = "GGZS-TAK";
+    public string ChannelName { get; set; } = "BLUFOR-MESH";
     public string Region { get; set; } = "EU_868";
     public string ModemPreset { get; set; } = "SHORT_FAST";
     public int HopLimit { get; set; } = 3;

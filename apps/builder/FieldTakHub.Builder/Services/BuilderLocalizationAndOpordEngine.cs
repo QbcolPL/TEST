@@ -7,18 +7,24 @@ using System.IO;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
+using System.Net.Sockets;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Media.Imaging;
 
 namespace FieldTakHub.Builder.Services
 {
+    // =========================================================================
+    // 1. DWUJĘZYCZNY SILNIK LOKALIZACJI INTERFEJSU (PL <-> ENG)
+    // =========================================================================
     internal static class BuilderI18n
     {
         public static string CurrentLang { get; private set; } = LoadSavedLanguage();
@@ -27,13 +33,12 @@ namespace FieldTakHub.Builder.Services
         private static readonly Dictionary<string, string> PlToEn = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
             ["📦 Konfigurator Paczek (.ftak)"] = "📦 Faction & Package Builder (.ftak)",
-            ["📋 Generator Rozkazu (OPORD)"] = "📋 NATO OPORD Builder",
+            ["📋 Generator Rozkazu (OPORD)"] = "📋 NATO / MilSim OPORD Builder",
             ["🗺️ Generator Map Taktycznych 1:1"] = "🗺️ 1:1 Tactical Map Studio",
             ["🔌 Masowy Programator USB LoRa"] = "🔌 Bulk USB LoRa Programmer",
             ["💾 Zapisz projekt roboczy (.fthproj)"] = "💾 Save Workspace (.fthproj)",
             ["📂 Wczytaj projekt (.fthproj)"] = "📂 Load Workspace (.fthproj)",
             ["☕ Wesprzyj twórcę"] = "☕ Support Creator",
-
             ["➕ Dodaj stronę"] = "➕ Add Faction",
             ["🗑 Usuń stronę"] = "🗑 Remove Faction",
             ["🖨 Plakat A4 Safezone (HTML)"] = "🖨 A4 Safezone Poster (HTML)",
@@ -45,7 +50,6 @@ namespace FieldTakHub.Builder.Services
             ["📂 Otwórz folder z plikiem .FTAK"] = "📂 Open .FTAK Output Folder",
             ["Zamknij"] = "Close",
             ["Anuluj"] = "Cancel",
-
             ["Nazwa strony konfliktu"] = "Faction / Side Name",
             ["Kolor taktyczny (HEX)"] = "Tactical Color (HEX)",
             ["Nazwa kanału Meshtastic"] = "Meshtastic Channel Name",
@@ -139,6 +143,9 @@ namespace FieldTakHub.Builder.Services
         }
     }
 
+    // =========================================================================
+    // 2. SERWIS POGODOWO-ASTRONOMICZNY METOC + EKSTRAKCJA OBSZARU AO Z MAPY 1:1
+    // =========================================================================
     internal sealed class MetocReportData
     {
         public string DateIso { get; set; } = "";
@@ -161,8 +168,96 @@ namespace FieldTakHub.Builder.Services
         private static HttpClient CreateHttpClient()
         {
             var c = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
-            c.DefaultRequestHeaders.TryAddWithoutValidation("User-Agent", "FieldTakHub-OPORD-METOC/2.5");
+            c.DefaultRequestHeaders.TryAddWithoutValidation("User-Agent", "FieldTakHub-OPORD-METOC/3.0");
             return c;
+        }
+
+        /// <summary>
+        /// Wykrywa środek obszaru działań (AO) lub punktów taktycznych zaznaczonych w Generatorze Map 1:1
+        /// (z plików KML/GPX wyeksportowanych w katalogu source/ lub z kontrolek widoku mapy).
+        /// </summary>
+        public static (bool Found, double Lat, double Lon, string SourceDescription, string ExtractedPoiList) TryExtractAoCenterFromMapStudio(Window win)
+        {
+            var lats = new List<double>();
+            var lons = new List<double>();
+            var poiNames = new List<string>();
+            string srcDesc = "Obszar AO z Generatora Map 1:1";
+
+            try
+            {
+                string sourceDir = TacticalConfigPanel.GetPrimarySourceDirectory(win);
+                if (Directory.Exists(sourceDir))
+                {
+                    var mapFiles = Directory.GetFiles(sourceDir, "*.*", SearchOption.AllDirectories)
+                        .Where(f => f.EndsWith(".gpx", StringComparison.OrdinalIgnoreCase) ||
+                                    f.EndsWith(".kml", StringComparison.OrdinalIgnoreCase) ||
+                                    f.EndsWith("map_state.json", StringComparison.OrdinalIgnoreCase))
+                        .OrderByDescending(File.GetLastWriteTimeUtc)
+                        .ToList();
+
+                    foreach (string mf in mapFiles)
+                    {
+                        string raw = File.ReadAllText(mf, Encoding.UTF8);
+
+                        // 1. Wyciągnij punkty GPX <wpt lat="..." lon="..."> oraz ich nazwy <name>...</name>
+                        var wptMatches = Regex.Matches(raw, @"<wpt\s+lat=""([0-9\.\-]+)""\s+lon=""([0-9\.\-]+)""[^>]*>(.*?)</wpt>", RegexOptions.Singleline | RegexOptions.IgnoreCase);
+                        foreach (Match m in wptMatches)
+                        {
+                            if (double.TryParse(m.Groups[1].Value, NumberStyles.Any, CultureInfo.InvariantCulture, out double plat) &&
+                                double.TryParse(m.Groups[2].Value, NumberStyles.Any, CultureInfo.InvariantCulture, out double plon))
+                            {
+                                lats.Add(plat);
+                                lons.Add(plon);
+                                var nameMatch = Regex.Match(m.Groups[3].Value, @"<name>(.*?)</name>", RegexOptions.IgnoreCase);
+                                if (nameMatch.Success)
+                                {
+                                    string pName = WebUtility.HtmlDecode(nameMatch.Groups[1].Value.Trim());
+                                    if (!string.IsNullOrWhiteSpace(pName) && !poiNames.Contains(pName))
+                                        poiNames.Add("• " + pName + string.Format(CultureInfo.InvariantCulture, " ({0:0.0000}°N, {1:0.0000}°E)", plat, plon));
+                                }
+                            }
+                        }
+
+                        // 2. Wyciągnij współrzędne KML <coordinates>lon,lat,0</coordinates>
+                        var coordMatches = Regex.Matches(raw, @"([0-9]{1,2}\.[0-9]{3,8}),([0-9]{1,2}\.[0-9]{3,8})");
+                        foreach (Match cm in coordMatches)
+                        {
+                            if (double.TryParse(cm.Groups[1].Value, NumberStyles.Any, CultureInfo.InvariantCulture, out double v1) &&
+                                double.TryParse(cm.Groups[2].Value, NumberStyles.Any, CultureInfo.InvariantCulture, out double v2))
+                            {
+                                // W KML kolejność to lon,lat (w Europie Środkowej lat ~ 49..55, lon ~ 14..24)
+                                if (v2 >= 45.0 && v2 <= 60.0 && v1 >= 10.0 && v1 <= 30.0)
+                                {
+                                    lats.Add(v2);
+                                    lons.Add(v1);
+                                }
+                                else if (v1 >= 45.0 && v1 <= 60.0 && v2 >= 10.0 && v2 <= 30.0)
+                                {
+                                    lats.Add(v1);
+                                    lons.Add(v2);
+                                }
+                            }
+                        }
+
+                        if (lats.Count > 0)
+                        {
+                            srcDesc = "Obszar AO z Mapy (" + Path.GetFileName(mf) + ")";
+                            break;
+                        }
+                    }
+                }
+            }
+            catch { }
+
+            if (lats.Count > 0 && lons.Count > 0)
+            {
+                double avgLat = (lats.Min() + lats.Max()) / 2.0;
+                double avgLon = (lons.Min() + lons.Max()) / 2.0;
+                string poiSummary = poiNames.Count > 0 ? string.Join("\n", poiNames) : "";
+                return (true, avgLat, avgLon, srcDesc, poiSummary);
+            }
+
+            return (false, 49.8494, 18.8127, "", "");
         }
 
         public static async Task<(bool Ok, double Lat, double Lon, string DisplayName)> GeocodeLocationAsync(string query)
@@ -202,7 +297,7 @@ namespace FieldTakHub.Builder.Services
             var moonInfo = CalculateMoonPhaseAndIllumination(targetDate);
             var fallbackSun = CalculateAstronomicalSunTimes(targetDate, lat, lon);
 
-            string condText = BuilderI18n.T("Umiarkowane zachmurzenie (dane astronomiczne obliczone lokalnie)", "Moderate cloud cover (astronomical data calculated locally)");
+            string condText = BuilderI18n.T("Umiarkowane zachmurzenie, dobra widoczność", "Moderate cloud cover, good visibility");
             string tempText = "-- °C";
             string windText = "-- km/h";
             string humPrecipText = "-- % / 0.0 mm";
@@ -265,10 +360,14 @@ namespace FieldTakHub.Builder.Services
                         avgPressure = Math.Round(GetAverageDouble(hourly["surface_pressure"], 1013.0), 0);
                     }
 
-                    condText = DecodeWmoWeatherCode(wmoCode) + string.Format(CultureInfo.InvariantCulture, " (Zachmurzenie / Cloud cover: {0}%, Ciśnienie / QNH: {1:0} hPa)", avgClouds, avgPressure);
+                    string visEst = (wmoCode == 45 || wmoCode == 48)
+                        ? BuilderI18n.T("Ograniczona (mgła < 300m)", "Reduced (fog < 300m)")
+                        : (precipMm > 5.0 ? BuilderI18n.T("Umiarkowana (opady 1-3 km)", "Moderate (rain 1-3 km)") : BuilderI18n.T("Dobra (> 5 km)", "Good (> 5 km)"));
+
+                    condText = DecodeWmoWeatherCode(wmoCode) + string.Format(CultureInfo.InvariantCulture, " | Zachmurzenie: {0}% | Widoczność: {1} | QNH: {2:0} hPa", avgClouds, visEst, avgPressure);
                     tempText = string.Format(
                         CultureInfo.InvariantCulture,
-                        "{0:0.0}°C .. {1:0.0}°C  (Odczuwalna / Feels like: {2:0.0}°C .. {3:0.0}°C)",
+                        "{0:0.0}°C .. {1:0.0}°C  (Odczuwalna: {2:0.0}°C .. {3:0.0}°C)",
                         tMin, tMax, appMin, appMax);
 
                     double windMs = windMaxKmh / 3.6;
@@ -276,12 +375,12 @@ namespace FieldTakHub.Builder.Services
                     string dirCardinal = DegreesToCardinal(windDeg);
                     windText = string.Format(
                         CultureInfo.InvariantCulture,
-                        "{0:0.0} km/h ({1:0.0} m/s)  |  Porywy / Gusts: {2:0.0} km/h ({3:0.0} m/s)  |  Kierunek / Dir: {4}° ({5})",
+                        "{0:0.0} km/h ({1:0.0} m/s)  |  Porywy: {2:0.0} km/h ({3:0.0} m/s)  |  Kierunek: {4}° ({5})",
                         windMaxKmh, windMs, gustsMaxKmh, gustsMs, windDeg, dirCardinal);
 
                     humPrecipText = string.Format(
                         CultureInfo.InvariantCulture,
-                        "Wilgotność / Humidity: ~{0}%  |  Opady / Precip: {1:0.0} mm (Szansa / Prob: {2}%)",
+                        "Wilgotność: ~{0}%  |  Opady: {1:0.0} mm (Szansa: {2}%)",
                         avgHumidity, precipMm, precipProb);
                 }
             }
@@ -296,16 +395,14 @@ namespace FieldTakHub.Builder.Services
                 : string.Format(CultureInfo.InvariantCulture, "{0} ({1:0.0000}°N, {2:0.0000}°E)", locationLabel, lat, lon);
 
             var sb = new StringBuilder();
-            sb.AppendLine(BuilderI18n.T(
-                "🌦️ [RAPORT METOC — POGODA, WIATR, SŁOŃCE I FAZA KSIĘŻYCA NA DZIEŃ: " + cleanDate + "]",
-                "🌦️ [METOC REPORT — WEATHER, WIND, SUN & MOON PHASE FOR DATE: " + cleanDate + "]"));
-            sb.AppendLine("• Rejon AO / Lokalizacja: " + locDisplay);
-            sb.AppendLine("• Warunki ogólne: " + condText);
+            sb.AppendLine("🌦️ [PROGNOZA POGODY I DANE ŚWIETLNE METOC — " + cleanDate + "]");
+            sb.AppendLine("• Rejon AO: " + locDisplay);
+            sb.AppendLine("• Zjawiska i widoczność: " + condText);
             sb.AppendLine("• Temperatura: " + tempText);
-            sb.AppendLine("• Wiatr (10m): " + windText);
+            sb.AppendLine("• Wiatr: " + windText);
             sb.AppendLine("• Wilgotność i opady: " + humPrecipText);
-            sb.AppendLine("• Słońce i światło (BMNT / SR / SS / EENT): " + sunLine);
-            sb.AppendLine("• Księżyc i Noktowizja (NVG): " + moonInfo.FullText);
+            sb.AppendLine("• Słońce (BMNT / Wschód / Zachód / EENT): " + sunLine);
+            sb.AppendLine("• Faza Księżyca i NVG: " + moonInfo.FullText);
 
             return new MetocReportData
             {
@@ -372,15 +469,15 @@ namespace FieldTakHub.Builder.Services
             }
 
             string nvgRating = illumPct >= 55
-                ? BuilderI18n.T("Wysoka jasność nocna (dobra widoczność pasywna NVG)", "High ambient light (good passive NVG visibility)")
+                ? BuilderI18n.T("Dobra widoczność pasywna NVG", "Good passive NVG visibility")
                 : (illumPct >= 20
-                    ? BuilderI18n.T("Umiarkowana jasność nocna (zalecana ostrożność w lesie)", "Moderate ambient light (reduced canopy visibility)")
-                    : BuilderI18n.T("Ciemna noc (w gęstym lesie wymagane doświetlenie IR dla NVG)", "Dark night (active IR illumination required under canopy)"));
+                    ? BuilderI18n.T("Umiarkowana jasność nocna", "Moderate ambient light")
+                    : BuilderI18n.T("Ciemna noc (zalecane doświetlenie IR w lesie)", "Dark night (IR illuminator recommended under canopy)"));
 
             string phaseLabel = BuilderI18n.T(phasePl, phaseEn);
             string full = string.Format(
                 CultureInfo.InvariantCulture,
-                "{0} {1}  |  Iluminacja tarczy: {2}%  |  {3}",
+                "{0} {1}  |  Iluminacja: {2}%  |  {3}",
                 icon, phaseLabel, illumPct, nvgRating);
 
             return (phaseLabel, illumPct, full);
@@ -430,16 +527,16 @@ namespace FieldTakHub.Builder.Services
         {
             return code switch
             {
-                0 => BuilderI18n.T("☀️ Bezchmurnie / Czyste niebo", "☀️ Clear sky"),
+                0 => BuilderI18n.T("☀️ Bezchmurnie", "☀️ Clear sky"),
                 1 => BuilderI18n.T("🌤️ Przeważnie słonecznie", "🌤️ Mainly clear"),
                 2 => BuilderI18n.T("⛅ Częściowe zachmurzenie", "⛅ Partly cloudy"),
-                3 => BuilderI18n.T("☁️ Pochmurno (pełne zachmurzenie)", "☁️ Overcast"),
-                45 or 48 => BuilderI18n.T("🌫️ Mgła / Ograniczona widoczność", "🌫️ Fog / Reduced visibility"),
+                3 => BuilderI18n.T("☁️ Pochmurno", "☁️ Overcast"),
+                45 or 48 => BuilderI18n.T("🌫️ Mgła", "🌫️ Fog"),
                 51 or 53 or 55 => BuilderI18n.T("🌦️ Mżawka", "🌦️ Drizzle"),
                 61 or 63 or 65 => BuilderI18n.T("🌧️ Opady deszczu", "🌧️ Rain"),
                 71 or 73 or 75 or 77 => BuilderI18n.T("❄️ Opady śniegu", "❄️ Snowfall"),
-                80 or 81 or 82 => BuilderI18n.T("🌧️ Przelotne opady deszczu", "🌧️ Rain showers"),
-                95 or 96 or 99 => BuilderI18n.T("⛈️ Burza z piorunami", "⛈️ Thunderstorm"),
+                80 or 81 or 82 => BuilderI18n.T("🌧️ Przelotny deszcz", "🌧️ Rain showers"),
+                95 or 96 or 99 => BuilderI18n.T("⛈️ Burza", "⛈️ Thunderstorm"),
                 _ => BuilderI18n.T("⛅ Zmienne zachmurzenie", "⛅ Variable cloudiness")
             };
         }
@@ -504,47 +601,113 @@ namespace FieldTakHub.Builder.Services
         }
     }
 
+    // =========================================================================
+    // 3. MODELE DANYCH OPORD v3.0 (ZGODNE Z WZOREM MILSIM DRUŻYNOWY PDF)
+    // =========================================================================
+    internal sealed class OpordRosterRow
+    {
+        public string OperatorOrTeam { get; set; } = "ALFA-1";
+        public string PrimaryRole { get; set; } = "Lider (Dowódca polowy)";
+        public string SecondaryRole { get; set; } = "RTO (Radiooperator)";
+        public string WeaponAndGear { get; set; } = "Szturm (Karabinek) + ATAK + Radio VHF";
+    }
+
+    internal sealed class OpordCodewordRow
+    {
+        public string CodeWord { get; set; } = "ZAMEK";
+        public string CodeLetter { get; set; } = "A";
+        public string CodeDigit { get; set; } = "1";
+        public string DuressWord { get; set; } = "SPALONY";
+    }
+
+    internal sealed class OpordDayPlanModel
+    {
+        public string DayTitle { get; set; } = "Dzień 1";
+        public string DateIso { get; set; } = DateTime.Today.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+        public string MetocCondition { get; set; } = "Brak pobranego raportu (kliknij '🌦️ Pobierz METOC' lub '🎯 Pobierz AO z Mapy')";
+        public string MetocTemperature { get; set; } = "-";
+        public string MetocWind { get; set; } = "-";
+        public string MetocHumidityPrecip { get; set; } = "-";
+        public string MetocSunTimes { get; set; } = "-";
+        public string MetocMoonPhase { get; set; } = "-";
+        public string DaySpecificTasks { get; set; } = "• 08:30 — Odprawa sztabowa i sprawdzenie łączności\n• 09:00 — Wejście w rejon działań (Faza Dzienno-Rozpoznawcza)\n• 14:00 — Rotacja na punkcie zaopatrzenia i realizacja zadań głównych";
+    }
+
     internal sealed class OpordParagraphModel
     {
         public string TargetFaction { get; set; } = "BLUFOR";
-        public string Classification { get; set; } = "JAWNE / UNCLASSIFIED — MILSIM OPORD";
+        public string Classification { get; set; } = "JAWNE / UNCLASSIFIED — MILSIM DRUŻYNOWY OPORD";
         public string OperationNumber { get; set; } = "OPORD 01-2026";
         public string OperationDateIso { get; set; } = DateTime.Today.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
-        public string LocationName { get; set; } = "Rejon Operacji (AO)";
+        public string LocationName { get; set; } = "";
         public string LocationLat { get; set; } = "49.8494";
         public string LocationLon { get; set; } = "18.8127";
         public string DtgIssued { get; set; } = DateTime.Now.ToString("ddHHmm'Z' MMM yyyy", CultureInfo.InvariantCulture).ToUpperInvariant();
-        public string IssuingHq { get; set; } = "TOC / SZTAB GŁÓWNY";
-        public string MapReferences { get; set; } = "Mapa Taktyczna MGRS 1:5000 (W załączeniu .FTAK / .KMZ)";
+        public string IssuingHq { get; set; } = "TOC / SZTAB DRUŻYNY";
+        public string MapReferences { get; set; } = "Mapa Taktyczna MGRS 1:5000 (W załączeniu .FTAK / .KMZ / .GPX)";
 
-        public string MetocCondition { get; set; } = "Brak pobranego raportu (kliknij '🌦️ Pobierz prognozę METOC' w sekcji 1c)";
+        // Zakładki kolejnych dni operacji (Dzień 1, Dzień 2...)
+        public List<OpordDayPlanModel> Days { get; set; } = new List<OpordDayPlanModel>();
+        public int ActiveDayIndex { get; set; } = 0;
+
+        // Bieżące podsumowanie METOC (synchronizowane z aktywnym dniem)
+        public string MetocCondition { get; set; } = "-";
         public string MetocTemperature { get; set; } = "-";
         public string MetocWind { get; set; } = "-";
         public string MetocHumidityPrecip { get; set; } = "-";
         public string MetocSunTimes { get; set; } = "-";
         public string MetocMoonPhase { get; set; } = "-";
 
-        public string EnemyForces { get; set; } = "Siły OPFOR w sile plutonu piechoty lekkiej prowadzą działania obronno-dywersyjne w rejonie AO. Wyposażenie: łączność radiowa, dymy, repliki szturmowe i wsparcia.";
-        public string FriendlyForces { get; set; } = "Siły własne (BLUFOR) w składzie 2 sekcji szturmowych (ALFA, BRAVO) oraz elementu rozpoznawczego (RECON). Sztab (HQ) rozwinięty w pobliżu punktu startowego.";
-        public string TerrainAndWeather { get; set; } = "Teren leśno-pagórkowaty z gęstym podszyciem i siecią dróg leśnych. Widoczność w koronach drzew ograniczona, miejscami skarpy oraz cieki wodne.";
+        // I. SYTUACJA (wg PDF: A. Obszar zainteresowania, B. Obszar działań, C. Siły wroga, D. Siły przyjazne)
+        public string AreaOfInterestPoiDesc { get; set; } = "Punkty kluczowe (FOB, Respawn, OBJ ALPHA, LZ) zdefiniowane w załączonym pliku .KMZ (ATAK) oraz .GPX (Garmin/Suunto).";
+        public string TerrainAndWeather { get; set; } = "Wielkość AO: ok. 2x2 km. Rodzaj: las mieszany, polany, zabudowania leśne. Ukształtowanie: pagórkowate ze skarpami. Przeszkody terenowe: cieki wodne, rów melioracyjny, drogi leśne.";
+        public string EnemyForces { get; set; } = "1. Skład, dyspozycja i siła: Pluton lekki przeciwnika podzielony na patrole 4-6 osobowe.\n2. Lokalizacje i możliwości: Posterunki na skrzyżowaniach dróg, łączność radiowa, dymy.\n3. Kursy działań wroga (COA): Obrona rejonu centralnego i zasadzki na szlakach podejścia.";
+        public string FriendlyForces { get; set; } = "1. Misja i zamiar wyższego dowództwa (HQ): Opanowanie i kontrola sektora przed zmrokiem.\n2. Misja sąsiednich jednostek: Sąsiednie drużyny wiążą siły przeciwnika na skrzydłach.";
 
-        public string MissionWho { get; set; } = "Zgrupowanie zadaniowe BLUFOR";
-        public string MissionWhat { get; set; } = "opanuje i utrzyma kluczowy węzeł terenowy OBJ ALPHA";
-        public string MissionWhen { get; set; } = "w dniu operacji od godz. H (09:00) do godz. 15:00";
-        public string MissionWhere { get; set; } = "w centralnym sektorze AO (siatka MGRS z mapy .KMZ)";
-        public string MissionWhy { get; set; } = "w celu uniemożliwienia siłom przeciwnika kontroli nad szlakiem zaopatrzeniowym.";
+        // II. MISJA (wg PDF: A. Opis fabularny, B. Główne zadanie, C. Dodatkowe zadania + 5W)
+        public string MissionLoreDesc { get; set; } = "Opis fabularny (opcjonalnie): Działania rozpoznawczo-dywersyjne na zapleczu ugrupowania przeciwnika.";
+        public string MissionWho { get; set; } = "Drużyna zadaniowa BLUFOR";
+        public string MissionWhat { get; set; } = "zlokalizuje i zabezpieczy kody sektorowe oraz utrzyma obiekt OBJ ALPHA";
+        public string MissionWhen { get; set; } = "w godzinach operacyjnych 09:00 - 17:00";
+        public string MissionWhere { get; set; } = "w wyznaczonym obszarze AO (siatka MGRS)";
+        public string MissionWhy { get; set; } = "w celu uzyskania przewagi punktowej i odcięcia zaopatrzenia przeciwnika.";
         public string MissionFullStatement { get; set; } = "";
+        public string AdditionalTasksSummary { get; set; } = "• Zadanie poboczne 1: Rozpoznanie stanowisk dowodzenia wroga (Foto).\n• Zadanie poboczne 2: Przejęcie pojemnika fabularnego (szczegóły w Załączniku 2).";
 
-        public string CommandersIntent { get; set; } = "Kluczem do powodzenia jest skryte podejście, utrzymanie łączności w sieci Meshtastic/ATAK oraz jednoczesne uderzenie z dwóch kierunków. Stan końcowy: obiekt zabezpieczony, siły własne gotowe do obrony okrężnej.";
-        public string ConceptOfOperations { get; set; } = "FAZA I (Infiltracja): Wyjście z FOB i zajęcie punktów wyjściowych.\nFAZA II (Szturm): Jednoczesne wejście w strefę obiektu po sygnale sztabu.\nFAZA III (Konsolidacja): Obrona okrężna i ewakuacja rannych.";
-        public string TasksToSubordinateUnits { get; set; } = "• Sekcja ALFA: Główne uderzenie od kierunku północno-zachodniego.\n• Sekcja BRAVO: Ubezpieczenie skrzydła i blokada dróg podejścia od południa.\n• Sekcja RECON: Obserwacja przedpola i naprowadzanie w ATAK-CIV.";
-        public string CoordinatingAndRoe { get; set; } = "• Obowiązkowa ochrona wzroku przez cały czas trwania gry.\n• Identyfikacja swój-obcy przed oddaniem strzału (sprawdź pozycję PLI w ATAK).\n• Zakaz używania pirotechniki poza wyznaczonymi strefami.";
+        // III. WYKONANIE (wg PDF: A. Zamiar dowódcy, B. Priorytety/styl, C. Łańcuch dowodzenia, D. Skład i role, E. Łączność, F. SARNEG/Hasła, G. Leczenie)
+        public string CommandersIntent { get; set; } = "Jedziemy działać zespołowo, przećwiczyć nawigację MGRS/ATAK i zrealizować 100% zadań głównych bez zbędnych strat.";
+        public stringConceptAndStyleOfAction { get; set; } = "";
+        public string ConceptOfOperations { get; set; } = "Priorytety i styl działania: Skryte przemieszczanie czujką z przodu. Unikamy niepotrzebnego kontaktu ogniowego podczas marszu do celu. Walczymy wyłącznie przy przewadze ogniowej lub bezpośrednio o obiekt zadaniowy.";
+        public string TasksToSubordinateUnits { get; set; } = "• Sekcja Szturmowa: Wejście na obiekt i czyszczenie przedpola.\n• Wsparcie / DMR: Osłona skrzydeł i obserwacja dróg podejścia.";
+        public string CoordinatingAndRoe { get; set; } = "• Obowiązkowa ochrona wzroku przez cały czas trwania gry.\n• Weryfikacja pozycji sojuszników w ATAK przed otwarciem ognia.";
+        public string SuccessionOfCommand { get; set; } = "Dowódca (Lider)  ->  1. Zastępca (Navi / RTO)  ->  2. Zastępca (Dowódca sekcji)";
 
-        public string MedevacRules { get; set; } = "Po trafieniu gracz oznacza się czerwoną szmatką i wzywa medyka. W przypadku realnego urazu natychmiast użyć czerwonego przycisku 🚨 SOS MGRS w aplikacji Field TAK Hub.";
-        public string RespawnAndSupply { get; set; } = "Punkt Respawn / FOB zgodny z markerem na mapie .GPX / .KMZ. Wyjście z Respawnu co pełne 20 minut lub w grupie min. 3 operatorów.";
+        // III.D Opcjonalna Tabela Składu Oddziału, Ról i Sprzętu (aktywowana przełącznikiem + przyciski +/-)
+        public bool EnableSquadRosterTable { get; set; } = true;
+        public List<OpordRosterRow> SquadRoster { get; set; } = new List<OpordRosterRow>();
 
-        public string SuccessionOfCommand { get; set; } = "1. Dowódca Operacji (HQ-1)  ->  2. Dowódca Sekcji ALFA (ALFA-1)  ->  3. Dowódca Sekcji BRAVO (BRAVO-1)";
-        public string ChallengeAndPassword { get; set; } = "Hasło (Challenge): GROM   /   Odzew (Password): BŁYSK   |   Kombinacja liczbowa: 7";
+        // III.E Kanały podstawowe wg PDF (uzupełniane automatycznie z Generatora Stron)
+        public string PrimaryRadioFreq { get; set; } = "446.00625 MHz (PMR CH 1)";
+        public string BackupRadioFreq { get; set; } = "446.03125 MHz (PMR CH 3)";
+        public string HqRadioFreq { get; set; } = "446.09375 MHz (PMR CH 8)";
+
+        // III.F Sygnały, Kryptonimy celów, Tabela SARNEG (0-9) i Hasła rozpoznawcze
+        public string TargetCodeNames { get; set; } = "• OBJ ALPHA = 'ZAMEK'   |   • Punkt Zbiórki (RP) = 'KUŹNIA'   |   • FOB / Respawn = 'BAZA'";
+        public string SarnegKeyWord10 { get; set; } = "ZLEARSTWOK"; // 10 niepowtarzających się liter dla cyfr 0..9
+        public List<OpordCodewordRow> CodewordsTable { get; set; } = new List<OpordCodewordRow>();
+        public stringChallengeAndPassword { get; set; } = "";
+        public string ChallengeAndPassword { get; set; } = "a) Werbalne (Wywołanie - Odpowiedź - Potwierdzenie): GROM - BŁYSK - TARCZA (Suma cyfr: 7)\nb) Niewerbalne (Wywołanie - Odzew): 2 błyski czerwonym światłem - 1 błysk + podniesienie lewej ręki";
+
+        // III.G Leczenie i IV. LOGISTYKA (wg PDF: Styl wyposażenia, Szpejlista, Wyposażenie specjalne, Dojazd, Regulamin)
+        public string MedevacRules { get; set; } = "Pierwsze trafienie: opatrunek przez medyka lub członka drużyny (czas 2 min). Drugie trafienie: odejście na Respawn. W razie realnego wypadku: użyć przycisku 🚨 SOS MGRS w aplikacji Field TAK Hub.";
+        public string RespawnAndSupply { get; set; } = "Styl wyposażenia: Na 12h w terenie (woda min. 2L, racja żywnościowa, zapasowe baterie do radia i powerbank do ATAK).";
+        public string SquadGearChecklist { get; set; } = "SZPEJLISTA: Okulary ochronne, czerwona szmatka (dead-rag), gwizdek/latarka czerwona na noc, radio PMR/VHF z zapasową baterią, telefon z aplikacją Field TAK Hub & ATAK-CIV, kompas, długopis wodoodporny.";
+        public string SpecialEquipment { get; set; } = "Wyposażenie specjalne: Rekwizyty misyjne ze sztabu, znaczniki chemiczne (lightstick), aparat/telefon dla Fotografa.";
+        public string TravelAndParking { get; set; } = "1. Parking: Zgodnie z pinezką zbiórki w paczce .GPX / .KMZ.\n2. Odległość z parkingu na miejsce gry: ok. 300 m.\n3. Transport (kto z kim): Auto 1 (Lider + 3 os.), Auto 2 (Zastępca + 3 os.).";
+        public string GameRulesLink { get; set; } = "https://";
+
+        // Załącznik 2. Szczegółowe opracowanie zadań
+        public string Annex2TasksAnalysis { get; set; } = "ZAŁĄCZNIK 2 — OPRACOWANIE ZADAŃ:\n• Analiza priorytetów punktowych, okna czasowe na wykonanie misji specjalnych oraz podział zespołów na zadania równoległe.";
     }
 
     internal static class OpordBuilderManager
@@ -552,6 +715,27 @@ namespace FieldTakHub.Builder.Services
         private static readonly Dictionary<string, OpordParagraphModel> ModelsByFaction = new Dictionary<string, OpordParagraphModel>(StringComparer.OrdinalIgnoreCase);
         private static string _activeOpordFaction = "BLUFOR";
         private static Border _cachedOpordOverlay;
+
+        // Lokalny serwer dystrybucji samego OPORDu przez Wi-Fi Hotspot / LAN
+        private static TcpListener _opordLanListener;
+        private static volatile bool _opordLanServerRunning;
+        private static int _opordLanPort = 8769;
+        private static Window _lastActiveWindowRef;
+
+        // Słownik ról z Załącznika 1 załączonego pliku PDF
+        public static readonly (string RoleName, string Mode, string Description)[] MilsimRolesCatalog = new[]
+        {
+            ("Lider (Dowódca polowy)", "Full-time", "Dowodzi zespołem w trakcie działań, podejmuje kluczowe decyzje, odpowiada za wykonanie zadań."),
+            ("Navi (Nawigator)", "Full-time", "Nadzoruje mapę, informacje o POI, wyznacza trasy, nadzoruje kierunek marszu."),
+            ("RTO (Radiooperator)", "Full-time", "Odpowiada za kontakt ze sztabem, odbieranie rozkazów i podawanie kluczowych informacji, zna szyfrowanie."),
+            ("Med (Medyk)", "Sytuacyjne", "Odpowiada za sprawy medyczne: leczenie, opatrunki, ilość dostępnych respów, karty ran itp."),
+            ("Adiutant", "Sytuacyjne", "Szczegółowo analizuje treść zadań oraz dodatkowych informacji, spisuje kluczowe dane i punkty, przekazuje dowódcy."),
+            ("LARP (Aktor)", "Sytuacyjne", "Osoba do larpowania, kontaktu z NPC oraz innymi osobami larpującymi, znająca fabułę gry."),
+            ("Foto (Fotograf)", "Sytuacyjne", "Osoba odpowiedzialna za dokumentowanie działań (np. zdjęcia celów, kodów), wypełnianie dokumentów dot. misji."),
+            ("Tragarz", "Sytuacyjne", "Osoba odpowiedzialna za przedmioty wymagane do zadań: transport i przygotowanie przedmiotów fabularnych."),
+            ("O-O (Organizator Obrony)", "Sytuacyjne", "Odpowiada za ustanawianie obrony w trakcie postoju: rozstawienie na sektory, wysunięcie czujki, obstawianie wzgórz."),
+            ("Czujka", "Przechodnie", "Przewodzi podczas marszu, koryguje trasę, szuka przejścia, wypatruje zagrożenia z przodu.")
+        };
 
         public static OpordParagraphModel GetOrCreateModel(string factionName)
         {
@@ -561,15 +745,58 @@ namespace FieldTakHub.Builder.Services
                 model = TryLoadSavedOpordFromDisk(key) ?? new OpordParagraphModel
                 {
                     TargetFaction = key,
-                    MissionWho = "Zgrupowanie " + key
+                    MissionWho = "Drużyna " + key
                 };
-                if (string.IsNullOrWhiteSpace(model.MissionFullStatement))
-                {
-                    model.MissionFullStatement = Compose5WMissionText(model);
-                }
+                EnsureDefaultCollectionsInitialized(model);
                 ModelsByFaction[key] = model;
             }
+            else
+            {
+                EnsureDefaultCollectionsInitialized(model);
+            }
             return model;
+        }
+
+        private static void EnsureDefaultCollectionsInitialized(OpordParagraphModel m)
+        {
+            if (string.IsNullOrWhiteSpace(m.MissionFullStatement))
+                m.MissionFullStatement = Compose5WMissionText(m);
+
+            if (m.Days == null || m.Days.Count == 0)
+            {
+                m.Days = new List<OpordDayPlanModel>
+                {
+                    new OpordDayPlanModel
+                    {
+                        DayTitle = "Dzień 1",
+                        DateIso = string.IsNullOrWhiteSpace(m.OperationDateIso)
+                            ? DateTime.Today.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)
+                            : m.OperationDateIso
+                    }
+                };
+                m.ActiveDayIndex = 0;
+            }
+
+            if (m.SquadRoster == null || m.SquadRoster.Count == 0)
+            {
+                m.SquadRoster = new List<OpordRosterRow>
+                {
+                    new OpordRosterRow { OperatorOrTeam = "ALFA-1", PrimaryRole = "Lider (Dowódca polowy)", SecondaryRole = "Adiutant", WeaponAndGear = "Karabinek szturmowy + ATAK" },
+                    new OpordRosterRow { OperatorOrTeam = "ALFA-2", PrimaryRole = "Navi (Nawigator)", SecondaryRole = "Czujka", WeaponAndGear = "Karabinek szturmowy + Garmin/ATAK" },
+                    new OpordRosterRow { OperatorOrTeam = "ALFA-3", PrimaryRole = "RTO (Radiooperator)", SecondaryRole = "Foto (Fotograf)", WeaponAndGear = "Karabinek szturmowy + Radio DualBand + LoRa" },
+                    new OpordRosterRow { OperatorOrTeam = "ALFA-4", PrimaryRole = "Med (Medyk)", SecondaryRole = "O-O (Organizator Obrony)", WeaponAndGear = "DMR / Wsparcie + Pakiet Medyczny" }
+                };
+            }
+
+            if (m.CodewordsTable == null || m.CodewordsTable.Count == 0)
+            {
+                m.CodewordsTable = new List<OpordCodewordRow>
+                {
+                    new OpordCodewordRow { CodeWord = "KONTAKT / WRÓG", CodeLetter = "K", CodeDigit = "1", DuressWord = "CZERWONY" },
+                    new OpordCodewordRow { CodeWord = "ODWRÓT / ZERWANIE", CodeLetter = "Z", CodeDigit = "2", DuressWord = "MGŁA" },
+                    new OpordCodewordRow { CodeWord = "ZBIÓRKA NA FOB", CodeLetter = "B", CodeDigit = "5", DuressWord = "BURZA" }
+                };
+            }
         }
 
         public static string Compose5WMissionText(OpordParagraphModel m)
@@ -631,8 +858,72 @@ namespace FieldTakHub.Builder.Services
             catch { }
         }
 
+        // =========================================================================
+        // 4. BEZPOŚREDNIE ZACIĄGANIE CZĘSTOTLIWOŚCI RADIOWYCH Z GENERATORA STRON
+        // =========================================================================
+        public static JsonObject TryGetFactionJsonObject(Window win, string factionName)
+        {
+            try
+            {
+                if (win != null)
+                {
+                    try { TacticalConfigPanel.SaveSessionStateAuto(win); } catch { }
+                }
+
+                // 1. Sprawdź wszystkie możliwe pliki sesji roboczej (CurrentDraftProjectPath oraz najnowsze pliki w AppData)
+                var candidatePaths = new List<string>();
+                if (!string.IsNullOrWhiteSpace(TacticalConfigPanel.CurrentDraftProjectPath) && File.Exists(TacticalConfigPanel.CurrentDraftProjectPath))
+                {
+                    candidatePaths.Add(TacticalConfigPanel.CurrentDraftProjectPath);
+                }
+                if (!string.IsNullOrWhiteSpace(BuilderCoreSidebarAndProjectEngine.CurrentProjectFilePath) && File.Exists(BuilderCoreSidebarAndProjectEngine.CurrentProjectFilePath))
+                {
+                    candidatePaths.Add(BuilderCoreSidebarAndProjectEngine.CurrentProjectFilePath);
+                }
+
+                string appData = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "FieldTakHub");
+                if (Directory.Exists(appData))
+                {
+                    var recentFiles = Directory.GetFiles(appData, "*.*", SearchOption.TopDirectoryOnly)
+                        .Where(f => f.EndsWith(".json", StringComparison.OrdinalIgnoreCase) || f.EndsWith(".fthproj", StringComparison.OrdinalIgnoreCase))
+                        .Where(f => !Path.GetFileName(f).StartsWith("opord_", StringComparison.OrdinalIgnoreCase))
+                        .OrderByDescending(File.GetLastWriteTimeUtc);
+                    candidatePaths.AddRange(recentFiles);
+                }
+
+                foreach (string path in candidatePaths.Distinct())
+                {
+                    try
+                    {
+                        string raw = File.ReadAllText(path, Encoding.UTF8);
+                        if (JsonNode.Parse(raw) is JsonObject root)
+                        {
+                            var fArr = (root["factions"] ?? root["Factions"]) as JsonArray;
+                            if (fArr != null && fArr.Count > 0)
+                            {
+                                foreach (var item in fArr.OfType<JsonObject>())
+                                {
+                                    string n = item["Name"]?.ToString() ?? item["name"]?.ToString() ?? "";
+                                    if (n.Equals(factionName, StringComparison.OrdinalIgnoreCase))
+                                        return item;
+                                }
+                                return fArr.OfType<JsonObject>().FirstOrDefault();
+                            }
+                        }
+                    }
+                    catch { }
+                }
+            }
+            catch { }
+            return null;
+        }
+
+        // =========================================================================
+        // 5. WIDOK GENERATORA OPORD v3.0 (ZAKŁADKI DNI +/-, TABELA SKŁADU +/-, SARNEG, LAN QR)
+        // =========================================================================
         public static Border CreateOrGetOpordOverlayView(Window win)
         {
+            _lastActiveWindowRef = win;
             if (_cachedOpordOverlay != null)
             {
                 return _cachedOpordOverlay;
@@ -666,8 +957,18 @@ namespace FieldTakHub.Builder.Services
                 }
 
                 var model = GetOrCreateModel(_activeOpordFaction);
+                model.ActiveDayIndex = Math.Clamp(model.ActiveDayIndex, 0, Math.Max(0, model.Days.Count - 1));
+                var activeDay = model.Days[model.ActiveDayIndex];
+                model.OperationDateIso = activeDay.DateIso;
+
                 string eventName = TacticalConfigPanel.GetEventNameFromWindow(win);
 
+                // Automatycznie zsynchronizuj kanały główne z Generatora Stron, jeśli są dostępne
+                SyncModelRadioChannelsFromFactionGenerator(win, _activeOpordFaction, model);
+
+                // -----------------------------------------------------------------
+                // PASEK NAGŁÓWKOWY GENERATORA OPORD v3.0 + DYSTRYBUCJA LAN / WI-FI
+                // -----------------------------------------------------------------
                 var topCard = new Border
                 {
                     Background = TacticalConfigPanel.BrushCardBg,
@@ -675,44 +976,45 @@ namespace FieldTakHub.Builder.Services
                     BorderThickness = new Thickness(2),
                     CornerRadius = new CornerRadius(10),
                     Padding = new Thickness(16, 12, 16, 12),
-                    Margin = new Thickness(0, 0, 0, 12)
+                    Margin = new Thickness(0, 0, 0, 10)
                 };
 
                 var topStack = new StackPanel();
                 topStack.Children.Add(new TextBlock
                 {
                     Text = BuilderI18n.T(
-                        "📋 GENERATOR ROZKAZU BOJOWEGO NATO (5-PARAGRAPH OPORD + METOC) — " + eventName,
-                        "📋 NATO 5-PARAGRAPH OPORD & METOC BUILDER — " + eventName),
+                        "📋 GENERATOR ROZKAZU BOJOWEGO MILSIM / NATO (OPORD v3.0 + SARNEG + METOC) — " + eventName,
+                        "📋 MILSIM / NATO OPORD v3.0 BUILDER (SARNEG + METOC + SQUAD ROSTER) — " + eventName),
                     Foreground = TacticalConfigPanel.BrushAccent,
                     FontWeight = FontWeights.Bold,
-                    FontSize = 15,
-                    Margin = new Thickness(0, 0, 0, 6)
+                    FontSize = 14.5,
+                    Margin = new Thickness(0, 0, 0, 4)
                 });
 
                 topStack.Children.Add(new TextBlock
                 {
                     Text = BuilderI18n.T(
-                        "Przygotuj rozkaz operacyjny NATO (1. Sytuacja + Automatyczna Pogoda/Słońce/Księżyc METOC, 2. Zadanie 5W, 3. Realizacja, 4. Logistyka, 5. Dowodzenie i Łączność). Sekcja 5 synchronizuje automatycznie tabelę radiową, klucze LoRa i adres serwera OTS z wybranej strony.",
-                        "Build a structured NATO 5-Paragraph Operational Order with live METOC Weather, Sunrise/Sunset & Moon Phase intelligence and automatic radio/LoRa/OTS sync."),
+                        "Pełny wzór drużynowy MilSim i NATO: wielodniowe zakładki operacji (+ / -), automatyczne pobieranie współrzędnych AO z Generatora Map 1:1, pogoda/słońce/księżyc METOC, przełączana Tabela Składu i Ról (+ / -), Tabela Krypto SARNEG (0-9) oraz udostępnianie OPORD-u przez Wi-Fi / LAN.",
+                        "Complete MilSim & NATO OPORD suite: multi-day tabs (+ / -), automatic AO coordinate extraction from 1:1 Map Studio, live METOC weather/sun/moon, toggleable Squad & Role Table (+ / -), SARNEG 0-9 crypto table, and Wi-Fi / LAN OPORD distribution."),
                     Foreground = TacticalConfigPanel.BrushMutedText,
-                    FontSize = 11,
+                    FontSize = 10.5,
                     TextWrapping = TextWrapping.Wrap,
                     Margin = new Thickness(0, 0, 0, 10)
                 });
 
                 var actionBar = new Grid();
-                actionBar.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(190) });
-                actionBar.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-                actionBar.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-                actionBar.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+                actionBar.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(160) });
+                actionBar.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1.1, GridUnitType.Star) });
+                actionBar.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1.1, GridUnitType.Star) });
+                actionBar.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1.1, GridUnitType.Star) });
+                actionBar.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1.0, GridUnitType.Star) });
 
                 var facCombo = new ComboBox
                 {
                     Height = 32,
-                    FontSize = 12,
+                    FontSize = 11.5,
                     FontWeight = FontWeights.Bold,
-                    Margin = new Thickness(0, 0, 8, 0),
+                    Margin = new Thickness(0, 0, 6, 0),
                     Tag = "INJECTED"
                 };
                 TacticalConfigPanel.ApplyUnifiedComboBoxTheme(facCombo, win);
@@ -733,13 +1035,13 @@ namespace FieldTakHub.Builder.Services
 
                 var btnExportHtml = new Button
                 {
-                    Content = BuilderI18n.T("🖨️ Otwórz OPORD do druku A4 (HTML / PDF)", "🖨️ Open Printable A4 OPORD (HTML / PDF)"),
+                    Content = BuilderI18n.T("🖨️ Drukuj OPORD A4 (HTML / PDF)", "🖨️ Print A4 OPORD (HTML / PDF)"),
                     Height = 32,
                     Margin = new Thickness(0, 0, 6, 0),
                     Background = TacticalConfigPanel.BrushButtonAccent,
                     Foreground = TacticalConfigPanel.BrushDarkFg,
                     FontWeight = FontWeights.Bold,
-                    FontSize = 11,
+                    FontSize = 10.5,
                     Cursor = Cursors.Hand
                 };
                 btnExportHtml.Click += (_, __) =>
@@ -754,17 +1056,39 @@ namespace FieldTakHub.Builder.Services
                 Grid.SetColumn(btnExportHtml, 1);
                 actionBar.Children.Add(btnExportHtml);
 
-                var btnCopyDiscord = new Button
+                var btnShareLanQr = new Button
                 {
-                    Content = BuilderI18n.T("💬 Kopiuj OPORD na Discorda (Markdown)", "💬 Copy OPORD for Discord (Markdown)"),
+                    Content = BuilderI18n.T("📡 Udostępnij OPORD (Wi-Fi / LAN QR)", "📡 Share OPORD (Wi-Fi / LAN QR)"),
                     Height = 32,
                     Margin = new Thickness(0, 0, 6, 0),
                     Background = new SolidColorBrush(Color.FromRgb(22, 54, 66)),
-                    Foreground = Brushes.White,
+                    Foreground = TacticalConfigPanel.BrushAccent,
                     BorderBrush = TacticalConfigPanel.BrushAccent,
+                    BorderThickness = new Thickness(1.4),
+                    FontWeight = FontWeights.Bold,
+                    FontSize = 10.5,
+                    Cursor = Cursors.Hand
+                };
+                btnShareLanQr.Click += (_, __) =>
+                {
+                    PersistModelToAppData(model);
+                    SaveAllOpordsToDisk(win);
+                    ShowOpordLanDistributionModal(win, _activeOpordFaction, model);
+                };
+                Grid.SetColumn(btnShareLanQr, 2);
+                actionBar.Children.Add(btnShareLanQr);
+
+                var btnCopyDiscord = new Button
+                {
+                    Content = BuilderI18n.T("💬 Kopiuj na Discorda (Markdown)", "💬 Copy for Discord (Markdown)"),
+                    Height = 32,
+                    Margin = new Thickness(0, 0, 6, 0),
+                    Background = TacticalConfigPanel.BrushItemBg,
+                    Foreground = Brushes.White,
+                    BorderBrush = TacticalConfigPanel.BrushCardBorder,
                     BorderThickness = new Thickness(1),
                     FontWeight = FontWeights.Bold,
-                    FontSize = 11,
+                    FontSize = 10.5,
                     Cursor = Cursors.Hand
                 };
                 btnCopyDiscord.Click += (_, __) =>
@@ -776,25 +1100,25 @@ namespace FieldTakHub.Builder.Services
                     MessageBox.Show(
                         win,
                         BuilderI18n.T(
-                            "Skopiowano sformatowany rozkaz OPORD strony " + _activeOpordFaction + " (wraz z danymi METOC: pogoda, słońce, księżyc) do schowka! Możesz wkleić go na Discordzie (Ctrl+V).",
-                            "Copied formatted OPORD for " + _activeOpordFaction + " (including METOC weather, sun & moon data) to clipboard!"),
+                            "Skopiowano kompletny rozkaz OPORD strony " + _activeOpordFaction + " do schowka! Możesz wkleić go na Discordzie (Ctrl+V).",
+                            "Copied complete OPORD for " + _activeOpordFaction + " to clipboard!"),
                         "OPORD -> Discord Markdown",
                         MessageBoxButton.OK,
                         MessageBoxImage.Information);
                 };
-                Grid.SetColumn(btnCopyDiscord, 2);
+                Grid.SetColumn(btnCopyDiscord, 3);
                 actionBar.Children.Add(btnCopyDiscord);
 
                 var btnSaveToFtak = new Button
                 {
-                    Content = BuilderI18n.T("📦 Zapisz OPORD w paczce .FTAK", "📦 Embed OPORD into .FTAK"),
+                    Content = BuilderI18n.T("📦 Zapisz w .FTAK", "📦 Save to .FTAK"),
                     Height = 32,
                     Background = TacticalConfigPanel.BrushItemBg,
                     Foreground = TacticalConfigPanel.BrushAccent,
                     BorderBrush = TacticalConfigPanel.BrushAccent,
                     BorderThickness = new Thickness(1),
                     FontWeight = FontWeights.Bold,
-                    FontSize = 11,
+                    FontSize = 10.5,
                     Cursor = Cursors.Hand
                 };
                 btnSaveToFtak.Click += (_, __) =>
@@ -804,39 +1128,144 @@ namespace FieldTakHub.Builder.Services
                     MessageBox.Show(
                         win,
                         BuilderI18n.T(
-                            "Zapisano rozkaz OPORD_" + _activeOpordFaction + " w zasobach frakcji! Zostanie on automatycznie dołączony do pliku .FTAK.",
-                            "Saved OPORD_" + _activeOpordFaction + " to faction assets! It will be automatically bundled into the .FTAK package."),
+                            "Zapisano rozkaz OPORD_" + _activeOpordFaction + " w katalogu wyjściowym frakcji!",
+                            "Saved OPORD_" + _activeOpordFaction + " to the faction output folder!"),
                         "OPORD Saved",
                         MessageBoxButton.OK,
                         MessageBoxImage.Information);
                 };
-                Grid.SetColumn(btnSaveToFtak, 3);
+                Grid.SetColumn(btnSaveToFtak, 4);
                 actionBar.Children.Add(btnSaveToFtak);
 
                 topStack.Children.Add(actionBar);
                 topCard.Child = topStack;
                 mainStack.Children.Add(topCard);
 
-                var metaCard = CreateSectionCard(BuilderI18n.T("0. METADANE ROZKAZU (NAGŁÓWEK NATO)", "0. ORDER METADATA (NATO HEADER)"));
+                // -----------------------------------------------------------------
+                // PASEK ZAKŁADEK KOLEJNYCH DNI OPERACJI (ZIELONY "+" ORAZ CZERWONY "-")
+                // -----------------------------------------------------------------
+                var daysBarBorder = new Border
+                {
+                    Background = new SolidColorBrush(Color.FromRgb(10, 24, 30)),
+                    BorderBrush = new SolidColorBrush(Color.FromRgb(28, 62, 74)),
+                    BorderThickness = new Thickness(1.5),
+                    CornerRadius = new CornerRadius(8),
+                    Padding = new Thickness(12, 8, 12, 8),
+                    Margin = new Thickness(0, 0, 0, 10)
+                };
+
+                var daysDock = new DockPanel();
+                daysDock.Children.Add(new TextBlock
+                {
+                    Text = BuilderI18n.T("📅 DNI OPERACJI (HARMONOGRAM I POGODA DZIENNA):", "📅 OPERATION DAYS (DAILY SCHEDULE & METOC):"),
+                    Foreground = TacticalConfigPanel.BrushAccent,
+                    FontWeight = FontWeights.Bold,
+                    FontSize = 11.5,
+                    VerticalAlignment = VerticalAlignment.Center,
+                    Margin = new Thickness(0, 0, 12, 0)
+                });
+
+                var daysWrap = new WrapPanel { VerticalAlignment = VerticalAlignment.Center };
+                for (int dIdx = 0; dIdx < model.Days.Count; dIdx++)
+                {
+                    int capturedIdx = dIdx;
+                    var dayObj = model.Days[dIdx];
+                    bool isSel = (dIdx == model.ActiveDayIndex);
+
+                    var dayTabBtn = new Button
+                    {
+                        Content = "📆 " + dayObj.DayTitle + " (" + dayObj.DateIso + ")",
+                        Height = 28,
+                        Padding = new Thickness(12, 2, 12, 2),
+                        Margin = new Thickness(0, 0, 6, 0),
+                        Background = isSel ? TacticalConfigPanel.BrushButtonAccent : TacticalConfigPanel.BrushInputBg,
+                        Foreground = isSel ? TacticalConfigPanel.BrushDarkFg : Brushes.White,
+                        BorderBrush = isSel ? TacticalConfigPanel.BrushAccent : TacticalConfigPanel.BrushInputBorder,
+                        BorderThickness = new Thickness(1.2),
+                        FontWeight = FontWeights.Bold,
+                        FontSize = 11,
+                        Cursor = Cursors.Hand
+                    };
+                    dayTabBtn.Click += (_, __) =>
+                    {
+                        model.ActiveDayIndex = capturedIdx;
+                        RebuildOpordForm();
+                    };
+                    daysWrap.Children.Add(dayTabBtn);
+                }
+
+                // Zielony przycisk "+" (Dodaj kolejny dzień operacji)
+                var btnAddDayPlus = CreateTacticalPlusMinusButton(true, BuilderI18n.T("Dodaj kolejny dzień operacji (+1 dzień)", "Add next operation day (+1 day)"), () =>
+                {
+                    DateTime lastDt = DateTime.Today;
+                    if (model.Days.Count > 0 && DateTime.TryParseExact(model.Days.Last().DateIso, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out DateTime parsed))
+                    {
+                        lastDt = parsed.AddDays(1);
+                    }
+                    int nextNum = model.Days.Count + 1;
+                    model.Days.Add(new OpordDayPlanModel
+                    {
+                        DayTitle = BuilderI18n.T("Dzień " + nextNum, "Day " + nextNum),
+                        DateIso = lastDt.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
+                        DaySpecificTasks = BuilderI18n.T("• Zadania i harmonogram dla Dnia " + nextNum + "...", "• Tasks and schedule for Day " + nextNum + "...")
+                    });
+                    model.ActiveDayIndex = model.Days.Count - 1;
+                    PersistModelToAppData(model);
+                    RebuildOpordForm();
+                });
+                daysWrap.Children.Add(btnAddDayPlus);
+
+                // Czerwony przycisk "-" (Usuń aktywny dzień operacji)
+                var btnRemoveDayMinus = CreateTacticalPlusMinusButton(false, BuilderI18n.T("Usuń bieżący dzień operacji", "Remove current operation day"), () =>
+                {
+                    if (model.Days.Count <= 1) return;
+                    model.Days.RemoveAt(model.ActiveDayIndex);
+                    for (int i = 0; i < model.Days.Count; i++)
+                    {
+                        model.Days[i].DayTitle = BuilderI18n.T("Dzień " + (i + 1), "Day " + (i + 1));
+                    }
+                    model.ActiveDayIndex = Math.Clamp(model.ActiveDayIndex - 1, 0, model.Days.Count - 1);
+                    PersistModelToAppData(model);
+                    RebuildOpordForm();
+                });
+                daysWrap.Children.Add(btnRemoveDayMinus);
+
+                daysDock.Children.Add(daysWrap);
+                daysBarBorder.Child = daysDock;
+                mainStack.Children.Add(daysBarBorder);
+
+                // -----------------------------------------------------------------
+                // 0. METADANE NAGŁÓWKA ROZKAZU + PLAN AKTYWNEGO DNIA
+                // -----------------------------------------------------------------
+                var metaCard = CreateSectionCard(BuilderI18n.T(
+                    "0. NAGŁÓWEK ROZKAZU ORAZ HARMONOGRAM DLA: " + activeDay.DayTitle.ToUpperInvariant(),
+                    "0. ORDER HEADER & SCHEDULE FOR: " + activeDay.DayTitle.ToUpperInvariant()));
+                var metaStack = (StackPanel)metaCard.Child;
                 var metaGrid = new UniformGrid { Columns = 4 };
                 metaGrid.Children.Add(CreateLabeledTextBox(BuilderI18n.T("Klasyfikacja", "Classification"), model.Classification, v => { model.Classification = v; PersistModelToAppData(model); }));
-                metaGrid.Children.Add(CreateLabeledTextBox(BuilderI18n.T("Nr Rozkazu / Operacji", "Order / Operation No."), model.OperationNumber, v => { model.OperationNumber = v; PersistModelToAppData(model); }));
+                metaGrid.Children.Add(CreateLabeledTextBox(BuilderI18n.T("Nr Rozkazu / Strzelanki", "Order / Event No."), model.OperationNumber, v => { model.OperationNumber = v; PersistModelToAppData(model); }));
                 metaGrid.Children.Add(CreateLabeledTextBox(BuilderI18n.T("Grupa Data-Czas (DTG)", "Date-Time Group (DTG)"), model.DtgIssued, v => { model.DtgIssued = v; PersistModelToAppData(model); }));
                 metaGrid.Children.Add(CreateLabeledTextBox(BuilderI18n.T("Sztab wydający (HQ)", "Issuing HQ"), model.IssuingHq, v => { model.IssuingHq = v; PersistModelToAppData(model); }));
-                ((StackPanel)metaCard.Child).Children.Add(metaGrid);
+                metaStack.Children.Add(metaGrid);
+
+                metaStack.Children.Add(CreateLabeledMultilineBox(
+                    BuilderI18n.T("Harmonogram i zadania specyficzne dla wybranej zakładki (" + activeDay.DayTitle + " — " + activeDay.DateIso + "):", "Schedule & specific tasks for selected tab (" + activeDay.DayTitle + " — " + activeDay.DateIso + "):"),
+                    activeDay.DaySpecificTasks, 52, v => { activeDay.DaySpecificTasks = v; PersistModelToAppData(model); }));
                 mainStack.Children.Add(metaCard);
 
-                var sec1 = CreateSectionCard(BuilderI18n.T("1. SYTUACJA + DANE POGODOWE I ASTRONOMICZNE METOC (1. SITUATION)", "1. SITUATION & METOC WEATHER / LIGHT INTELLIGENCE"));
+                // -----------------------------------------------------------------
+                // I. SYTUACJA (WG PDF: A. OBSZAR ZAINTERESOWANIA, B. OBSZAR DZIAŁAŃ + METOC + AO Z MAPY, C. WRÓG, D. SOJUSZNICY)
+                // -----------------------------------------------------------------
+                var sec1 = CreateSectionCard(BuilderI18n.T("I. SYTUACJA (1. SITUATION — OBSZAR ZAINTERESOWANIA, TEREN, METOC, WRÓG, SOJUSZNICY)", "I. SITUATION (AOI, TERRAIN, LIVE METOC, ENEMY, FRIENDLY FORCES)"));
                 var sec1Stack = (StackPanel)sec1.Child;
 
-                sec1Stack.Children.Add(CreateLabeledMultilineBox(
-                    BuilderI18n.T("1a. Siły Przeciwnika (Enemy Forces — skład, rozmieszczenie, prawdopodobny zamiar)", "1a. Enemy Forces (Composition, disposition, most likely course of action)"),
-                    model.EnemyForces, 54, v => { model.EnemyForces = v; PersistModelToAppData(model); }));
+                var aoiBoxPanel = CreateLabeledMultilineBox(
+                    BuilderI18n.T("A. Obszar zainteresowania (1. Mapa terenu gry, 2. Opis punktów na mapie POI, 3. Pliki punktów KML / GPX):", "A. Area of Interest (1. Game Map, 2. Map Points / POI description, 3. KML / GPX files):"),
+                    model.AreaOfInterestPoiDesc, 52, v => { model.AreaOfInterestPoiDesc = v; PersistModelToAppData(model); });
+                var aoiTextBox = FindFirstDescendant<TextBox>(aoiBoxPanel);
+                sec1Stack.Children.Add(aoiBoxPanel);
 
-                sec1Stack.Children.Add(CreateLabeledMultilineBox(
-                    BuilderI18n.T("1b. Siły Własne (Friendly Forces — zadanie wyższego szczebla, sąsiedzi, wsparcie)", "1b. Friendly Forces (Higher HQ mission, adjacent units, support)"),
-                    model.FriendlyForces, 54, v => { model.FriendlyForces = v; PersistModelToAppData(model); }));
-
+                // PASEK POBIERANIA DANYCH METOC + AUTOMATYCZNE ZACIĄGANIE WSPÓŁRZĘDNYCH AO Z GENERATORA MAP
                 var metocBar = new Border
                 {
                     Background = new SolidColorBrush(Color.FromRgb(12, 31, 38)),
@@ -850,8 +1279,8 @@ namespace FieldTakHub.Builder.Services
                 metocStack.Children.Add(new TextBlock
                 {
                     Text = BuilderI18n.T(
-                        "🌦️ AUTOMATYCZNY POBIERAK DANYCH METOC (POGODA, WIATR, WILGOTNOŚĆ, OPADY, WSCHÓD/ZACHÓD SŁOŃCA, FAZA KSIĘŻYCA)",
-                        "🌦️ AUTOMATIC METOC FETCHER (WEATHER, WIND, HUMIDITY, PRECIPITATION, SUNRISE/SUNSET, MOON PHASE)"),
+                        "🌦️ B.2. AUTOMATYCZNA PROGNOZA POGODY METOC + AUTOMATYCZNE WSPÓŁRZĘDNE OBSZARU AO Z GENERATORA MAP 1:1",
+                        "🌦️ B.2. AUTOMATIC METOC WEATHER & SUN/MOON + AUTO AO COORDINATES FROM 1:1 MAP STUDIO"),
                     Foreground = TacticalConfigPanel.BrushAccent,
                     FontWeight = FontWeights.Bold,
                     FontSize = 11.5,
@@ -859,27 +1288,34 @@ namespace FieldTakHub.Builder.Services
                 });
 
                 var metocInputsGrid = new Grid { Margin = new Thickness(0, 0, 0, 6) };
-                metocInputsGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(130) });
+                metocInputsGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(125) });
+                metocInputsGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1.0, GridUnitType.Star) });
+                metocInputsGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(95) });
+                metocInputsGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(95) });
                 metocInputsGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1.1, GridUnitType.Star) });
-                metocInputsGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(110) });
-                metocInputsGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(110) });
-                metocInputsGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1.3, GridUnitType.Star) });
+                metocInputsGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1.1, GridUnitType.Star) });
 
-                var dateBoxPanel = CreateLabeledTextBox(BuilderI18n.T("Data operacji (RRRR-MM-DD)", "Date (YYYY-MM-DD)"), model.OperationDateIso, v => { model.OperationDateIso = v; PersistModelToAppData(model); });
+                var dateBoxPanel = CreateLabeledTextBox(
+                    BuilderI18n.T("Data (" + activeDay.DayTitle + ")", "Date (" + activeDay.DayTitle + ")"),
+                    activeDay.DateIso,
+                    v => { activeDay.DateIso = v; model.OperationDateIso = v; PersistModelToAppData(model); });
                 Grid.SetColumn(dateBoxPanel, 0);
                 metocInputsGrid.Children.Add(dateBoxPanel);
 
-                var cityBoxPanel = CreateLabeledTextBox(BuilderI18n.T("Miejscowość / Rejon AO", "Town / AO Location"), model.LocationName, v => { model.LocationName = v; PersistModelToAppData(model); });
+                var cityBoxPanel = CreateLabeledTextBox(
+                    BuilderI18n.T("Miejscowość (puste = AO z Mapy)", "Town (blank = Map AO)"),
+                    model.LocationName,
+                    v => { model.LocationName = v; PersistModelToAppData(model); });
                 var cityTextBox = FindFirstDescendant<TextBox>(cityBoxPanel);
                 Grid.SetColumn(cityBoxPanel, 1);
                 metocInputsGrid.Children.Add(cityBoxPanel);
 
-                var latBoxPanel = CreateLabeledTextBox(BuilderI18n.T("Szer. (Lat °N)", "Latitude (°N)"), model.LocationLat, v => { model.LocationLat = v; PersistModelToAppData(model); });
+                var latBoxPanel = CreateLabeledTextBox("Lat (°N)", model.LocationLat, v => { model.LocationLat = v; PersistModelToAppData(model); });
                 var latTextBox = FindFirstDescendant<TextBox>(latBoxPanel);
                 Grid.SetColumn(latBoxPanel, 2);
                 metocInputsGrid.Children.Add(latBoxPanel);
 
-                var lonBoxPanel = CreateLabeledTextBox(BuilderI18n.T("Dług. (Lon °E)", "Longitude (°E)"), model.LocationLon, v => { model.LocationLon = v; PersistModelToAppData(model); });
+                var lonBoxPanel = CreateLabeledTextBox("Lon (°E)", model.LocationLon, v => { model.LocationLon = v; PersistModelToAppData(model); });
                 var lonTextBox = FindFirstDescendant<TextBox>(lonBoxPanel);
                 Grid.SetColumn(lonBoxPanel, 3);
                 metocInputsGrid.Children.Add(lonBoxPanel);
@@ -887,7 +1323,7 @@ namespace FieldTakHub.Builder.Services
                 TextBox terrainWeatherTextBox = null;
                 var metocStatusText = new TextBlock
                 {
-                    Text = "☀️ Słońce: " + model.MetocSunTimes + "   |   🌙 Księżyc: " + model.MetocMoonPhase + "\n🌡️ Pogoda: " + model.MetocCondition + "   |   💨 Wiatr: " + model.MetocWind,
+                    Text = "☀️ Słońce: " + activeDay.MetocSunTimes + "   |   🌙 Księżyc: " + activeDay.MetocMoonPhase + "\n🌡️ Pogoda: " + activeDay.MetocCondition + "   |   💨 Wiatr: " + activeDay.MetocWind,
                     Foreground = Brushes.White,
                     FontFamily = new FontFamily("Consolas"),
                     FontSize = 10.5,
@@ -895,88 +1331,132 @@ namespace FieldTakHub.Builder.Services
                     Margin = new Thickness(0, 4, 0, 0)
                 };
 
+                async Task ExecuteMetocFetchAsync(bool forceMapAoExtraction)
+                {
+                    double lat = 49.8494;
+                    double lon = 18.8127;
+                    double.TryParse((model.LocationLat ?? "").Replace(',', '.'), NumberStyles.Any, CultureInfo.InvariantCulture, out lat);
+                    double.TryParse((model.LocationLon ?? "").Replace(',', '.'), NumberStyles.Any, CultureInfo.InvariantCulture, out lon);
+
+                    // Jeśli wymuszono pobranie AO z Mapy LUB nie wpisano miejscowości ręcznie -> zaciągnij obszar AO z Generatora Map!
+                    if (forceMapAoExtraction || string.IsNullOrWhiteSpace(model.LocationName))
+                    {
+                        var aoRes = OpordMetocWeatherService.TryExtractAoCenterFromMapStudio(win);
+                        if (aoRes.Found)
+                        {
+                            lat = aoRes.Lat;
+                            lon = aoRes.Lon;
+                            model.LocationLat = lat.ToString("0.0000", CultureInfo.InvariantCulture);
+                            model.LocationLon = lon.ToString("0.0000", CultureInfo.InvariantCulture);
+                            if (string.IsNullOrWhiteSpace(model.LocationName) || forceMapAoExtraction)
+                            {
+                                model.LocationName = aoRes.SourceDescription;
+                            }
+                            if (latTextBox != null) latTextBox.Text = model.LocationLat;
+                            if (lonTextBox != null) lonTextBox.Text = model.LocationLon;
+                            if (cityTextBox != null) cityTextBox.Text = model.LocationName;
+
+                            if (!string.IsNullOrWhiteSpace(aoRes.ExtractedPoiList) && aoiTextBox != null && !model.AreaOfInterestPoiDesc.Contains(aoRes.ExtractedPoiList))
+                            {
+                                model.AreaOfInterestPoiDesc = model.AreaOfInterestPoiDesc.TrimEnd() + "\n" + aoRes.ExtractedPoiList;
+                                aoiTextBox.Text = model.AreaOfInterestPoiDesc;
+                            }
+                        }
+                    }
+                    else
+                    {
+                        var geo = await OpordMetocWeatherService.GeocodeLocationAsync(model.LocationName);
+                        if (geo.Ok)
+                        {
+                            lat = geo.Lat;
+                            lon = geo.Lon;
+                            model.LocationLat = lat.ToString("0.0000", CultureInfo.InvariantCulture);
+                            model.LocationLon = lon.ToString("0.0000", CultureInfo.InvariantCulture);
+                            model.LocationName = geo.DisplayName;
+                            if (latTextBox != null) latTextBox.Text = model.LocationLat;
+                            if (lonTextBox != null) lonTextBox.Text = model.LocationLon;
+                            if (cityTextBox != null) cityTextBox.Text = model.LocationName;
+                        }
+                    }
+
+                    var rep = await OpordMetocWeatherService.FetchMetocReportAsync(lat, lon, activeDay.DateIso, model.LocationName);
+                    activeDay.MetocCondition = rep.ConditionText;
+                    activeDay.MetocTemperature = rep.TempRangeText;
+                    activeDay.MetocWind = rep.WindText;
+                    activeDay.MetocHumidityPrecip = rep.HumidityAndPrecipText;
+                    activeDay.MetocSunTimes = rep.SunTimesText;
+                    activeDay.MetocMoonPhase = rep.MoonPhaseText;
+
+                    model.MetocCondition = rep.ConditionText;
+                    model.MetocTemperature = rep.TempRangeText;
+                    model.MetocWind = rep.WindText;
+                    model.MetocHumidityPrecip = rep.HumidityAndPrecipText;
+                    model.MetocSunTimes = rep.SunTimesText;
+                    model.MetocMoonPhase = rep.MoonPhaseText;
+
+                    metocStatusText.Text =
+                        "☀️ " + rep.SunTimesText + "\n" +
+                        "🌙 " + rep.MoonPhaseText + "\n" +
+                        "🌡️ Temp: " + rep.TempRangeText + "  |  " + rep.HumidityAndPrecipText + "\n" +
+                        "💨 Wiatr: " + rep.WindText;
+
+                    string currentTerrain = (model.TerrainAndWeather ?? "").Trim();
+                    int oldIdx = currentTerrain.IndexOf("🌦️ [", StringComparison.Ordinal);
+                    if (oldIdx >= 0)
+                    {
+                        currentTerrain = currentTerrain.Substring(0, oldIdx).TrimEnd();
+                    }
+                    model.TerrainAndWeather = string.IsNullOrWhiteSpace(currentTerrain)
+                        ? rep.FullTacticalSummary
+                        : (currentTerrain + "\n\n" + rep.FullTacticalSummary);
+
+                    if (terrainWeatherTextBox != null)
+                    {
+                        terrainWeatherTextBox.Text = model.TerrainAndWeather;
+                    }
+                    PersistModelToAppData(model);
+                }
+
+                var btnFetchAoMap = new Button
+                {
+                    Content = BuilderI18n.T("🎯 Pobierz AO z Mapy + METOC", "🎯 Pull Map AO + METOC"),
+                    Height = 28,
+                    VerticalAlignment = VerticalAlignment.Bottom,
+                    Margin = new Thickness(0, 0, 5, 4),
+                    Background = new SolidColorBrush(Color.FromRgb(22, 54, 66)),
+                    Foreground = TacticalConfigPanel.BrushAccent,
+                    BorderBrush = TacticalConfigPanel.BrushAccent,
+                    BorderThickness = new Thickness(1),
+                    FontWeight = FontWeights.Bold,
+                    FontSize = 10,
+                    Cursor = Cursors.Hand
+                };
+                btnFetchAoMap.Click += async (_, __) =>
+                {
+                    btnFetchAoMap.IsEnabled = false;
+                    try { await ExecuteMetocFetchAsync(true); } finally { btnFetchAoMap.IsEnabled = true; }
+                };
+                Grid.SetColumn(btnFetchAoMap, 4);
+                metocInputsGrid.Children.Add(btnFetchAoMap);
+
                 var btnFetchMetoc = new Button
                 {
-                    Content = BuilderI18n.T("🌦️ Pobierz prognozę METOC, Słońce i Księżyc", "🌦️ Fetch Live METOC, Sun & Moon"),
+                    Content = BuilderI18n.T("🌦️ Pobierz Pogodę i Księżyc", "🌦️ Fetch Weather & Moon"),
                     Height = 28,
                     VerticalAlignment = VerticalAlignment.Bottom,
                     Margin = new Thickness(0, 0, 0, 4),
                     Background = TacticalConfigPanel.BrushButtonAccent,
                     Foreground = TacticalConfigPanel.BrushDarkFg,
                     FontWeight = FontWeights.Bold,
-                    FontSize = 10.5,
+                    FontSize = 10,
                     Cursor = Cursors.Hand
                 };
-
                 btnFetchMetoc.Click += async (_, __) =>
                 {
                     btnFetchMetoc.IsEnabled = false;
-                    btnFetchMetoc.Content = BuilderI18n.T("⏳ Pobieranie METOC...", "⏳ Fetching METOC...");
-                    try
-                    {
-                        double lat = 49.8494;
-                        double lon = 18.8127;
-                        double.TryParse((model.LocationLat ?? "").Replace(',', '.'), NumberStyles.Any, CultureInfo.InvariantCulture, out lat);
-                        double.TryParse((model.LocationLon ?? "").Replace(',', '.'), NumberStyles.Any, CultureInfo.InvariantCulture, out lon);
-
-                        if (!string.IsNullOrWhiteSpace(model.LocationName) &&
-                            !model.LocationName.Equals("Rejon Operacji (AO)", StringComparison.OrdinalIgnoreCase))
-                        {
-                            var geo = await OpordMetocWeatherService.GeocodeLocationAsync(model.LocationName);
-                            if (geo.Ok)
-                            {
-                                lat = geo.Lat;
-                                lon = geo.Lon;
-                                model.LocationLat = lat.ToString("0.0000", CultureInfo.InvariantCulture);
-                                model.LocationLon = lon.ToString("0.0000", CultureInfo.InvariantCulture);
-                                model.LocationName = geo.DisplayName;
-                                if (latTextBox != null) latTextBox.Text = model.LocationLat;
-                                if (lonTextBox != null) lonTextBox.Text = model.LocationLon;
-                                if (cityTextBox != null) cityTextBox.Text = model.LocationName;
-                            }
-                        }
-
-                        var rep = await OpordMetocWeatherService.FetchMetocReportAsync(lat, lon, model.OperationDateIso, model.LocationName);
-                        model.MetocCondition = rep.ConditionText;
-                        model.MetocTemperature = rep.TempRangeText;
-                        model.MetocWind = rep.WindText;
-                        model.MetocHumidityPrecip = rep.HumidityAndPrecipText;
-                        model.MetocSunTimes = rep.SunTimesText;
-                        model.MetocMoonPhase = rep.MoonPhaseText;
-
-                        metocStatusText.Text =
-                            "☀️ " + rep.SunTimesText + "\n" +
-                            "🌙 " + rep.MoonPhaseText + "\n" +
-                            "🌡️ Temp: " + rep.TempRangeText + "  |  " + rep.HumidityAndPrecipText + "\n" +
-                            "💨 Wiatr: " + rep.WindText;
-
-                        string currentTerrain = (model.TerrainAndWeather ?? "").Trim();
-                        int oldIdx = currentTerrain.IndexOf("🌦️ [", StringComparison.Ordinal);
-                        if (oldIdx >= 0)
-                        {
-                            currentTerrain = currentTerrain.Substring(0, oldIdx).TrimEnd();
-                        }
-                        model.TerrainAndWeather = string.IsNullOrWhiteSpace(currentTerrain)
-                            ? rep.FullTacticalSummary
-                            : (currentTerrain + "\n\n" + rep.FullTacticalSummary);
-
-                        if (terrainWeatherTextBox != null)
-                        {
-                            terrainWeatherTextBox.Text = model.TerrainAndWeather;
-                        }
-                        PersistModelToAppData(model);
-                    }
-                    catch (Exception ex)
-                    {
-                        metocStatusText.Text = "⚠️ Błąd METOC: " + ex.Message;
-                    }
-                    finally
-                    {
-                        btnFetchMetoc.IsEnabled = true;
-                        btnFetchMetoc.Content = BuilderI18n.T("🌦️ Pobierz prognozę METOC, Słońce i Księżyc", "🌦️ Fetch Live METOC, Sun & Moon");
-                    }
+                    try { await ExecuteMetocFetchAsync(false); } finally { btnFetchMetoc.IsEnabled = true; }
                 };
-                Grid.SetColumn(btnFetchMetoc, 4);
+                Grid.SetColumn(btnFetchMetoc, 5);
                 metocInputsGrid.Children.Add(btnFetchMetoc);
 
                 metocStack.Children.Add(metocInputsGrid);
@@ -985,14 +1465,29 @@ namespace FieldTakHub.Builder.Services
                 sec1Stack.Children.Add(metocBar);
 
                 var terrainBoxPanel = CreateLabeledMultilineBox(
-                    BuilderI18n.T("1c. Teren i Warunki Atmosferyczne (Terrain & Weather — OAKOC + automatyczny raport METOC)", "1c. Terrain & Weather (OAKOC + automatic METOC report)"),
-                    model.TerrainAndWeather, 95, v => { model.TerrainAndWeather = v; PersistModelToAppData(model); });
+                    BuilderI18n.T("B.1 & B.2. Obszar działań — Analiza terenu (wielkość, las/pola/budynki, ukształtowanie, przeszkody) + Pogoda METOC:", "B.1 & B.2. Area of Operations — Terrain analysis (size, cover, elevation, obstacles) + METOC Weather:"),
+                    model.TerrainAndWeather, 82, v => { model.TerrainAndWeather = v; PersistModelToAppData(model); });
                 terrainWeatherTextBox = FindFirstDescendant<TextBox>(terrainBoxPanel);
                 sec1Stack.Children.Add(terrainBoxPanel);
+
+                sec1Stack.Children.Add(CreateLabeledMultilineBox(
+                    BuilderI18n.T("C. Siły wroga (1. Skład, dyspozycja i siła, 2. Lokalizacje i możliwości, 3. Kursy działań wroga — COA):", "C. Enemy Forces (1. Composition & strength, 2. Locations & capabilities, 3. Courses of Action — COA):"),
+                    model.EnemyForces, 64, v => { model.EnemyForces = v; PersistModelToAppData(model); }));
+
+                sec1Stack.Children.Add(CreateLabeledMultilineBox(
+                    BuilderI18n.T("D. Siły przyjazne (1. Misja i zamiar wyższego dowództwa HQ, 2. Misja sąsiednich jednostek):", "D. Friendly Forces (1. Higher HQ mission & intent, 2. Adjacent units mission):"),
+                    model.FriendlyForces, 54, v => { model.FriendlyForces = v; PersistModelToAppData(model); }));
                 mainStack.Children.Add(sec1);
 
-                var sec2 = CreateSectionCard(BuilderI18n.T("2. ZADANIE BOJOWE — KREATOR NATO 5W (2. MISSION)", "2. MISSION — NATO 5W STATEMENT BUILDER"));
+                // -----------------------------------------------------------------
+                // II. MISJA (WG PDF: A. OPIS FABULARNY, B. GŁÓWNE ZADANIE + 5W, C. DODATKOWE ZADANIA)
+                // -----------------------------------------------------------------
+                var sec2 = CreateSectionCard(BuilderI18n.T("II. MISJA (2. MISSION — OPIS FABULARNY, GŁÓWNE ZADANIE 5W, ZADANIA DODATKOWE)", "II. MISSION (LORE, PRIMARY 5W TASK, ADDITIONAL TASKS)"));
                 var sec2Stack = (StackPanel)sec2.Child;
+
+                sec2Stack.Children.Add(CreateLabeledMultilineBox(
+                    BuilderI18n.T("A. Opis fabularny (nieobowiązkowy):", "A. Story / Lore Background (optional):"),
+                    model.MissionLoreDesc, 44, v => { model.MissionLoreDesc = v; PersistModelToAppData(model); }));
 
                 var w5Grid = new UniformGrid { Columns = 5, Margin = new Thickness(0, 0, 0, 6) };
                 TextBox fullMissionBox = null;
@@ -1004,57 +1499,240 @@ namespace FieldTakHub.Builder.Services
                     PersistModelToAppData(model);
                 }
 
-                w5Grid.Children.Add(CreateLabeledTextBox(BuilderI18n.T("KTO (Who)", "WHO (Unit)"), model.MissionWho, v => { model.MissionWho = v; AutoUpdate5W(); }));
-                w5Grid.Children.Add(CreateLabeledTextBox(BuilderI18n.T("CO (What — działanie)", "WHAT (Tactical Task)"), model.MissionWhat, v => { model.MissionWhat = v; AutoUpdate5W(); }));
-                w5Grid.Children.Add(CreateLabeledTextBox(BuilderI18n.T("KIEDY (When — Czas H)", "WHEN (Time / NLT)"), model.MissionWhen, v => { model.MissionWhen = v; AutoUpdate5W(); }));
-                w5Grid.Children.Add(CreateLabeledTextBox(BuilderI18n.T("GDZIE (Where — MGRS/AO)", "WHERE (Grid / Objective)"), model.MissionWhere, v => { model.MissionWhere = v; AutoUpdate5W(); }));
-                w5Grid.Children.Add(CreateLabeledTextBox(BuilderI18n.T("DLACZEGO (Why — Cel)", "WHY (Purpose / In order to)"), model.MissionWhy, v => { model.MissionWhy = v; AutoUpdate5W(); }));
+                w5Grid.Children.Add(CreateLabeledTextBox(BuilderI18n.T("KTO (Oddział)", "WHO (Unit)"), model.MissionWho, v => { model.MissionWho = v; AutoUpdate5W(); }));
+                w5Grid.Children.Add(CreateLabeledTextBox(BuilderI18n.T("CO (Główne zadanie)", "WHAT (Primary Task)"), model.MissionWhat, v => { model.MissionWhat = v; AutoUpdate5W(); }));
+                w5Grid.Children.Add(CreateLabeledTextBox(BuilderI18n.T("KIEDY (Czas)", "WHEN (Time)"), model.MissionWhen, v => { model.MissionWhen = v; AutoUpdate5W(); }));
+                w5Grid.Children.Add(CreateLabeledTextBox(BuilderI18n.T("GDZIE (Sektor / MGRS)", "WHERE (Grid / AO)"), model.MissionWhere, v => { model.MissionWhere = v; AutoUpdate5W(); }));
+                w5Grid.Children.Add(CreateLabeledTextBox(BuilderI18n.T("DLACZEGO (Cel)", "WHY (Purpose)"), model.MissionWhy, v => { model.MissionWhy = v; AutoUpdate5W(); }));
                 sec2Stack.Children.Add(w5Grid);
 
                 var fullMissionPanel = CreateLabeledMultilineBox(
-                    BuilderI18n.T("Pełne brzmienie zadania (2. MISSION — generowane automatycznie z pól 5W lub edytowalne ręcznie):", "Full Mission Statement (2. MISSION — auto-generated from 5W or manually editable):"),
-                    model.MissionFullStatement, 48, v => { model.MissionFullStatement = v; PersistModelToAppData(model); });
+                    BuilderI18n.T("B. Główne zadanie (np. zbieranie kodów / utrzymanie sektora):", "B. Primary Mission Statement:"),
+                    model.MissionFullStatement, 46, v => { model.MissionFullStatement = v; PersistModelToAppData(model); });
                 fullMissionBox = FindFirstDescendant<TextBox>(fullMissionPanel);
                 sec2Stack.Children.Add(fullMissionPanel);
+
+                sec2Stack.Children.Add(CreateLabeledMultilineBox(
+                    BuilderI18n.T("C. Dodatkowe zadania (lista zadań — szczegółowa analiza w Załączniku 2 na dole):", "C. Additional Tasks (task list — detailed analysis in Annex 2 below):"),
+                    model.AdditionalTasksSummary, 50, v => { model.AdditionalTasksSummary = v; PersistModelToAppData(model); }));
                 mainStack.Children.Add(sec2);
 
-                var sec3 = CreateSectionCard(BuilderI18n.T("3. REALIZACJA (3. EXECUTION)", "3. EXECUTION"));
+                // -----------------------------------------------------------------
+                // III. WYKONANIE (ZAMIAR, PRIORYTETY, ŁAŃCUCH DOWODZENIA, TABELA ODDZIAŁU +/-, ŁĄCZNOŚĆ, SARNEG, LECZENIE)
+                // -----------------------------------------------------------------
+                var sec3 = CreateSectionCard(BuilderI18n.T("III. WYKONANIE (3. EXECUTION — ZAMIAR, STYL DZIAŁANIA, TABELA SKŁADU I RÓL, ŁĄCZNOŚĆ, SARNEG)", "III. EXECUTION (INTENT, STYLE OF ACTION, SQUAD ROSTER TABLE, COMMS, SARNEG CRYPTO)"));
                 var sec3Stack = (StackPanel)sec3.Child;
-                sec3Stack.Children.Add(CreateLabeledMultilineBox(
-                    BuilderI18n.T("3a. Zamysł Dowódcy (Commander's Intent — Cel, Kluczowe Zadania, Stan Końcowy / End State)", "3a. Commander's Intent (Purpose, Key Tasks, End State)"),
-                    model.CommandersIntent, 58, v => { model.CommandersIntent = v; PersistModelToAppData(model); }));
-                sec3Stack.Children.Add(CreateLabeledMultilineBox(
-                    BuilderI18n.T("3b. Koncepcja Działań — Fazy Operacji (Concept of Operations)", "3b. Concept of Operations (Phases of the Operation)"),
-                    model.ConceptOfOperations, 68, v => { model.ConceptOfOperations = v; PersistModelToAppData(model); }));
-                sec3Stack.Children.Add(CreateLabeledMultilineBox(
-                    BuilderI18n.T("3c. Zadania dla Pododdziałów (Tasks to Subordinate Units — ALFA, BRAVO, RECON, QRF)", "3c. Tasks to Subordinate Units (ALFA, BRAVO, RECON, QRF)"),
-                    model.TasksToSubordinateUnits, 68, v => { model.TasksToSubordinateUnits = v; PersistModelToAppData(model); }));
-                sec3Stack.Children.Add(CreateLabeledMultilineBox(
-                    BuilderI18n.T("3d. Wytyczne Koordynacyjne i Zasady Użycia Siły (Coordinating Instructions & ROE)", "3d. Coordinating Instructions & Rules of Engagement (ROE)"),
-                    model.CoordinatingAndRoe, 58, v => { model.CoordinatingAndRoe = v; PersistModelToAppData(model); }));
-                mainStack.Children.Add(sec3);
 
-                var sec4 = CreateSectionCard(BuilderI18n.T("4. ZABEZPIECZENIE LOGISTYCZNE I MEDYCZNE (4. SUSTAINMENT)", "4. SUSTAINMENT (SERVICE & SUPPORT)"));
-                var sec4Stack = (StackPanel)sec4.Child;
-                sec4Stack.Children.Add(CreateLabeledMultilineBox(
-                    BuilderI18n.T("4a. Ewakuacja Medyczna (MEDEVAC / Zasady Medyka / Przycisk SOS MGRS)", "4a. Medical Evacuation (MEDEVAC / Medic Rules / SOS MGRS Button)"),
-                    model.MedevacRules, 52, v => { model.MedevacRules = v; PersistModelToAppData(model); }));
-                sec4Stack.Children.Add(CreateLabeledMultilineBox(
-                    BuilderI18n.T("4b. Respawn / FOB, Zaopatrzenie, Limity Amunicji i Pirotechniki", "4b. Respawn / FOB, Resupply, Ammo & Pyro Limits"),
-                    model.RespawnAndSupply, 52, v => { model.RespawnAndSupply = v; PersistModelToAppData(model); }));
-                mainStack.Children.Add(sec4);
+                sec3Stack.Children.Add(CreateLabeledMultilineBox(
+                    BuilderI18n.T("A. Zamiar dowódcy (Cel wyjazdu: wygrana / dobra zabawa / trening taktyczny / priorytet):", "A. Commander's Intent (Primary mindset & goal of the operation):"),
+                    model.CommandersIntent, 48, v => { model.CommandersIntent = v; PersistModelToAppData(model); }));
 
-                var sec5 = CreateSectionCard(BuilderI18n.T("5. DOWODZENIE I ŁĄCZNOŚĆ (5. COMMAND & SIGNAL — AUTO-SYNC Z GENERATORA STRON)", "5. COMMAND & SIGNAL (AUTO-SYNCED FROM FACTION GENERATOR)"));
-                var sec5Stack = (StackPanel)sec5.Child;
+                sec3Stack.Children.Add(CreateLabeledMultilineBox(
+                    BuilderI18n.T("B. Priorytety i styl działania (Czy unikamy kontaktu i zrywamy, czy walczymy? Warunki podjęcia walki):", "B. Priorities & Style of Action (Avoid contact & break vs engage; engagement criteria):"),
+                    model.ConceptOfOperations, 54, v => { model.ConceptOfOperations = v; PersistModelToAppData(model); }));
 
-                var cmdGrid = new UniformGrid { Columns = 2, Margin = new Thickness(0, 0, 0, 6) };
-                cmdGrid.Children.Add(CreateLabeledTextBox(
-                    BuilderI18n.T("5a. Łańcuch Dowodzenia (Succession of Command)", "5a. Succession of Command"),
+                sec3Stack.Children.Add(CreateLabeledTextBox(
+                    BuilderI18n.T("C. Łańcuch dowodzenia (Dowódca -> Zastępca 1 -> Zastępca 2):", "C. Chain of Command (Commander -> Deputy 1 -> Deputy 2):"),
                     model.SuccessionOfCommand, v => { model.SuccessionOfCommand = v; PersistModelToAppData(model); }));
-                cmdGrid.Children.Add(CreateLabeledTextBox(
-                    BuilderI18n.T("5b. Hasło i Odzew (Challenge & Password / Kombinacja)", "5b. Challenge & Password / Number Combination"),
-                    model.ChallengeAndPassword, v => { model.ChallengeAndPassword = v; PersistModelToAppData(model); }));
-                sec5Stack.Children.Add(cmdGrid);
+
+                // -----------------------------------------------------------------
+                // III.D OPCJONALNA TABELA SKŁADU ODDZIAŁU, RÓL I SPRZĘTU (PRZEŁĄCZNIK + ZIELONY "+" I CZERWONY "-")
+                // -----------------------------------------------------------------
+                var rosterCard = new Border
+                {
+                    Background = new SolidColorBrush(Color.FromRgb(10, 24, 30)),
+                    BorderBrush = TacticalConfigPanel.BrushAccent,
+                    BorderThickness = new Thickness(1.5),
+                    CornerRadius = new CornerRadius(8),
+                    Padding = new Thickness(12, 10, 12, 10),
+                    Margin = new Thickness(0, 6, 0, 10)
+                };
+                var rosterOuterStack = new StackPanel();
+
+                var rosterHeaderDock = new DockPanel { Margin = new Thickness(0, 0, 0, 6) };
+                var rosterToggleCheck = new CheckBox
+                {
+                    IsChecked = model.EnableSquadRosterTable,
+                    Content = BuilderI18n.T(
+                        "  D. Aktywuj Tabelę Składu Oddziału, Podziału Ról i Sprzętu (Operator/Zespół | Rola 1 | Rola 2 | Broń/Sprzęt)",
+                        "  D. Enable Squad Roster, Roles & Equipment Table (Operator/Team | Role 1 | Role 2 | Weapon/Gear)"),
+                    Foreground = TacticalConfigPanel.BrushAccent,
+                    FontWeight = FontWeights.Bold,
+                    FontSize = 11.5,
+                    VerticalAlignment = VerticalAlignment.Center,
+                    Cursor = Cursors.Hand
+                };
+                rosterHeaderDock.Children.Add(rosterToggleCheck);
+
+                var rosterButtonsPanel = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
+                DockPanel.SetDock(rosterButtonsPanel, Dock.Right);
+
+                var btnAddOperatorPlus = CreateTacticalPlusMinusButton(true, BuilderI18n.T("Dodaj wiersz Operatora / Zespołu (+)", "Add Operator / Team row (+)"), () =>
+                {
+                    int nextNum = model.SquadRoster.Count + 1;
+                    model.SquadRoster.Add(new OpordRosterRow
+                    {
+                        OperatorOrTeam = "ALFA-" + nextNum,
+                        PrimaryRole = "Czujka",
+                        SecondaryRole = "Tragarz",
+                        WeaponAndGear = "Karabinek szturmowy + Radio"
+                    });
+                    PersistModelToAppData(model);
+                    RebuildOpordForm();
+                });
+                rosterButtonsPanel.Children.Add(btnAddOperatorPlus);
+
+                var btnRemoveLastOperatorMinus = CreateTacticalPlusMinusButton(false, BuilderI18n.T("Usuń ostatni wiersz tabeli (-)", "Remove last table row (-)"), () =>
+                {
+                    if (model.SquadRoster.Count > 0)
+                    {
+                        model.SquadRoster.RemoveAt(model.SquadRoster.Count - 1);
+                        PersistModelToAppData(model);
+                        RebuildOpordForm();
+                    }
+                });
+                rosterButtonsPanel.Children.Add(btnRemoveLastOperatorMinus);
+                rosterHeaderDock.Children.Add(rosterButtonsPanel);
+                rosterOuterStack.Children.Add(rosterHeaderDock);
+
+                var rosterTableContainer = new StackPanel
+                {
+                    Visibility = model.EnableSquadRosterTable ? Visibility.Visible : Visibility.Collapsed
+                };
+
+                rosterToggleCheck.Checked += (_, __) =>
+                {
+                    model.EnableSquadRosterTable = true;
+                    rosterTableContainer.Visibility = Visibility.Visible;
+                    PersistModelToAppData(model);
+                };
+                rosterToggleCheck.Unchecked += (_, __) =>
+                {
+                    model.EnableSquadRosterTable = false;
+                    rosterTableContainer.Visibility = Visibility.Collapsed;
+                    PersistModelToAppData(model);
+                };
+
+                // Nagłówki kolumn tabeli składu oddziału
+                var colHdrGrid = new Grid { Margin = new Thickness(0, 2, 0, 4) };
+                colHdrGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1.0, GridUnitType.Star) });
+                colHdrGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1.15, GridUnitType.Star) });
+                colHdrGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1.15, GridUnitType.Star) });
+                colHdrGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1.5, GridUnitType.Star) });
+                colHdrGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(36) });
+
+                string[] colNames = new[]
+                {
+                    BuilderI18n.T("Operator / Zespół (Ksywa)", "Operator / Team (Callsign)"),
+                    BuilderI18n.T("Rola 1 (Załącznik 1)", "Primary Role (Annex 1)"),
+                    BuilderI18n.T("Rola 2 (Opcjonalnie)", "Secondary Role (Optional)"),
+                    BuilderI18n.T("Typ broni i sprzęt (Szturm / DMR / Snajper)", "Weapon Type & Equipment"),
+                    ""
+                };
+                for (int c = 0; c < colNames.Length; c++)
+                {
+                    var tb = new TextBlock
+                    {
+                        Text = colNames[c],
+                        Foreground = TacticalConfigPanel.BrushMutedText,
+                        FontSize = 10,
+                        FontWeight = FontWeights.Bold
+                    };
+                    Grid.SetColumn(tb, c);
+                    colHdrGrid.Children.Add(tb);
+                }
+                rosterTableContainer.Children.Add(colHdrGrid);
+
+                string[] roleOptions = MilsimRolesCatalog.Select(r => r.RoleName).Concat(new[] { "Szturmowiec", "Strzelec wyborowy (DMR)", "Snajper", "Wsparcie (KM)", "Brak" }).ToArray();
+
+                for (int rIdx = 0; rIdx < model.SquadRoster.Count; rIdx++)
+                {
+                    int capturedRowIdx = rIdx;
+                    var rowModel = model.SquadRoster[rIdx];
+
+                    var rowGrid = new Grid { Margin = new Thickness(0, 0, 0, 4) };
+                    rowGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1.0, GridUnitType.Star) });
+                    rowGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1.15, GridUnitType.Star) });
+                    rowGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1.15, GridUnitType.Star) });
+                    rowGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1.5, GridUnitType.Star) });
+                    rowGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(36) });
+
+                    var tbOp = CreateCompactGridTextBox(rowModel.OperatorOrTeam, v => { rowModel.OperatorOrTeam = v; PersistModelToAppData(model); });
+                    Grid.SetColumn(tbOp, 0);
+                    rowGrid.Children.Add(tbOp);
+
+                    var cbRole1 = CreateEditableRoleComboBox(win, roleOptions, rowModel.PrimaryRole, v => { rowModel.PrimaryRole = v; PersistModelToAppData(model); });
+                    Grid.SetColumn(cbRole1, 1);
+                    rowGrid.Children.Add(cbRole1);
+
+                    var cbRole2 = CreateEditableRoleComboBox(win, roleOptions, rowModel.SecondaryRole, v => { rowModel.SecondaryRole = v; PersistModelToAppData(model); });
+                    Grid.SetColumn(cbRole2, 2);
+                    rowGrid.Children.Add(cbRole2);
+
+                    var tbGear = CreateCompactGridTextBox(rowModel.WeaponAndGear, v => { rowModel.WeaponAndGear = v; PersistModelToAppData(model); });
+                    Grid.SetColumn(tbGear, 3);
+                    rowGrid.Children.Add(tbGear);
+
+                    var btnDelRow = CreateTacticalPlusMinusButton(false, BuilderI18n.T("Usuń ten wiersz (-)", "Remove this row (-)"), () =>
+                    {
+                        model.SquadRoster.RemoveAt(capturedRowIdx);
+                        PersistModelToAppData(model);
+                        RebuildOpordForm();
+                    });
+                    Grid.SetColumn(btnDelRow, 4);
+                    rowGrid.Children.Add(btnDelRow);
+
+                    rosterTableContainer.Children.Add(rowGrid);
+                }
+
+                rosterOuterStack.Children.Add(rosterTableContainer);
+                rosterCard.Child = rosterOuterStack;
+                sec3Stack.Children.Add(rosterCard);
+
+                // -----------------------------------------------------------------
+                // III.E TABELA ŁĄCZNOŚCI (AUTO-SYNC Z GENERATORA STRON + KANAŁ GŁÓWNY / ZAPASOWY / HQ)
+                // -----------------------------------------------------------------
+                var commsHeaderDock = new DockPanel { Margin = new Thickness(0, 4, 0, 4) };
+                commsHeaderDock.Children.Add(new TextBlock
+                {
+                    Text = BuilderI18n.T(
+                        "E. Tabela łączności (Kanał główny, zapasowy, HQ + automatyczna lista z Generatora Stron):",
+                        "E. Communications Table (Primary, Backup, HQ + live channels from Faction Generator):"),
+                    Foreground = TacticalConfigPanel.BrushAccent,
+                    FontWeight = FontWeights.Bold,
+                    FontSize = 11.5,
+                    VerticalAlignment = VerticalAlignment.Center
+                });
+
+                var btnSyncRadioNow = new Button
+                {
+                    Content = BuilderI18n.T("🔄 Odśwież częstotliwości z Generatora Stron", "🔄 Sync Frequencies from Faction Generator"),
+                    Height = 26,
+                    Padding = new Thickness(10, 2, 10, 2),
+                    HorizontalAlignment = HorizontalAlignment.Right,
+                    Background = new SolidColorBrush(Color.FromRgb(18, 48, 58)),
+                    Foreground = TacticalConfigPanel.BrushAccent,
+                    BorderBrush = TacticalConfigPanel.BrushAccent,
+                    BorderThickness = new Thickness(1),
+                    FontWeight = FontWeights.Bold,
+                    FontSize = 10,
+                    Cursor = Cursors.Hand
+                };
+                DockPanel.SetDock(btnSyncRadioNow, Dock.Right);
+                btnSyncRadioNow.Click += (_, __) =>
+                {
+                    SyncModelRadioChannelsFromFactionGenerator(win, _activeOpordFaction, model, forceOverwrite: true);
+                    PersistModelToAppData(model);
+                    RebuildOpordForm();
+                };
+                commsHeaderDock.Children.Add(btnSyncRadioNow);
+                sec3Stack.Children.Add(commsHeaderDock);
+
+                var radio3Grid = new UniformGrid { Columns = 3, Margin = new Thickness(0, 0, 0, 6) };
+                radio3Grid.Children.Add(CreateLabeledTextBox(BuilderI18n.T("Kanał główny", "Primary Channel"), model.PrimaryRadioFreq, v => { model.PrimaryRadioFreq = v; PersistModelToAppData(model); }));
+                radio3Grid.Children.Add(CreateLabeledTextBox(BuilderI18n.T("Kanał zapasowy", "Backup Channel"), model.BackupRadioFreq, v => { model.BackupRadioFreq = v; PersistModelToAppData(model); }));
+                radio3Grid.Children.Add(CreateLabeledTextBox(BuilderI18n.T("Kanał HQ (Sztab)", "HQ Channel"), model.HqRadioFreq, v => { model.HqRadioFreq = v; PersistModelToAppData(model); }));
+                sec3Stack.Children.Add(radio3Grid);
 
                 var liveSignalInfo = new Border
                 {
@@ -1062,18 +1740,115 @@ namespace FieldTakHub.Builder.Services
                     BorderBrush = TacticalConfigPanel.BrushAccent,
                     BorderThickness = new Thickness(1),
                     CornerRadius = new CornerRadius(8),
-                    Padding = new Thickness(12, 10, 12, 10)
+                    Padding = new Thickness(12, 8, 12, 8),
+                    Margin = new Thickness(0, 0, 0, 8)
                 };
                 liveSignalInfo.Child = new TextBlock
                 {
                     Text = BuildLiveSignalSummaryText(win, _activeOpordFaction),
                     Foreground = TacticalConfigPanel.BrushAccent,
                     FontFamily = new FontFamily("Consolas"),
-                    FontSize = 11,
+                    FontSize = 10.5,
                     TextWrapping = TextWrapping.Wrap
                 };
-                sec5Stack.Children.Add(liveSignalInfo);
-                mainStack.Children.Add(sec5);
+                sec3Stack.Children.Add(liveSignalInfo);
+
+                // -----------------------------------------------------------------
+                // III.F SYGNAŁY, KRYPTONIMY CELÓW, TABELA KRYPTO SARNEG (0-9) I HASŁA ROZPOZNAWCZE
+                // -----------------------------------------------------------------
+                sec3Stack.Children.Add(CreateLabeledTextBox(
+                    BuilderI18n.T("F.1. Kryptonimy celów i punktów na mapie:", "F.1. Objective & Waypoint Code Names:"),
+                    model.TargetCodeNames, v => { model.TargetCodeNames = v; PersistModelToAppData(model); }));
+
+                var sarnegCard = new Border
+                {
+                    Background = new SolidColorBrush(Color.FromRgb(10, 24, 30)),
+                    BorderBrush = new SolidColorBrush(Color.FromRgb(250, 208, 44)),
+                    BorderThickness = new Thickness(1.2),
+                    CornerRadius = new CornerRadius(8),
+                    Padding = new Thickness(12, 8, 12, 8),
+                    Margin = new Thickness(0, 4, 0, 8)
+                };
+                var sarnegStack = new StackPanel();
+                var sarnegTopDock = new DockPanel { Margin = new Thickness(0, 0, 0, 6) };
+                sarnegTopDock.Children.Add(new TextBlock
+                {
+                    Text = BuilderI18n.T(
+                        "🔐 F.2. TABELA KRYPTO SARNEG (SZYFROWANIE WSPÓŁRZĘDNYCH 0–9) + SŁOWA KODOWE / PRZYMUSU",
+                        "🔐 F.2. SARNEG CRYPTO TABLE (0–9 GRID ENCRYPTION) + CODEWORDS & DURESS WORDS"),
+                    Foreground = new SolidColorBrush(Color.FromRgb(250, 208, 44)),
+                    FontWeight = FontWeights.Bold,
+                    FontSize = 11,
+                    VerticalAlignment = VerticalAlignment.Center
+                });
+
+                var sarnegPreviewLabel = new TextBlock
+                {
+                    Text = FormatSarnegMatrixPreview(model.SarnegKeyWord10),
+                    Foreground = Brushes.White,
+                    FontFamily = new FontFamily("Consolas"),
+                    FontWeight = FontWeights.Bold,
+                    FontSize = 12,
+                    Margin = new Thickness(0, 4, 0, 6)
+                };
+
+                var sarnegKeyBoxPanel = CreateLabeledTextBox(
+                    BuilderI18n.T("10-literowe słowo-klucz SARNEG (dla cyfr 0, 1, 2, 3, 4, 5, 6, 7, 8, 9):", "10-letter SARNEG Key Word (for digits 0..9):"),
+                    model.SarnegKeyWord10,
+                    v =>
+                    {
+                        model.SarnegKeyWord10 = v.ToUpperInvariant();
+                        sarnegPreviewLabel.Text = FormatSarnegMatrixPreview(model.SarnegKeyWord10);
+                        PersistModelToAppData(model);
+                    });
+
+                sarnegStack.Children.Add(sarnegTopDock);
+                sarnegStack.Children.Add(sarnegKeyBoxPanel);
+                sarnegStack.Children.Add(sarnegPreviewLabel);
+                sarnegCard.Child = sarnegStack;
+                sec3Stack.Children.Add(sarnegCard);
+
+                sec3Stack.Children.Add(CreateLabeledMultilineBox(
+                    BuilderI18n.T("F.3. Hasła rozpoznawcze — a) werbalne (wywołanie - odpowiedź - potwierdzenie), b) niewerbalne (wywołanie - odzew):", "F.3. Challenge & Password — a) verbal (challenge - reply - confirmation), b) non-verbal:"),
+                    model.ChallengeAndPassword, 48, v => { model.ChallengeAndPassword = v; PersistModelToAppData(model); }));
+
+                sec3Stack.Children.Add(CreateLabeledMultilineBox(
+                    BuilderI18n.T("G. Leczenie (sposób leczenia, ilość i działanie respów, zasady MEDEVAC / przycisk SOS MGRS):", "G. Medical & Respawn Rules (treatment method, respawn count & rules, SOS MGRS button):"),
+                    model.MedevacRules, 52, v => { model.MedevacRules = v; PersistModelToAppData(model); }));
+
+                mainStack.Children.Add(sec3);
+
+                // -----------------------------------------------------------------
+                // IV. LOGISTYKA (WG PDF: STYL WYPOSAŻENIA, SZPEJLISTA, WYPOSAŻENIE SPECJALNE, DOJAZD, REGULAMIN)
+                // -----------------------------------------------------------------
+                var sec4 = CreateSectionCard(BuilderI18n.T("IV. LOGISTYKA (4. LOGISTICS — STYL WYPOSAŻENIA, SZPEJLISTA, SPRZĘT SPECJALNY, DOJAZD, REGULAMIN)", "IV. LOGISTICS (LOADOUT STYLE, GEAR CHECKLIST, SPECIAL GEAR, TRAVEL/PARKING, GAME RULES)"));
+                var sec4Stack = (StackPanel)sec4.Child;
+
+                sec4Stack.Children.Add(CreateLabeledTextBox(
+                    BuilderI18n.T("A. Styl wyposażenia (na lekko / na 12h w terenie / na nocleg w terenie / inne):", "A. Loadout Style (light / 12h field / overnight / other):"),
+                    model.RespawnAndSupply, v => { model.RespawnAndSupply = v; PersistModelToAppData(model); }));
+
+                sec4Stack.Children.Add(CreateLabeledMultilineBox(
+                    BuilderI18n.T("B. Wyposażenie oddziału (SZPEJLISTA obowiązkowa):", "B. Squad Equipment Checklist (SZPEJLISTA):"),
+                    model.SquadGearChecklist, 50, v => { model.SquadGearChecklist = v; PersistModelToAppData(model); }));
+
+                sec4Stack.Children.Add(CreateLabeledMultilineBox(
+                    BuilderI18n.T("C. Wyposażenie specjalne (np. RPG przydzielone ze sztabu, przedmioty fabularne do przygotowania):", "C. Special Equipment (e.g., HQ-assigned RPG, mission props):"),
+                    model.SpecialEquipment, 46, v => { model.SpecialEquipment = v; PersistModelToAppData(model); }));
+
+                sec4Stack.Children.Add(CreateLabeledMultilineBox(
+                    BuilderI18n.T("D. Dojazd (1. Parking, 2. Odległość z parkingu na miejsce gry, 3. Transport: kto z kim):", "D. Travel & Parking (1. Parking location, 2. Distance to AO, 3. Vehicle allocation):"),
+                    model.TravelAndParking, 54, v => { model.TravelAndParking = v; PersistModelToAppData(model); }));
+
+                sec4Stack.Children.Add(CreateLabeledTextBox(
+                    BuilderI18n.T("E. Regulamin gry (link):", "E. Game Rules (URL link):"),
+                    model.GameRulesLink, v => { model.GameRulesLink = v; PersistModelToAppData(model); }));
+
+                sec4Stack.Children.Add(CreateLabeledMultilineBox(
+                    BuilderI18n.T("Załącznik 2. Szczegółowe opracowanie zadań dodatkowych:", "Annex 2. Detailed Mission Tasks Breakdown:"),
+                    model.Annex2TasksAnalysis, 54, v => { model.Annex2TasksAnalysis = v; PersistModelToAppData(model); }));
+
+                mainStack.Children.Add(sec4);
             }
 
             RebuildOpordForm();
@@ -1082,10 +1857,54 @@ namespace FieldTakHub.Builder.Services
             return rootBorder;
         }
 
+        private static void SyncModelRadioChannelsFromFactionGenerator(Window win, string factionName, OpordParagraphModel model, bool forceOverwrite = false)
+        {
+            var facJson = TryGetFactionJsonObject(win, factionName);
+            if (facJson == null) return;
+
+            var vArr = (facJson["VoiceChannels"] ?? facJson["voiceChannels"]) as JsonArray;
+            if (vArr != null && vArr.Count > 0)
+            {
+                for (int i = 0; i < vArr.Count; i++)
+                {
+                    if (vArr[i] is JsonObject vo)
+                    {
+                        string role = vo["roleName"]?.ToString() ?? vo["RoleName"]?.ToString() ?? "";
+                        string band = vo["bandType"]?.ToString() ?? vo["BandType"]?.ToString() ?? "PMR";
+                        string freq = vo["freqMhz"]?.ToString() ?? vo["FreqMhz"]?.ToString() ?? "";
+                        string tone = vo["toneOrCode"]?.ToString() ?? vo["ToneOrCode"]?.ToString() ?? "";
+                        string formatted = string.Format("{0} [{1}] ({2})", freq, band, tone);
+
+                        if (i == 0 && (forceOverwrite || model.PrimaryRadioFreq.Contains("446.00625")))
+                            model.PrimaryRadioFreq = role + ": " + formatted;
+                        else if (i == 1 && (forceOverwrite || model.BackupRadioFreq.Contains("446.03125")))
+                            model.BackupRadioFreq = role + ": " + formatted;
+                        else if (i == 2 && (forceOverwrite || model.HqRadioFreq.Contains("446.09375")))
+                            model.HqRadioFreq = role + ": " + formatted;
+                    }
+                }
+            }
+        }
+
+        private static string FormatSarnegMatrixPreview(string key10)
+        {
+            string clean = (key10 ?? "ZLEARSTWOK").Trim().ToUpperInvariant().PadRight(10, 'X').Substring(0, 10);
+            var sbTop = new StringBuilder("LITERA SARNEG:  ");
+            var sbBot = new StringBuilder("CYFRA (0 - 9):  ");
+            for (int i = 0; i < 10; i++)
+            {
+                sbTop.Append("| ").Append(clean[i]).Append(' ');
+                sbBot.Append("| ").Append(i).Append(' ');
+            }
+            sbTop.Append('|');
+            sbBot.Append('|');
+            return sbTop + "\n" + sbBot;
+        }
+
         private static string BuildLiveSignalSummaryText(Window win, string factionName)
         {
             var facJson = TryGetFactionJsonObject(win, factionName);
-            string chName = facJson?["ChannelName"]?.ToString() ?? (factionName + "-TAK");
+            string chName = facJson?["ChannelName"]?.ToString() ?? (factionName + "-MESH");
             string region = facJson?["LoraRegion"]?.ToString() ?? "EU_868";
             string preset = facJson?["LoraModemPreset"]?.ToString() ?? "SHORT_FAST";
             string ots = facJson?["OtsHost"]?.ToString() ?? "";
@@ -1093,188 +1912,549 @@ namespace FieldTakHub.Builder.Services
 
             var sb = new StringBuilder();
             sb.AppendLine(BuilderI18n.T(
-                "📡 [AUTOMATYCZNIE POBRANE DANE ŁĄCZNOŚCI STRONY: " + factionName + "]",
-                "📡 [AUTO-SYNCED SIGNAL DATA FOR FACTION: " + factionName + "]"));
+                "📡 [ZACIĄGNIĘTE Z GENERATORA STRON KANAŁY RADIOWE I MESHTASTIC DLA: " + factionName + "]",
+                "📡 [SYNCED RADIO & MESHTASTIC CHANNELS FROM FACTION GENERATOR FOR: " + factionName + "]"));
             sb.AppendLine("• Meshtastic LoRa: Kanał '" + chName + "'  |  Region: " + region + "  |  Preset: " + preset + "  |  Szyfrowanie: AES-256 PSK");
             sb.AppendLine("• Serwer ATAK (OpenTAKServer): " + (string.IsNullOrWhiteSpace(ots) ? "Tryb lokalny / Off-Grid Mesh" : ots));
-            sb.AppendLine("• Telefon alarmowy ORGA / MEDEVAC (Przycisk SOS MGRS): " + (string.IsNullOrWhiteSpace(phone) ? "Brak / 112" : phone));
+            sb.AppendLine("• Telefon alarmowy ORGA / MEDEVAC (SOS MGRS): " + (string.IsNullOrWhiteSpace(phone) ? "Brak / 112" : phone));
 
-            if (facJson?["VoiceChannels"] is JsonArray vArr && vArr.Count > 0)
+            var vArr = (facJson?["VoiceChannels"] ?? facJson?["voiceChannels"]) as JsonArray;
+            if (vArr != null && vArr.Count > 0)
             {
-                sb.AppendLine(BuilderI18n.T("• Tabela Kanałów Głosowych (Ściąga Operacyjna):", "• Voice Radio Channels (Field Cheat Sheet):"));
+                sb.AppendLine(BuilderI18n.T("• Wszystkie kanały głosowe zdefiniowane w Generatorze Stron:", "• All voice channels defined in Faction Generator:"));
                 foreach (var vo in vArr.OfType<JsonObject>())
                 {
-                    string r = vo["roleName"]?.ToString() ?? "Kanał";
-                    string b = vo["bandType"]?.ToString() ?? "PMR";
-                    string f = vo["freqMhz"]?.ToString() ?? "-";
-                    string t = vo["toneOrCode"]?.ToString() ?? "-";
+                    string r = vo["roleName"]?.ToString() ?? vo["RoleName"]?.ToString() ?? "Kanał";
+                    string b = vo["bandType"]?.ToString() ?? vo["BandType"]?.ToString() ?? "PMR";
+                    string f = vo["freqMhz"]?.ToString() ?? vo["FreqMhz"]?.ToString() ?? "-";
+                    string t = vo["toneOrCode"]?.ToString() ?? vo["ToneOrCode"]?.ToString() ?? "-";
                     sb.AppendLine("   - " + r + " [" + b + "]: " + f + "  (Ton/Kod: " + t + ")");
                 }
             }
             return sb.ToString().TrimEnd();
         }
 
-        private static JsonObject TryGetFactionJsonObject(Window win, string factionName)
+        // =========================================================================
+        // 6. SERWER DYSTRYBUCJI OPORD PRZEZ HOTSPOT WI-FI / LAN (:8769) + KOD QR
+        // =========================================================================
+        public static string EnsureOpordLanServerStarted(Window win)
+        {
+            _lastActiveWindowRef = win;
+            if (!_opordLanServerRunning || _opordLanListener == null)
+            {
+                foreach (int port in new[] { 8769, 8770, 8771 })
+                {
+                    try
+                    {
+                        var listener = new TcpListener(IPAddress.Any, port);
+                        listener.Start();
+                        _opordLanListener = listener;
+                        _opordLanPort = port;
+                        _opordLanServerRunning = true;
+                        _ = Task.Run(() => AcceptOpordLanClientsLoop(listener));
+                        break;
+                    }
+                    catch { }
+                }
+            }
+
+            string ip = GetLocalLanIp();
+            return "http://" + ip + ":" + _opordLanPort;
+        }
+
+        private static async Task AcceptOpordLanClientsLoop(TcpListener listener)
+        {
+            while (_opordLanServerRunning)
+            {
+                try
+                {
+                    var client = await listener.AcceptTcpClientAsync();
+                    _ = Task.Run(() => HandleOpordLanHttpClient(client));
+                }
+                catch
+                {
+                    if (!_opordLanServerRunning) break;
+                }
+            }
+        }
+
+        private static void HandleOpordLanHttpClient(TcpClient client)
+        {
+            using (client)
+            {
+                try
+                {
+                    using var stream = client.GetStream();
+                    using var reader = new StreamReader(stream, Encoding.UTF8, false, 4096, true);
+                    string reqLine = reader.ReadLine();
+                    if (string.IsNullOrEmpty(reqLine)) return;
+
+                    string[] parts = reqLine.Split(' ');
+                    string path = parts.Length >= 2 ? Uri.UnescapeDataString(parts[1]) : "/";
+
+                    string facName = _activeOpordFaction;
+                    foreach (var kv in ModelsByFaction)
+                    {
+                        if (path.Contains(kv.Key, StringComparison.OrdinalIgnoreCase))
+                        {
+                            facName = kv.Key;
+                            break;
+                        }
+                    }
+
+                    var model = GetOrCreateModel(facName);
+                    bool wantsJson = path.EndsWith(".json", StringComparison.OrdinalIgnoreCase);
+
+                    byte[] bodyBytes;
+                    string contentType;
+                    if (wantsJson)
+                    {
+                        string json = JsonSerializer.Serialize(model, new JsonSerializerOptions { WriteIndented = true });
+                        bodyBytes = Encoding.UTF8.GetBytes(json);
+                        contentType = "application/json; charset=utf-8";
+                    }
+                    else
+                    {
+                        string html = GeneratePrintableOpordHtml(_lastActiveWindowRef, facName, model);
+                        bodyBytes = Encoding.UTF8.GetBytes(html);
+                        contentType = "text/html; charset=utf-8";
+                    }
+
+                    string headers =
+                        "HTTP/1.1 200 OK\r\n" +
+                        "Content-Type: " + contentType + "\r\n" +
+                        "Content-Length: " + bodyBytes.Length + "\r\n" +
+                        "Connection: close\r\n\r\n";
+                    byte[] hdrBytes = Encoding.UTF8.GetBytes(headers);
+                    stream.Write(hdrBytes, 0, hdrBytes.Length);
+                    stream.Write(bodyBytes, 0, bodyBytes.Length);
+                    stream.Flush();
+                }
+                catch { }
+            }
+        }
+
+        private static string GetLocalLanIp()
         {
             try
             {
-                TacticalConfigPanel.SaveSessionStateAuto(win);
-                if (!string.IsNullOrWhiteSpace(TacticalConfigPanel.CurrentDraftProjectPath) &&
-                    File.Exists(TacticalConfigPanel.CurrentDraftProjectPath))
+                var host = Dns.GetHostEntry(Dns.GetHostName());
+                foreach (var ip in host.AddressList)
                 {
-                    if (JsonNode.Parse(File.ReadAllText(TacticalConfigPanel.CurrentDraftProjectPath, Encoding.UTF8)) is JsonObject root &&
-                        root["factions"] is JsonArray arr)
+                    if (ip.AddressFamily == AddressFamily.InterNetwork && !IPAddress.IsLoopback(ip))
                     {
-                        foreach (var item in arr.OfType<JsonObject>())
-                        {
-                            string n = item["Name"]?.ToString() ?? item["name"]?.ToString() ?? "";
-                            if (n.Equals(factionName, StringComparison.OrdinalIgnoreCase))
-                                return item;
-                        }
-                        return arr.OfType<JsonObject>().FirstOrDefault();
+                        string s = ip.ToString();
+                        if (s.StartsWith("192.168.") || s.StartsWith("10.") || s.StartsWith("172."))
+                            return s;
                     }
                 }
             }
             catch { }
-            return null;
+            return "127.0.0.1";
         }
 
+        private static void ShowOpordLanDistributionModal(Window owner, string factionName, OpordParagraphModel model)
+        {
+            string baseUrl = EnsureOpordLanServerStarted(owner);
+            string safeFac = Uri.EscapeDataString(factionName);
+            string htmlUrl = baseUrl + "/opord/" + safeFac + ".html";
+            string jsonUrl = baseUrl + "/opord/" + safeFac + ".json";
+
+            var dlg = new Window
+            {
+                Title = BuilderI18n.T(
+                    "📡 Dystrybucja OPORD przez Wi-Fi / LAN (" + factionName + ")",
+                    "📡 Wi-Fi / LAN OPORD Distribution (" + factionName + ")"),
+                Width = 480,
+                Height = 560,
+                WindowStartupLocation = WindowStartupLocation.CenterOwner,
+                Owner = owner,
+                Background = TacticalConfigPanel.BrushCardBg,
+                Foreground = Brushes.White,
+                ResizeMode = ResizeMode.NoResize,
+                WindowStyle = WindowStyle.ToolWindow
+            };
+
+            var root = new StackPanel { Margin = new Thickness(18, 14, 18, 14) };
+            root.Children.Add(new TextBlock
+            {
+                Text = BuilderI18n.T(
+                    "📋 UDOSTĘPNIANIE ROZKAZU OPORD (" + factionName + ") PO WI-FI / LAN",
+                    "📋 SHARE OPORD (" + factionName + ") OVER WI-FI / LAN"),
+                Foreground = TacticalConfigPanel.BrushAccent,
+                FontWeight = FontWeights.Bold,
+                FontSize = 14,
+                HorizontalAlignment = HorizontalAlignment.Center
+            });
+
+            root.Children.Add(new TextBlock
+            {
+                Text = BuilderI18n.T(
+                    "Gracze podłączeni do tej samej sieci Wi-Fi / Hotspotu mogą zeskanować poniższy kod QR w aplikacji Field TAK Hub (lub zwykłym aparatem telefonu), aby natychmiast otworzyć i zaimportować sam rozkaz OPORD niezależnie od paczki .ftak:",
+                    "Players on the same Wi-Fi / Hotspot can scan this QR code in Field TAK Hub (or standard phone camera) to view and import this OPORD independently of the .ftak bundle:"),
+                Foreground = TacticalConfigPanel.BrushMutedText,
+                FontSize = 10.5,
+                TextWrapping = TextWrapping.Wrap,
+                TextAlignment = TextAlignment.Center,
+                Margin = new Thickness(0, 6, 0, 10)
+            });
+
+            var qrFrame = new Border
+            {
+                Width = 270,
+                Height = 270,
+                Background = Brushes.White,
+                BorderBrush = TacticalConfigPanel.BrushAccent,
+                BorderThickness = new Thickness(3),
+                CornerRadius = new CornerRadius(12),
+                Padding = new Thickness(12),
+                HorizontalAlignment = HorizontalAlignment.Center,
+                Margin = new Thickness(0, 0, 0, 10)
+            };
+            var qrImg = new Image { Stretch = Stretch.Uniform };
+            RenderOptions.SetBitmapScalingMode(qrImg, BitmapScalingMode.NearestNeighbor);
+            qrFrame.Child = qrImg;
+            root.Children.Add(qrFrame);
+
+            var urlBox = new TextBox
+            {
+                Text = htmlUrl,
+                IsReadOnly = true,
+                Height = 26,
+                FontSize = 10.5,
+                FontFamily = new FontFamily("Consolas"),
+                HorizontalContentAlignment = HorizontalAlignment.Center,
+                VerticalContentAlignment = VerticalAlignment.Center,
+                Background = TacticalConfigPanel.BrushInputBg,
+                Foreground = TacticalConfigPanel.BrushAccent,
+                BorderBrush = TacticalConfigPanel.BrushInputBorder,
+                Margin = new Thickness(0, 0, 0, 8)
+            };
+            root.Children.Add(urlBox);
+
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    string api = "https://api.qrserver.com/v1/create-qr-code/?size=400x400&margin=10&data=" + Uri.EscapeDataString(htmlUrl);
+                    byte[] bytes = await GeoportalLidarEngine.FastHttp.GetByteArrayAsync(api);
+                    if (GeoportalLidarEngine.IsValidImageBytes(bytes) && Application.Current != null)
+                    {
+                        await Application.Current.Dispatcher.InvokeAsync(() =>
+                        {
+                            var bmp = new BitmapImage();
+                            using var ms = new MemoryStream(bytes);
+                            bmp.BeginInit();
+                            bmp.CacheOption = BitmapCacheOption.OnLoad;
+                            bmp.StreamSource = ms;
+                            bmp.EndInit();
+                            bmp.Freeze();
+                            qrImg.Source = bmp;
+                        });
+                    }
+                }
+                catch { }
+            });
+
+            var btns = new UniformGrid { Columns = 2 };
+            var btnCopyLink = new Button
+            {
+                Content = BuilderI18n.T("📋 Kopiuj link LAN OPORD", "📋 Copy LAN OPORD Link"),
+                Height = 32,
+                Margin = new Thickness(0, 0, 5, 0),
+                Background = TacticalConfigPanel.BrushButtonAccent,
+                Foreground = TacticalConfigPanel.BrushDarkFg,
+                FontWeight = FontWeights.Bold,
+                Cursor = Cursors.Hand
+            };
+            btnCopyLink.Click += (_, __) => Clipboard.SetText(htmlUrl);
+
+            var btnClose = new Button
+            {
+                Content = BuilderI18n.T("Zamknij", "Close"),
+                Height = 32,
+                Margin = new Thickness(5, 0, 0, 0),
+                Background = TacticalConfigPanel.BrushInputBg,
+                Foreground = Brushes.White,
+                Cursor = Cursors.Hand
+            };
+            btnClose.Click += (_, __) => dlg.Close();
+
+            btns.Children.Add(btnCopyLink);
+            btns.Children.Add(btnClose);
+            root.Children.Add(btns);
+
+            dlg.Content = root;
+            dlg.ShowDialog();
+        }
+
+        // =========================================================================
+        // 7. GENERATOR DOKUMENTU A4 HTML / PDF ORAZ MARKDOWN NA DISCORDA (WG WZORU PDF)
+        // =========================================================================
         public static string GeneratePrintableOpordHtml(Window win, string factionName, OpordParagraphModel m)
         {
-            string eventName = TacticalConfigPanel.GetEventNameFromWindow(win);
+            EnsureDefaultCollectionsInitialized(m);
+            string eventName = win != null ? TacticalConfigPanel.GetEventNameFromWindow(win) : "OPERACJA";
             var facJson = TryGetFactionJsonObject(win, factionName);
             string colorHex = facJson?["ColorHex"]?.ToString() ?? "#2684FF";
-            string chName = facJson?["ChannelName"]?.ToString() ?? (factionName + "-TAK");
+            string chName = facJson?["ChannelName"]?.ToString() ?? (factionName + "-MESH");
             string region = facJson?["LoraRegion"]?.ToString() ?? "EU_868";
             string preset = facJson?["LoraModemPreset"]?.ToString() ?? "SHORT_FAST";
             string ots = facJson?["OtsHost"]?.ToString() ?? "Off-Grid Mesh";
             string phone = facJson?["EmergencyPhone"]?.ToString() ?? "112";
 
+            string E(string s) => WebUtility.HtmlEncode(s ?? "").Replace("\n", "<br/>");
+
+            // Tabela łączności z Generatora Stron
             var radioRowsHtml = new StringBuilder();
-            if (facJson?["VoiceChannels"] is JsonArray vArr && vArr.Count > 0)
+            radioRowsHtml.AppendLine("<tr><td><b>Kanał główny</b></td><td>PMR/VHF</td><td colspan='2'><b>" + E(m.PrimaryRadioFreq) + "</b></td></tr>");
+            radioRowsHtml.AppendLine("<tr><td><b>Kanał zapasowy</b></td><td>PMR/VHF</td><td colspan='2'><b>" + E(m.BackupRadioFreq) + "</b></td></tr>");
+            radioRowsHtml.AppendLine("<tr><td><b>Kanał HQ (Sztab)</b></td><td>PMR/VHF</td><td colspan='2'><b>" + E(m.HqRadioFreq) + "</b></td></tr>");
+
+            var vArr = (facJson?["VoiceChannels"] ?? facJson?["voiceChannels"]) as JsonArray;
+            if (vArr != null && vArr.Count > 0)
             {
                 foreach (var vo in vArr.OfType<JsonObject>())
                 {
                     radioRowsHtml.AppendLine(
-                        "<tr><td><b>" + WebUtility.HtmlEncode(vo["roleName"]?.ToString()) + "</b></td>" +
-                        "<td>" + WebUtility.HtmlEncode(vo["bandType"]?.ToString()) + "</td>" +
-                        "<td><b>" + WebUtility.HtmlEncode(vo["freqMhz"]?.ToString()) + "</b></td>" +
-                        "<td>" + WebUtility.HtmlEncode(vo["toneOrCode"]?.ToString()) + "</td></tr>");
+                        "<tr><td><b>" + E(vo["roleName"]?.ToString() ?? vo["RoleName"]?.ToString()) + "</b></td>" +
+                        "<td>" + E(vo["bandType"]?.ToString() ?? vo["BandType"]?.ToString()) + "</td>" +
+                        "<td><b>" + E(vo["freqMhz"]?.ToString() ?? vo["FreqMhz"]?.ToString()) + "</b></td>" +
+                        "<td>" + E(vo["toneOrCode"]?.ToString() ?? vo["ToneOrCode"]?.ToString()) + "</td></tr>");
                 }
             }
-            else
-            {
-                radioRowsHtml.AppendLine("<tr><td colspan='4'>Zgodnie z konfiguracją w paczce .FTAK</td></tr>");
-            }
 
-            string E(string s) => WebUtility.HtmlEncode(s ?? "").Replace("\n", "<br/>");
-            string missionText = string.IsNullOrWhiteSpace(m.MissionFullStatement) ? Compose5WMissionText(m) : m.MissionFullStatement;
+            // Tabela SARNEG 0..9
+            string sarnegClean = (m.SarnegKeyWord10 ?? "ZLEARSTWOK").Trim().ToUpperInvariant().PadRight(10, 'X').Substring(0, 10);
+            var sarnegLettersRow = new StringBuilder();
+            var sarnegDigitsRow = new StringBuilder();
+            for (int i = 0; i < 10; i++)
+            {
+                sarnegLettersRow.Append("<th style='text-align:center;font-size:13px;'>").Append(sarnegClean[i]).Append("</th>");
+                sarnegDigitsRow.Append("<td style='text-align:center;font-weight:bold;'>").Append(i).Append("</td>");
+            }
 
             var html = new StringBuilder();
             html.AppendLine("<!DOCTYPE html><html lang='pl'><head><meta charset='utf-8'/>");
-            html.AppendLine("<title>" + E(m.OperationNumber) + " - " + E(eventName) + " (" + E(factionName) + ")</title>");
+            html.AppendLine("<title>OPORD " + E(eventName) + " (" + E(factionName) + ")</title>");
             html.AppendLine("<style>");
-            html.AppendLine("@page { size: A4 portrait; margin: 11mm; }");
-            html.AppendLine("body { font-family: 'Segoe UI', Arial, sans-serif; color: #111; background: #fff; margin: 0; padding: 14px; font-size: 12px; line-height: 1.42; }");
-            html.AppendLine(".classification { text-align: center; font-weight: bold; font-size: 12.5px; letter-spacing: 1.5px; border-top: 2px solid #111; border-bottom: 2px solid #111; padding: 4px; margin-bottom: 10px; background: #f4f6f8; }");
+            html.AppendLine("@page { size: A4 portrait; margin: 10mm; }");
+            html.AppendLine("body { font-family: 'Segoe UI', Arial, sans-serif; color: #111; background: #fff; margin: 0; padding: 14px; font-size: 11.5px; line-height: 1.4; }");
+            html.AppendLine(".classification { text-align: center; font-weight: bold; font-size: 12px; letter-spacing: 1.2px; border-top: 2px solid #111; border-bottom: 2px solid #111; padding: 4px; margin-bottom: 10px; background: #f4f6f8; }");
             html.AppendLine(".header-box { border: 2px solid #111; padding: 10px 14px; margin-bottom: 12px; display: flex; justify-content: space-between; align-items: center; }");
             html.AppendLine(".faction-badge { background: " + colorHex + "; color: #fff; font-weight: bold; padding: 6px 14px; border-radius: 4px; font-size: 15px; }");
             html.AppendLine("h1 { margin: 0 0 4px 0; font-size: 17px; text-transform: uppercase; }");
-            html.AppendLine("h2 { background: #102229; color: #fff; padding: 5px 10px; font-size: 13px; margin: 12px 0 6px 0; text-transform: uppercase; letter-spacing: 0.5px; }");
-            html.AppendLine(".sub-p { margin: 5px 0 7px 8px; }");
-            html.AppendLine(".mission-box { border: 2px solid " + colorHex + "; background: #f0f7ff; padding: 9px 12px; font-weight: bold; font-size: 13px; margin: 6px 0; }");
-            html.AppendLine("table { width: 100%; border-collapse: collapse; margin-top: 6px; font-size: 11.5px; }");
-            html.AppendLine("th, td { border: 1px solid #333; padding: 4px 7px; text-align: left; }");
+            html.AppendLine("h2 { background: #102229; color: #fff; padding: 5px 10px; font-size: 12.5px; margin: 12px 0 6px 0; text-transform: uppercase; }");
+            html.AppendLine(".sub-p { margin: 4px 0 6px 8px; }");
+            html.AppendLine(".mission-box { border: 2px solid " + colorHex + "; background: #f0f7ff; padding: 8px 12px; font-weight: bold; font-size: 12.5px; margin: 6px 0; }");
+            html.AppendLine("table { width: 100%; border-collapse: collapse; margin-top: 5px; margin-bottom: 8px; font-size: 11px; }");
+            html.AppendLine("th, td { border: 1px solid #333; padding: 4px 6px; text-align: left; }");
             html.AppendLine("th { background: #e6ecef; }");
             html.AppendLine(".no-print { margin-bottom: 12px; text-align: right; }");
             html.AppendLine(".btn-print { background: #102229; color: #1FE0C5; border: 2px solid #1FE0C5; padding: 8px 16px; font-weight: bold; cursor: pointer; border-radius: 6px; }");
             html.AppendLine("@media print { .no-print { display: none; } }");
             html.AppendLine("</style></head><body>");
-            html.AppendLine("<div class='no-print'><button class='btn-print' onclick='window.print()'>🖨️ Drukuj Rozkaz OPORD / Zapisz jako PDF (A4)</button></div>");
+            html.AppendLine("<div class='no-print'><button class='btn-print' onclick='window.print()'>🖨️ Drukuj OPORD / Zapisz jako PDF (A4)</button></div>");
             html.AppendLine("<div class='classification'>" + E(m.Classification) + "</div>");
             html.AppendLine("<div class='header-box'><div>");
-            html.AppendLine("<h1>" + E(m.OperationNumber) + " — " + E(eventName) + "</h1>");
-            html.AppendLine("<div><b>Sztab (HQ):</b> " + E(m.IssuingHq) + " &nbsp;|&nbsp; <b>Data operacji:</b> " + E(m.OperationDateIso) + " &nbsp;|&nbsp; <b>DTG:</b> " + E(m.DtgIssued) + "</div>");
+            html.AppendLine("<h1>OPORD " + E(eventName) + " — " + E(m.OperationNumber) + "</h1>");
+            html.AppendLine("<div><b>Sztab (HQ):</b> " + E(m.IssuingHq) + " &nbsp;|&nbsp; <b>DTG:</b> " + E(m.DtgIssued) + "</div>");
             html.AppendLine("<div><b>Rejon AO:</b> " + E(m.LocationName) + " (" + E(m.LocationLat) + "°N, " + E(m.LocationLon) + "°E) &nbsp;|&nbsp; <b>Mapy:</b> " + E(m.MapReferences) + "</div>");
             html.AppendLine("</div><div class='faction-badge'>" + E(factionName) + "</div></div>");
 
-            html.AppendLine("<h2>1. SYTUACJA I WARUNKI METOC (1. SITUATION &amp; METOC)</h2>");
-            html.AppendLine("<div class='sub-p'><b>a. Siły Przeciwnika (Enemy Forces):</b><br/>" + E(m.EnemyForces) + "</div>");
-            html.AppendLine("<div class='sub-p'><b>b. Siły Własne (Friendly Forces):</b><br/>" + E(m.FriendlyForces) + "</div>");
-            html.AppendLine("<div class='sub-p'><b>c. Teren i Pogoda (Terrain &amp; Weather):</b><br/>" + E(m.TerrainAndWeather) + "</div>");
+            // Harmonogram wielodniowy
+            if (m.Days.Count > 0)
+            {
+                html.AppendLine("<table><thead><tr><th style='width:22%'>📅 Dzień operacji</th><th style='width:38%'>Pogoda METOC / Słońce / Księżyc</th><th>Harmonogram i zadania dnia</th></tr></thead><tbody>");
+                foreach (var d in m.Days)
+                {
+                    html.AppendLine("<tr><td><b>" + E(d.DayTitle) + "</b><br/>" + E(d.DateIso) + "</td>" +
+                                    "<td>" + E(d.MetocCondition) + "<br/>Temp: " + E(d.MetocTemperature) + "<br/>" + E(d.MetocSunTimes) + "<br/>" + E(d.MetocMoonPhase) + "</td>" +
+                                    "<td>" + E(d.DaySpecificTasks) + "</td></tr>");
+                }
+                html.AppendLine("</tbody></table>");
+            }
 
-            html.AppendLine("<table><thead><tr><th colspan='2'>🌦️ TABELA DANYCH METEOROLOGICZNYCH I ASTRONOMICZNYCH (METOC — " + E(m.OperationDateIso) + ")</th></tr></thead><tbody>");
-            html.AppendLine("<tr><td style='width:28%'><b>Warunki i zachmurzenie</b></td><td>" + E(m.MetocCondition) + "</td></tr>");
-            html.AppendLine("<tr><td><b>Temperatura</b></td><td>" + E(m.MetocTemperature) + "</td></tr>");
-            html.AppendLine("<tr><td><b>Wiatr (prędkość / kierunek)</b></td><td>" + E(m.MetocWind) + "</td></tr>");
-            html.AppendLine("<tr><td><b>Wilgotność i opady</b></td><td>" + E(m.MetocHumidityPrecip) + "</td></tr>");
-            html.AppendLine("<tr><td><b>Słońce (BMNT / SR / SS / EENT)</b></td><td><b>" + E(m.MetocSunTimes) + "</b></td></tr>");
-            html.AppendLine("<tr><td><b>Faza Księżyca i NVG</b></td><td><b>" + E(m.MetocMoonPhase) + "</b></td></tr>");
+            html.AppendLine("<h2>1. SYTUACJA</h2>");
+            html.AppendLine("<div class='sub-p'><b>A. Obszar zainteresowania (Mapa, POI, KML/GPX):</b><br/>" + E(m.AreaOfInterestPoiDesc) + "</div>");
+            html.AppendLine("<div class='sub-p'><b>B. Obszar działań (1. Teren i 2. Pogoda METOC):</b><br/>" + E(m.TerrainAndWeather) + "</div>");
+            html.AppendLine("<div class='sub-p'><b>C. Siły wroga (Skład, lokalizacje, COA):</b><br/>" + E(m.EnemyForces) + "</div>");
+            html.AppendLine("<div class='sub-p'><b>D. Siły przyjazne (Misja HQ i sąsiadów):</b><br/>" + E(m.FriendlyForces) + "</div>");
+
+            html.AppendLine("<h2>II. MISJA</h2>");
+            html.AppendLine("<div class='sub-p'><b>A. Opis fabularny:</b> " + E(m.MissionLoreDesc) + "</div>");
+            html.AppendLine("<div class='mission-box'>B. Główne zadanie: " + E(string.IsNullOrWhiteSpace(m.MissionFullStatement) ? Compose5WMissionText(m) : m.MissionFullStatement) + "</div>");
+            html.AppendLine("<div class='sub-p'><b>C. Dodatkowe zadania:</b><br/>" + E(m.AdditionalTasksSummary) + "</div>");
+
+            html.AppendLine("<h2>III. WYKONANIE</h2>");
+            html.AppendLine("<div class='sub-p'><b>A. Zamiar dowódcy:</b><br/>" + E(m.CommandersIntent) + "</div>");
+            html.AppendLine("<div class='sub-p'><b>B. Priorytety i styl działania:</b><br/>" + E(m.ConceptOfOperations) + "</div>");
+            html.AppendLine("<div class='sub-p'><b>C. Łańcuch dowodzenia:</b> <b>" + E(m.SuccessionOfCommand) + "</b></div>");
+
+            if (m.EnableSquadRosterTable && m.SquadRoster.Count > 0)
+            {
+                html.AppendLine("<div class='sub-p'><b>D. Skład oddziału i podział ról:</b></div>");
+                html.AppendLine("<table><thead><tr><th>Ksywa (Operator / Zespół)</th><th>Rola 1</th><th>Rola 2 (opcjonalnie)</th><th>Typ broni / Sprzęt</th></tr></thead><tbody>");
+                foreach (var r in m.SquadRoster)
+                {
+                    html.AppendLine("<tr><td><b>" + E(r.OperatorOrTeam) + "</b></td><td>" + E(r.PrimaryRole) + "</td><td>" + E(r.SecondaryRole) + "</td><td>" + E(r.WeaponAndGear) + "</td></tr>");
+                }
+                html.AppendLine("</tbody></table>");
+            }
+
+            html.AppendLine("<div class='sub-p'><b>E. Tabela łączności (LoRa Meshtastic: " + E(chName) + " [" + E(region) + "/" + E(preset) + "] | OTS: " + E(ots) + " | SOS ORGA: " + E(phone) + "):</b></div>");
+            html.AppendLine("<table><thead><tr><th>Rola / Kanał</th><th>Pasmo</th><th>Częstotliwość / Kanał</th><th>Ton CTCSS / Kod DMR</th></tr></thead><tbody>" + radioRowsHtml + "</tbody></table>");
+
+            html.AppendLine("<div class='sub-p'><b>F. Sygnały, słowa kodowe i rozpoznawcze:</b><br/><b>1. Kryptonimy celów:</b> " + E(m.TargetCodeNames) + "</div>");
+            html.AppendLine("<table><thead><tr><th colspan='10' style='text-align:center;'>2. Tabela krypto SARNEG główna</th></tr><tr>" + sarnegLettersRow + "</tr></thead><tbody><tr>" + sarnegDigitsRow + "</tr></tbody></table>");
+            html.AppendLine("<div class='sub-p'><b>3. Hasła rozpoznawcze (werbalne i niewerbalne):</b><br/>" + E(m.ChallengeAndPassword) + "</div>");
+            html.AppendLine("<div class='sub-p'><b>G. Leczenie i zasady Respawn:</b><br/>" + E(m.MedevacRules) + "</div>");
+
+            html.AppendLine("<h2>IV. LOGISTYKA</h2>");
+            html.AppendLine("<div class='sub-p'><b>A. Styl wyposażenia:</b> " + E(m.RespawnAndSupply) + "</div>");
+            html.AppendLine("<div class='sub-p'><b>B. Wyposażenie oddziału (SZPEJLISTA):</b><br/>" + E(m.SquadGearChecklist) + "</div>");
+            html.AppendLine("<div class='sub-p'><b>C. Wyposażenie specjalne:</b><br/>" + E(m.SpecialEquipment) + "</div>");
+            html.AppendLine("<div class='sub-p'><b>D. Dojazd (Parking, odległość, transport):</b><br/>" + E(m.TravelAndParking) + "</div>");
+            html.AppendLine("<div class='sub-p'><b>E. Regulamin gry:</b> " + E(m.GameRulesLink) + "</div>");
+
+            // Załącznik 1. Podział ról z PDF
+            html.AppendLine("<h2>ZAŁĄCZNIK 1. PODZIAŁ RÓL DRUŻYNOWYCH</h2>");
+            html.AppendLine("<table><thead><tr><th style='width:22%'>Rola</th><th>Opis obowiązków</th><th style='width:15%'>Zajęcie</th></tr></thead><tbody>");
+            foreach (var roleDef in MilsimRolesCatalog)
+            {
+                html.AppendLine("<tr><td><b>" + E(roleDef.RoleName) + "</b></td><td>" + E(roleDef.Description) + "</td><td>" + E(roleDef.Mode) + "</td></tr>");
+            }
             html.AppendLine("</tbody></table>");
 
-            html.AppendLine("<h2>2. ZADANIE (2. MISSION)</h2>");
-            html.AppendLine("<div class='mission-box'>" + E(missionText) + "</div>");
-
-            html.AppendLine("<h2>3. REALIZACJA (3. EXECUTION)</h2>");
-            html.AppendLine("<div class='sub-p'><b>a. Zamysł Dowódcy (Commander's Intent):</b><br/>" + E(m.CommandersIntent) + "</div>");
-            html.AppendLine("<div class='sub-p'><b>b. Koncepcja Działań (Concept of Operations):</b><br/>" + E(m.ConceptOfOperations) + "</div>");
-            html.AppendLine("<div class='sub-p'><b>c. Zadania dla Pododdziałów (Tasks to Subordinate Units):</b><br/>" + E(m.TasksToSubordinateUnits) + "</div>");
-            html.AppendLine("<div class='sub-p'><b>d. Wytyczne Koordynacyjne i ROE (Coordinating Instructions):</b><br/>" + E(m.CoordinatingAndRoe) + "</div>");
-
-            html.AppendLine("<h2>4. ZABEZPIECZENIE LOGISTYCZNE I MEDYCZNE (4. SUSTAINMENT)</h2>");
-            html.AppendLine("<div class='sub-p'><b>a. Ewakuacja Medyczna (MEDEVAC / SOS MGRS):</b><br/>" + E(m.MedevacRules) + "</div>");
-            html.AppendLine("<div class='sub-p'><b>b. Respawn / FOB i Zaopatrzenie:</b><br/>" + E(m.RespawnAndSupply) + "</div>");
-
-            html.AppendLine("<h2>5. DOWODZENIE I ŁĄCZNOŚĆ (5. COMMAND &amp; SIGNAL)</h2>");
-            html.AppendLine("<div class='sub-p'><b>a. Łańcuch Dowodzenia (Succession of Command):</b> " + E(m.SuccessionOfCommand) + "</div>");
-            html.AppendLine("<div class='sub-p'><b>b. Hasło i Odzew (Challenge &amp; Password):</b> <b>" + E(m.ChallengeAndPassword) + "</b></div>");
-            html.AppendLine("<div class='sub-p'><b>c. Łączność Cyfrowa ATAK &amp; Meshtastic LoRa:</b> Kanał <b>" + E(chName) + "</b> (" + E(region) + " / " + E(preset) + ") &nbsp;|&nbsp; OTS: <b>" + E(ots) + "</b> &nbsp;|&nbsp; Alarm ORGA/MEDEVAC: <b>" + E(phone) + "</b></div>");
-            html.AppendLine("<table><thead><tr><th>Rola / Kanał</th><th>Pasmo</th><th>Częstotliwość / Kanał</th><th>Ton CTCSS / Kod DMR</th></tr></thead><tbody>" + radioRowsHtml + "</tbody></table>");
-            html.AppendLine("<div class='classification' style='margin-top:14px;'>" + E(m.Classification) + " — Field TAK Hub v2.5</div>");
+            html.AppendLine("<h2>ZAŁĄCZNIK 2. OPRACOWANIE ZADAŃ</h2>");
+            html.AppendLine("<div class='sub-p'>" + E(m.Annex2TasksAnalysis) + "</div>");
+            html.AppendLine("<div class='classification' style='margin-top:12px;'>" + E(m.Classification) + " — Field TAK Hub v3.0</div>");
             html.AppendLine("</body></html>");
             return html.ToString();
         }
 
         public static string GenerateDiscordMarkdownOpord(Window win, string factionName, OpordParagraphModel m)
         {
-            string eventName = TacticalConfigPanel.GetEventNameFromWindow(win);
+            EnsureDefaultCollectionsInitialized(m);
+            string eventName = win != null ? TacticalConfigPanel.GetEventNameFromWindow(win) : "OPERACJA";
             var sb = new StringBuilder();
             sb.AppendLine("# 📋 " + m.OperationNumber + " — " + eventName + " [" + factionName + "]");
-            sb.AppendLine("`" + m.Classification + "` | **Data:** `" + m.OperationDateIso + "` | **DTG:** `" + m.DtgIssued + "` | **HQ:** `" + m.IssuingHq + "`");
+            sb.AppendLine("`" + m.Classification + "` | **DTG:** `" + m.DtgIssued + "` | **HQ:** `" + m.IssuingHq + "`");
             sb.AppendLine("---");
-            sb.AppendLine("## 1️⃣ SYTUACJA I WARUNKI METOC (SITUATION & WEATHER)");
-            sb.AppendLine("- **Siły Przeciwnika (Enemy):** " + m.EnemyForces);
-            sb.AppendLine("- **Siły Własne (Friendly):** " + m.FriendlyForces);
-            sb.AppendLine("- **Teren i Pogoda:** " + m.TerrainAndWeather);
+            sb.AppendLine("## 1️⃣ SYTUACJA (SITUATION & METOC)");
+            sb.AppendLine("- **A. Obszar zainteresowania (POI / KML / GPX):** " + m.AreaOfInterestPoiDesc);
+            sb.AppendLine("- **B. Obszar działań (Teren i Pogoda METOC):**\n" + m.TerrainAndWeather);
+            sb.AppendLine("- **C. Siły wroga (COA):** " + m.EnemyForces);
+            sb.AppendLine("- **D. Siły przyjazne:** " + m.FriendlyForces);
+            sb.AppendLine();
+            sb.AppendLine("## 2️⃣ MISJA (MISSION)");
+            sb.AppendLine("- **A. Opis fabularny:** " + m.MissionLoreDesc);
+            sb.AppendLine("> 🎯 **B. Główne zadanie:** **" + Compose5WMissionText(m) + "**");
+            sb.AppendLine("- **C. Dodatkowe zadania:**\n" + m.AdditionalTasksSummary);
+            sb.AppendLine();
+            sb.AppendLine("## 3️⃣ WYKONANIE (EXECUTION)");
+            sb.AppendLine("- **A. Zamiar dowódcy:** " + m.CommandersIntent);
+            sb.AppendLine("- **B. Priorytety i styl działania:** " + m.ConceptOfOperations);
+            sb.AppendLine("- **C. Łańcuch dowodzenia:** `" + m.SuccessionOfCommand + "`");
+            if (m.EnableSquadRosterTable && m.SquadRoster.Count > 0)
+            {
+                sb.AppendLine("**D. Skład oddziału i podział ról:**");
+                sb.AppendLine("```text");
+                foreach (var r in m.SquadRoster)
+                {
+                    sb.AppendLine(string.Format("{0,-12} | Rola 1: {1,-24} | Rola 2: {2,-20} | {3}", r.OperatorOrTeam, r.PrimaryRole, r.SecondaryRole, r.WeaponAndGear));
+                }
+                sb.AppendLine("```");
+            }
+            sb.AppendLine("**E. Tabela łączności:**");
             sb.AppendLine("```text");
-            sb.AppendLine("🌦️ METOC (" + m.OperationDateIso + " — " + m.LocationName + "):");
-            sb.AppendLine("• Warunki: " + m.MetocCondition);
-            sb.AppendLine("• Temperatura: " + m.MetocTemperature);
-            sb.AppendLine("• Wiatr: " + m.MetocWind);
-            sb.AppendLine("• Wilgotność / Opady: " + m.MetocHumidityPrecip);
-            sb.AppendLine("• Słońce: " + m.MetocSunTimes);
-            sb.AppendLine("• Księżyc / NVG: " + m.MetocMoonPhase);
-            sb.AppendLine("```");
-            sb.AppendLine("## 2️⃣ ZADANIE BOJOWE (MISSION)");
-            sb.AppendLine("> 🎯 **" + Compose5WMissionText(m) + "**");
-            sb.AppendLine();
-            sb.AppendLine("## 3️⃣ REALIZACJA (EXECUTION)");
-            sb.AppendLine("**a. Zamysł Dowódcy (Commander's Intent):**\n" + m.CommandersIntent);
-            sb.AppendLine("**b. Koncepcja Działań (Fazy):**\n" + m.ConceptOfOperations);
-            sb.AppendLine("**c. Zadania dla Pododdziałów:**\n" + m.TasksToSubordinateUnits);
-            sb.AppendLine("**d. Wytyczne Koordynacyjne i ROE:**\n" + m.CoordinatingAndRoe);
-            sb.AppendLine();
-            sb.AppendLine("## 4️⃣ ZABEZPIECZENIE I MEDEVAC (SUSTAINMENT)");
-            sb.AppendLine("- **MEDEVAC / SOS MGRS:** " + m.MedevacRules);
-            sb.AppendLine("- **Respawn / Zaopatrzenie:** " + m.RespawnAndSupply);
-            sb.AppendLine();
-            sb.AppendLine("## 5️⃣ DOWODZENIE I ŁĄCZNOŚĆ (COMMAND & SIGNAL)");
-            sb.AppendLine("- **Łańcuch Dowodzenia:** `" + m.SuccessionOfCommand + "`");
-            sb.AppendLine("- **Hasło / Odzew (Challenge / Password):** `" + m.ChallengeAndPassword + "`");
-            sb.AppendLine("```text");
+            sb.AppendLine("• Kanał główny:   " + m.PrimaryRadioFreq);
+            sb.AppendLine("• Kanał zapasowy: " + m.BackupRadioFreq);
+            sb.AppendLine("• Kanał HQ:       " + m.HqRadioFreq);
             sb.AppendLine(BuildLiveSignalSummaryText(win, factionName));
             sb.AppendLine("```");
+            sb.AppendLine("**F. Sygnały, SARNEG i Hasła rozpoznawcze:**");
+            sb.AppendLine("- **Kryptonimy celów:** " + m.TargetCodeNames);
+            sb.AppendLine("```text\n" + FormatSarnegMatrixPreview(m.SarnegKeyWord10) + "\n```");
+            sb.AppendLine("- **Hasła rozpoznawcze:**\n" + m.ChallengeAndPassword);
+            sb.AppendLine("- **G. Leczenie:** " + m.MedevacRules);
+            sb.AppendLine();
+            sb.AppendLine("## 4️⃣ LOGISTYKA (LOGISTICS)");
+            sb.AppendLine("- **A. Styl wyposażenia:** " + m.RespawnAndSupply);
+            sb.AppendLine("- **B. SZPEJLISTA:** " + m.SquadGearChecklist);
+            sb.AppendLine("- **C. Wyposażenie specjalne:** " + m.SpecialEquipment);
+            sb.AppendLine("- **D. Dojazd i parking:** " + m.TravelAndParking);
+            sb.AppendLine("- **E. Regulamin gry:** " + m.GameRulesLink);
             return sb.ToString();
+        }
+
+        // =========================================================================
+        // 8. FABRYKA KONTROLEK TAKTYCZNYCH (W TYM PRZYCISKÓW ZIELONY "+" I CZERWONY "-")
+        // =========================================================================
+        private static Button CreateTacticalPlusMinusButton(bool isPlusGreen, string toolTipText, Action onClick)
+        {
+            Color fillCol = isPlusGreen ? Color.FromRgb(18, 56, 36) : Color.FromRgb(64, 20, 20);
+            Color strokeCol = isPlusGreen ? Color.FromRgb(46, 204, 113) : Color.FromRgb(235, 64, 52);
+            var btn = new Button
+            {
+                Content = isPlusGreen ? "＋" : "－",
+                ToolTip = toolTipText,
+                Width = 28,
+                Height = 28,
+                Margin = new Thickness(3, 0, 3, 0),
+                Background = new SolidColorBrush(fillCol),
+                Foreground = new SolidColorBrush(strokeCol),
+                BorderBrush = new SolidColorBrush(strokeCol),
+                BorderThickness = new Thickness(1.5),
+                FontWeight = FontWeights.ExtraBold,
+                FontSize = 13,
+                Cursor = Cursors.Hand
+            };
+            btn.Click += (_, __) => onClick?.Invoke();
+            return btn;
+        }
+
+        private static TextBox CreateCompactGridTextBox(string initialValue, Action<string> onChanged)
+        {
+            var tb = new TextBox
+            {
+                Text = initialValue ?? "",
+                Height = 28,
+                Margin = new Thickness(0, 0, 5, 0),
+                VerticalContentAlignment = VerticalAlignment.Center,
+                Background = TacticalConfigPanel.BrushInputBg,
+                Foreground = Brushes.White,
+                CaretBrush = TacticalConfigPanel.BrushAccent,
+                BorderBrush = TacticalConfigPanel.BrushInputBorder,
+                BorderThickness = new Thickness(1),
+                Padding = new Thickness(6, 0, 6, 0),
+                FontSize = 11
+            };
+            tb.TextChanged += (_, __) => onChanged?.Invoke(tb.Text);
+            return tb;
+        }
+
+        private static ComboBox CreateEditableRoleComboBox(Window win, string[] options, string initialValue, Action<string> onChanged)
+        {
+            var cb = new ComboBox
+            {
+                Height = 28,
+                Margin = new Thickness(0, 0, 5, 0),
+                FontSize = 11,
+                IsEditable = false,
+                Tag = "INJECTED"
+            };
+            TacticalConfigPanel.ApplyUnifiedComboBoxTheme(cb, win);
+            foreach (string opt in options)
+                cb.Items.Add(opt);
+            if (!string.IsNullOrWhiteSpace(initialValue) && !cb.Items.Contains(initialValue))
+                cb.Items.Insert(0, initialValue);
+            cb.SelectedItem = string.IsNullOrWhiteSpace(initialValue) ? options.FirstOrDefault() : initialValue;
+            cb.SelectionChanged += (_, __) =>
+            {
+                if (cb.SelectedItem is string s) onChanged?.Invoke(s);
+            };
+            return cb;
         }
 
         private static Border CreateSectionCard(string title)
@@ -1303,12 +2483,12 @@ namespace FieldTakHub.Builder.Services
 
         private static StackPanel CreateLabeledTextBox(string label, string initialValue, Action<string> onChanged)
         {
-            var sp = new StackPanel { Margin = new Thickness(0, 0, 8, 4) };
+            var sp = new StackPanel { Margin = new Thickness(0, 0, 6, 4) };
             sp.Children.Add(new TextBlock
             {
                 Text = label,
                 Foreground = TacticalConfigPanel.BrushMutedText,
-                FontSize = 10.5,
+                FontSize = 10,
                 Margin = new Thickness(0, 0, 0, 3)
             });
             var tb = new TextBox
@@ -1322,7 +2502,7 @@ namespace FieldTakHub.Builder.Services
                 BorderBrush = TacticalConfigPanel.BrushInputBorder,
                 BorderThickness = new Thickness(1),
                 Padding = new Thickness(6, 0, 6, 0),
-                FontSize = 11.5
+                FontSize = 11
             };
             tb.TextChanged += (_, __) => onChanged?.Invoke(tb.Text);
             sp.Children.Add(tb);
@@ -1331,7 +2511,7 @@ namespace FieldTakHub.Builder.Services
 
         private static StackPanel CreateLabeledMultilineBox(string label, string initialValue, double height, Action<string> onChanged)
         {
-            var sp = new StackPanel { Margin = new Thickness(0, 0, 0, 8) };
+            var sp = new StackPanel { Margin = new Thickness(0, 0, 0, 7) };
             sp.Children.Add(new TextBlock
             {
                 Text = label,
@@ -1352,8 +2532,8 @@ namespace FieldTakHub.Builder.Services
                 CaretBrush = TacticalConfigPanel.BrushAccent,
                 BorderBrush = TacticalConfigPanel.BrushInputBorder,
                 BorderThickness = new Thickness(1),
-                Padding = new Thickness(8, 6, 8, 6),
-                FontSize = 11.5
+                Padding = new Thickness(8, 5, 8, 5),
+                FontSize = 11
             };
             tb.TextChanged += (_, __) => onChanged?.Invoke(tb.Text);
             sp.Children.Add(tb);
