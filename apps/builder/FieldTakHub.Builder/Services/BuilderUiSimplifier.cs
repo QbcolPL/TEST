@@ -1500,7 +1500,7 @@ namespace FieldTakHub.Builder.Services
             fe.Height = 0;
             fe.MinHeight = 0;
             fe.Margin = new Thickness(0);
-            fe.IsEnabled = false;
+            // keep IsEnabled for routed handlers
         }
 
         // =========================================================================
