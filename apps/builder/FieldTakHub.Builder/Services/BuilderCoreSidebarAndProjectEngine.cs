@@ -34,7 +34,6 @@ namespace FieldTakHub.Builder.Services
         private static Border _injectedSidebarContainer;
         private static BuilderActiveModule _currentModule = BuilderActiveModule.PackageGenerator;
 
-        // Referencje do oryginalnych przycisków z górnego paska (ukrytych wizualnie, ale wywoływanych z nowego menu bocznego)
         private static ButtonBase _originalBuilderTabButton;
         private static ButtonBase _originalMapTabButton;
         private static ButtonBase _originalUsbProgrammerButton;
@@ -79,9 +78,6 @@ namespace FieldTakHub.Builder.Services
             EnsureSidebarAndCleanLayout(win);
         }
 
-        // =========================================================================
-        // 1. START ZEROWY (ZERO-STATE) + ZARZĄDZANIE PROJEKTEM (NOWY / OTWÓRZ / ZAPISZ)
-        // =========================================================================
         private static void ApplyZeroStateOnApplicationStartup(Window win)
         {
             try
@@ -373,9 +369,6 @@ namespace FieldTakHub.Builder.Services
             }
         }
 
-        // =========================================================================
-        // 2. BEZPOŚREDNIA PODMIANA STAREGO PASKA BOCZNEGO (IN-PLACE) I USUNIĘCIE GÓRNEGO PASKA USB
-        // =========================================================================
         private static void EnsureSidebarAndCleanLayout(Window win)
         {
             if (_isUpdatingNav) return;
@@ -386,11 +379,7 @@ namespace FieldTakHub.Builder.Services
 
                 var allElements = GetAllVisualDescendants(win).ToList();
 
-                // KROK A: Zapisz referencje do oryginalnych przycisków górnych i ukryj cały górny pasek (w tym "Masowy Programator USB (LoRa)")
                 CaptureAndCollapseTopMenuBar(allElements);
-
-                // KROK B: Znajdź stary pasek boczny (Paczka .FTAK / Serwer / Meshtastic / ATAK / Certyfikaty TAK Server / Ustawienia)
-                //         i podmień jego zawartość bezpośrednio w miejscu (in-place)!
                 ReplaceLegacySidebarInPlace(win, allElements);
             }
             catch { }
@@ -443,14 +432,12 @@ namespace FieldTakHub.Builder.Services
 
                 if (isTopBarButton)
                 {
-                    // Ważne: zachowaj IsEnabled = true, aby wywołanie RaiseEvent(ClickEvent) z nowego paska bocznego działało!
                     btn.Visibility = Visibility.Collapsed;
                     btn.Width = 0;
                     btn.Height = 0;
                     btn.Margin = new Thickness(0);
                     btn.Padding = new Thickness(0);
 
-                    // Jeśli przycisk leży w poziomym pasku górnym (np. Border/StackPanel/DockPanel nad głównym widokiem), zwiń też sam pasek
                     DependencyObject parent = VisualTreeHelper.GetParent(btn);
                     if (parent is Panel p && (_injectedSidebarContainer == null || !IsDescendantOf(p, _injectedSidebarContainer)))
                     {
@@ -495,11 +482,10 @@ namespace FieldTakHub.Builder.Services
             if (_injectedSidebarContainer != null && IsDescendantOf(win, _injectedSidebarContainer))
             {
                 HideRemainingLegacySidebarItems(allElements);
+                Panel.SetZIndex(_injectedSidebarContainer, 9999);
                 return;
             }
 
-            // 1. Znajdź TextBlock należący do starego paska bocznego (ze zrzutu ekranu):
-            //    "Certyfikaty TAK Server", "Konfiguracja radia i sieci", "Utwórz paczkę dla uczestników", "Preferencje aplikacji"
             TextBlock anchorTb = null;
             string[] sidebarAnchors = new string[]
             {
@@ -527,10 +513,10 @@ namespace FieldTakHub.Builder.Services
 
             Border newSidebar = BuildTacticalSidebarControl(win);
             _injectedSidebarContainer = newSidebar;
+            Panel.SetZIndex(newSidebar, 9999);
 
             if (anchorTb != null)
             {
-                // Wędruj w górę od napisu "Certyfikaty TAK Server" do głównego kontenera lewego paska bocznego (Border lub Panel w Kolumnie 0)
                 Border outerSidebarBorder = null;
                 Panel outerSidebarPanel = null;
                 Grid parentTwoColumnGrid = null;
@@ -558,7 +544,6 @@ namespace FieldTakHub.Builder.Services
                     curr = parent;
                 }
 
-                // Opcja 1: Mamy Grid z 2 kolumnami, w którym kolumna 0 to lewy pasek boczny
                 if (parentTwoColumnGrid != null && columnZeroChild != null)
                 {
                     foreach (UIElement child in parentTwoColumnGrid.Children)
@@ -572,16 +557,14 @@ namespace FieldTakHub.Builder.Services
                     Grid.SetColumn(newSidebar, 0);
                     Grid.SetRow(newSidebar, 0);
                     Grid.SetRowSpan(newSidebar, Math.Max(1, parentTwoColumnGrid.RowDefinitions.Count));
-                    Panel.SetZIndex(newSidebar, 250);
+                    Panel.SetZIndex(newSidebar, 9999);
                     parentTwoColumnGrid.Children.Add(newSidebar);
                 }
-                // Opcja 2: Mamy główny Border lewego paska bocznego -> podmień jego Child bezpośrednio!
                 else if (outerSidebarBorder != null)
                 {
                     outerSidebarBorder.Padding = new Thickness(0);
                     outerSidebarBorder.Child = newSidebar;
                 }
-                // Opcja 3: Mamy główny StackPanel/DockPanel lewego paska bocznego -> wyczyść stare pozycje i wstaw nowy pasek!
                 else if (outerSidebarPanel != null)
                 {
                     outerSidebarPanel.Children.Clear();
@@ -635,9 +618,6 @@ namespace FieldTakHub.Builder.Services
             }
         }
 
-        // =========================================================================
-        // 3. BUDOWA NOWEGO TAKTYCZNEGO PASKA BOCZNEGO (Z IKONAMI WEKTOROWYMI)
-        // =========================================================================
         private static Border BuildTacticalSidebarControl(Window win)
         {
             var sidebarBorder = new Border
@@ -655,7 +635,6 @@ namespace FieldTakHub.Builder.Services
             var topStack = new StackPanel { Margin = new Thickness(0, 0, 0, 14) };
             DockPanel.SetDock(topStack, Dock.Top);
 
-            // NAGŁÓWEK MARKI (FIELD TAK HUB)
             var brandCard = new Border
             {
                 Background = new SolidColorBrush(Color.FromRgb(10, 25, 32)),
@@ -696,7 +675,6 @@ namespace FieldTakHub.Builder.Services
             brandCard.Child = brandRow;
             topStack.Children.Add(brandCard);
 
-            // SEKCJA 1: 4 GŁÓWNE MODUŁY OPERACYJNE
             _navGroupHeader = new TextBlock
             {
                 Text = "MODUŁY OPERACYJNE",
@@ -738,7 +716,6 @@ namespace FieldTakHub.Builder.Services
                 Margin = new Thickness(2, 12, 2, 12)
             });
 
-            // SEKCJA 2: ZARZĄDZANIE PROJEKTEM
             _projGroupHeader = new TextBlock
             {
                 Text = "ZARZĄDZANIE PROJEKTEM",

@@ -1237,7 +1237,7 @@ namespace FieldTakHub.Builder.Services
                     Grid.SetColumn(opordOverlay, Grid.GetColumn(mapOverlay));
                     Grid.SetRowSpan(opordOverlay, Math.Max(1, Grid.GetRowSpan(mapOverlay)));
                     Grid.SetColumnSpan(opordOverlay, Math.Max(1, Grid.GetColumnSpan(mapOverlay)));
-                    Panel.SetZIndex(opordOverlay, 95);
+                    Panel.SetZIndex(opordOverlay, 10); Grid.SetColumn(opordOverlay, 1);
                     hostGrid.Children.Add(opordOverlay);
                 }
             }
@@ -1248,7 +1248,7 @@ namespace FieldTakHub.Builder.Services
                     Grid.SetRow(opordOverlay, 1);
                     Grid.SetRowSpan(opordOverlay, rootGrid.RowDefinitions.Count - 1);
                 }
-                Panel.SetZIndex(opordOverlay, 95);
+                Panel.SetZIndex(opordOverlay, 10); Grid.SetColumn(opordOverlay, 1);
                 rootGrid.Children.Add(opordOverlay);
             }
         }
