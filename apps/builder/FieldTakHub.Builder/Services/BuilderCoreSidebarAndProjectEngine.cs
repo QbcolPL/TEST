@@ -104,7 +104,7 @@ namespace FieldTakHub.Builder.Services
         }
 
         // =========================================================================
-        // 1. START ZEROWY (ZERO-STATE) + WCZYTYWANIE I ZAPIS PROJEKTU (Z MAPSTATE)
+        // 1. START ZEROWY (ZERO-STATE) + NOWY / OTWÓRZ / ZAPISZ PROJEKT (Z MAPSTATE)
         // =========================================================================
         private static void ApplyZeroStateOnApplicationStartup(Window win)
         {
@@ -272,41 +272,47 @@ namespace FieldTakHub.Builder.Services
             _hasUserLoadedProject = true;
             CurrentProjectFilePath = dlg.FileName;
 
-            // 1. Oczysc plik z niewidocznych znakow zero-width (\u200B) i zsynchronizuj ze wszystkimi plikami sesji
+            // 1. Oczyść plik z niewidocznych znaków (\u200B) i zsynchronizuj ze wszystkimi plikami sesji roboczej
             ReloadProjectAndMapStateEverywhere(win, dlg.FileName);
 
-            // 2. Ustaw PendingSidebarProjectPath i wywolaj natywne handlery przyciskow 'Wczytaj projekt' w TacticalConfigPanel,
-            //    aby zaladowaly zarowno strony konfliktu (factions), jak i pelny stan mapy (mapState: AO, Infil, Kod, Parking)!
+            // 2. Przekaż wybraną ścieżkę do wszystkich natywnych przycisków 'Wczytaj projekt' w TacticalConfigPanel,
+            //    aby wczytały zarówno strony konfliktu (factions), jak i pełny stan mapy (mapState: AO, Infil, Kod, Parking)
             var allElements = GetAllVisualDescendants(win).ToList();
             CaptureAndCollapseTopMenuBar(allElements);
 
-            foreach (var btn in allElements.OfType<ButtonBase>())
+            SetPendingSidebarProjectPath(dlg.FileName);
+            try
             {
-                if (_injectedSidebarContainer != null && IsDescendantOf(_injectedSidebarContainer, btn))
-                    continue;
-
-                string txt = GetCombinedText(btn);
-                if (txt.Contains("Wczytaj projekt", StringComparison.OrdinalIgnoreCase) ||
-                    txt.Contains("Load Workspace", StringComparison.OrdinalIgnoreCase) ||
-                    txt.Contains("Wczytaj (.fthproj)", StringComparison.OrdinalIgnoreCase))
+                foreach (var btn in allElements.OfType<ButtonBase>())
                 {
-                    try
+                    if (_injectedSidebarContainer != null && IsDescendantOf(_injectedSidebarContainer, btn))
+                        continue;
+
+                    string txt = GetCombinedText(btn);
+                    if (txt.Contains("Wczytaj projekt", StringComparison.OrdinalIgnoreCase) ||
+                        txt.Contains("Load Workspace", StringComparison.OrdinalIgnoreCase) ||
+                        txt.Contains("Wczytaj (.fthproj)", StringComparison.OrdinalIgnoreCase))
                     {
-                        TacticalConfigPanel.PendingSidebarProjectPath = dlg.FileName;
-                        btn.IsEnabled = true;
-                        btn.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
+                        try
+                        {
+                            btn.IsEnabled = true;
+                            btn.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
+                        }
+                        catch { }
                     }
-                    catch { }
                 }
             }
-            TacticalConfigPanel.PendingSidebarProjectPath = "";
+            finally
+            {
+                SetPendingSidebarProjectPath("");
+            }
 
             if (_activeProjectFileLabel != null)
             {
                 _activeProjectFileLabel.Text = BuilderI18n.T("Projekt: ", "Project: ") + Path.GetFileName(dlg.FileName);
             }
 
-            // 3. Jesli uzytkownik jest na zakladce Generatora Map 1:1, odswiez widok mapy natychmiast
+            // 3. Jeśli użytkownik znajduje się w Generatorze Map 1:1, odśwież widok mapy natychmiast
             if (_currentModule == BuilderActiveModule.MapGenerator && _originalMapTabButton != null)
             {
                 try
@@ -320,13 +326,133 @@ namespace FieldTakHub.Builder.Services
             RemoveDuplicateInnerSidebars(win, GetAllVisualDescendants(win).ToList());
         }
 
+        private static void SetPendingSidebarProjectPath(string value)
+        {
+            try
+            {
+                var field = typeof(TacticalConfigPanel).GetField("PendingSidebarProjectPath", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
+                if (field != null)
+                {
+                    field.SetValue(null, value ?? "");
+                }
+            }
+            catch { }
+        }
+
+        public static void SaveProjectInteractive(Window win)
+        {
+            try { TacticalConfigPanel.SaveSessionStateAuto(win); } catch { }
+            try { OpordBuilderManager.SaveAllOpordsToDisk(win); } catch { }
+
+            CaptureAndCollapseTopMenuBar(GetAllVisualDescendants(win).ToList());
+
+            if (_originalSaveProjectButton != null)
+            {
+                _originalSaveProjectButton.IsEnabled = true;
+                _originalSaveProjectButton.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
+                string savedPath = TacticalConfigPanel.CurrentDraftProjectPath ?? "";
+                if (!string.IsNullOrWhiteSpace(savedPath))
+                {
+                    CurrentProjectFilePath = savedPath;
+                    if (_activeProjectFileLabel != null)
+                    {
+                        _activeProjectFileLabel.Text = BuilderI18n.T("Projekt: ", "Project: ") + Path.GetFileName(savedPath);
+                    }
+                }
+                return;
+            }
+
+            string evName = TacticalConfigPanel.GetEventNameFromWindow(win);
+            string safeEv = TacticalConfigPanel.SanitizeFileName(string.IsNullOrWhiteSpace(evName) ? "operacja" : evName);
+
+            var dlg = new SaveFileDialog
+            {
+                Title = BuilderI18n.T("Zapisz projekt roboczy (.fthproj)", "Save Workspace Project (.fthproj)"),
+                Filter = "Field TAK Hub Project (*.fthproj)|*.fthproj|JSON (*.json)|*.json",
+                FileName = safeEv + ".fthproj"
+            };
+
+            if (dlg.ShowDialog(win) == true)
+            {
+                CurrentProjectFilePath = dlg.FileName;
+
+                JsonNode existingMapState = null;
+                try
+                {
+                    if (!string.IsNullOrWhiteSpace(TacticalConfigPanel.CurrentDraftProjectPath) && File.Exists(TacticalConfigPanel.CurrentDraftProjectPath))
+                    {
+                        var draftNode = JsonNode.Parse(File.ReadAllText(TacticalConfigPanel.CurrentDraftProjectPath, Encoding.UTF8)) as JsonObject;
+                        if (draftNode != null && draftNode["mapState"] != null)
+                        {
+                            existingMapState = draftNode["mapState"].DeepClone();
+                        }
+                    }
+                }
+                catch { }
+
+                var snap = CleanFactionPackageEngine.ExtractWorkspaceSnapshot(win);
+                var fArr = new JsonArray();
+                foreach (var fac in snap.Factions)
+                {
+                    var vArr = new JsonArray();
+                    foreach (var vc in fac.VoiceChannels)
+                    {
+                        vArr.Add(new JsonObject
+                        {
+                            ["roleName"] = vc.RoleName,
+                            ["bandType"] = vc.BandType,
+                            ["freqMhz"] = vc.FreqMhz,
+                            ["toneOrCode"] = vc.ToneOrCode
+                        });
+                    }
+
+                    fArr.Add(new JsonObject
+                    {
+                        ["Name"] = fac.Name,
+                        ["ColorHex"] = fac.ColorHex,
+                        ["ChannelName"] = fac.ChannelName,
+                        ["Psk"] = fac.Psk,
+                        ["ChannelUrl"] = CleanFactionPackageEngine.BuildMeshtasticChannelSetUrl(fac),
+                        ["LoraRegion"] = fac.LoraRegion,
+                        ["LoraModemPreset"] = fac.LoraModemPreset,
+                        ["HopLimit"] = fac.HopLimit,
+                        ["OtsHost"] = fac.OtsHost,
+                        ["EnrollmentUri"] = fac.EnrollmentUri,
+                        ["EmergencyPhone"] = fac.EmergencyPhone,
+                        ["PliProfile"] = fac.PliProfile,
+                        ["MeshProfile"] = fac.MeshProfile,
+                        ["VoiceChannels"] = vArr
+                    });
+                }
+
+                var rootObj = new JsonObject
+                {
+                    ["schemaVersion"] = "3.1",
+                    ["savedAtUtc"] = DateTime.UtcNow.ToString("o"),
+                    ["eventName"] = snap.EventName,
+                    ["factions"] = fArr
+                };
+                if (existingMapState != null)
+                {
+                    rootObj["mapState"] = existingMapState;
+                }
+
+                File.WriteAllText(dlg.FileName, rootObj.ToJsonString(new JsonSerializerOptions { WriteIndented = true }), Encoding.UTF8);
+                TacticalConfigPanel.CurrentDraftProjectPath = dlg.FileName;
+
+                if (_activeProjectFileLabel != null)
+                {
+                    _activeProjectFileLabel.Text = BuilderI18n.T("Projekt: ", "Project: ") + Path.GetFileName(dlg.FileName);
+                }
+            }
+        }
+
         private static void ReloadProjectAndMapStateEverywhere(Window win, string filePath)
         {
             if (string.IsNullOrWhiteSpace(filePath) || !File.Exists(filePath)) return;
 
             try
             {
-                // 1. Oczyść plik z niewidocznych znaków zero-width space (\u200B) i skopiuj do wszystkich ścieżek sesji roboczej
                 string rawJson = File.ReadAllText(filePath, Encoding.UTF8).Replace("\u200B", "");
                 File.WriteAllText(filePath, rawJson, Encoding.UTF8);
 
@@ -354,7 +480,6 @@ namespace FieldTakHub.Builder.Services
                 }
                 catch { }
 
-                // 2. Wywołaj metody wczytujące projekt i mapState w TacticalConfigPanel (2-argumentowe oraz 1-argumentowe)
                 var panelType = typeof(TacticalConfigPanel);
                 var methods = panelType.GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
 
@@ -397,8 +522,6 @@ namespace FieldTakHub.Builder.Services
                     catch { }
                 }
 
-                // 3. Jeśli w oknie istniała wcześniej nakładka mapy (INJECTED_MAP_OVERLAY), zresetuj jej cache,
-                //    aby przy przejściu do Generatora Map 1:1 wczytała nowy mapState (AO, Infil, Kod, Parking) z CurrentDraftProjectPath!
                 var fields = panelType.GetFields(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
                 foreach (var f in fields)
                 {
@@ -410,13 +533,6 @@ namespace FieldTakHub.Builder.Services
                         }
                         f.SetValue(null, null);
                     }
-                }
-
-                // Jeśli użytkownik jest aktualnie w Generatorze Map 1:1, odśwież widok mapy natychmiast
-                if (_currentModule == BuilderActiveModule.MapGenerator && _originalMapTabButton != null)
-                {
-                    _originalMapTabButton.IsEnabled = true;
-                    _originalMapTabButton.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
                 }
             }
             catch { }
@@ -439,7 +555,7 @@ namespace FieldTakHub.Builder.Services
         }
 
         // =========================================================================
-        // 2. CHOWANY PASEK BOCZNY (STRZAŁKA ◀ / ▶) + CAŁKOWITE USUNIĘCIE DUPLIKATÓW
+        // 2. CHOWANY PASEK BOCZNEGO (STRZAŁKA ◀ / ▶) + CAŁKOWITE USUNIĘCIE DUPLIKATÓW
         // =========================================================================
         public static void ToggleSidebarCollapsed()
         {
@@ -486,8 +602,6 @@ namespace FieldTakHub.Builder.Services
                 CaptureAndCollapseTopMenuBar(allElements);
                 CollapseLegacyLeftSidebarColumn(win, allElements);
 
-                // Jeśli główne okno ma już nasz zewnętrzny _rootDockGrid na samej górze (win.Content),
-                // wyczyść tylko ewentualne wewnętrzne duplikaty i wyjdź!
                 if (win.Content is Grid currentTopGrid && string.Equals(currentTopGrid.Tag?.ToString(), "FTH_ROOT_LAYOUT_GRID", StringComparison.Ordinal))
                 {
                     _rootDockGrid = currentTopGrid;
@@ -496,8 +610,6 @@ namespace FieldTakHub.Builder.Services
                     return;
                 }
 
-                // Jeśli wcześniej utworzony _rootDockGrid został opakowany przez TacticalConfigPanel (powód podwójnego paska bocznego!),
-                // odepnij stary wewnętrzny pasek boczny przed utworzeniem pojedynczego zewnętrznego układu!
                 foreach (var oldSide in allElements.OfType<Border>().Where(b => string.Equals(b.Tag?.ToString(), "FTH_TACTICAL_SIDEBAR_V31", StringComparison.Ordinal)).ToList())
                 {
                     oldSide.Visibility = Visibility.Collapsed;
@@ -798,7 +910,6 @@ namespace FieldTakHub.Builder.Services
 
             var rootContainerGrid = new Grid();
 
-            // A. WIDOK ROZWINIĘTY (PEŁNY PASEK BOCZNY 255px)
             _expandedSidebarContent = new DockPanel { LastChildFill = false };
 
             var topStack = new StackPanel { Margin = new Thickness(0, 0, 0, 14) };
@@ -957,7 +1068,6 @@ namespace FieldTakHub.Builder.Services
             _expandedSidebarContent.Children.Add(bottomStack);
             rootContainerGrid.Children.Add(_expandedSidebarContent);
 
-            // B. WIDOK ZWINIĘTY (WĄSKA LISTWA 42px Z PRZYCISKIEM STRZAŁKI ▶ ORAZ IKONAMI MODUŁÓW)
             _collapsedSidebarStrip = new StackPanel
             {
                 Visibility = Visibility.Collapsed,
