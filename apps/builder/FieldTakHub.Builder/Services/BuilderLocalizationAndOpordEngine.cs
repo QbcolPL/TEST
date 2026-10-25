@@ -676,7 +676,7 @@ namespace FieldTakHub.Builder.Services
 
         // III. WYKONANIE (wg PDF: A. Zamiar dowódcy, B. Priorytety/styl, C. Łańcuch dowodzenia, D. Skład i role, E. Łączność, F. SARNEG/Hasła, G. Leczenie)
         public string CommandersIntent { get; set; } = "Jedziemy działać zespołowo, przećwiczyć nawigację MGRS/ATAK i zrealizować 100% zadań głównych bez zbędnych strat.";
-        public stringConceptAndStyleOfAction { get; set; } = "";
+        
         public string ConceptOfOperations { get; set; } = "Priorytety i styl działania: Skryte przemieszczanie czujką z przodu. Unikamy niepotrzebnego kontaktu ogniowego podczas marszu do celu. Walczymy wyłącznie przy przewadze ogniowej lub bezpośrednio o obiekt zadaniowy.";
         public string TasksToSubordinateUnits { get; set; } = "• Sekcja Szturmowa: Wejście na obiekt i czyszczenie przedpola.\n• Wsparcie / DMR: Osłona skrzydeł i obserwacja dróg podejścia.";
         public string CoordinatingAndRoe { get; set; } = "• Obowiązkowa ochrona wzroku przez cały czas trwania gry.\n• Weryfikacja pozycji sojuszników w ATAK przed otwarciem ognia.";
@@ -695,7 +695,7 @@ namespace FieldTakHub.Builder.Services
         public string TargetCodeNames { get; set; } = "• OBJ ALPHA = 'ZAMEK'   |   • Punkt Zbiórki (RP) = 'KUŹNIA'   |   • FOB / Respawn = 'BAZA'";
         public string SarnegKeyWord10 { get; set; } = "ZLEARSTWOK"; // 10 niepowtarzających się liter dla cyfr 0..9
         public List<OpordCodewordRow> CodewordsTable { get; set; } = new List<OpordCodewordRow>();
-        public stringChallengeAndPassword { get; set; } = "";
+        
         public string ChallengeAndPassword { get; set; } = "a) Werbalne (Wywołanie - Odpowiedź - Potwierdzenie): GROM - BŁYSK - TARCZA (Suma cyfr: 7)\nb) Niewerbalne (Wywołanie - Odzew): 2 błyski czerwonym światłem - 1 błysk + podniesienie lewej ręki";
 
         // III.G Leczenie i IV. LOGISTYKA (wg PDF: Styl wyposażenia, Szpejlista, Wyposażenie specjalne, Dojazd, Regulamin)
