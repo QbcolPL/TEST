@@ -49,6 +49,7 @@ namespace FieldTakHub.Builder.Services
         private static ButtonBase _originalUsbProgrammerButton;
         private static ButtonBase _originalLoadProjectButton;
         private static ButtonBase _originalSaveProjectButton;
+        private static ButtonBase _originalSupportCreatorButton;
 
         private static Button _navBtnPackages;
         private static Button _navBtnMaps;
@@ -59,11 +60,13 @@ namespace FieldTakHub.Builder.Services
         private static Button _miniBtnMaps;
         private static Button _miniBtnOpord;
         private static Button _miniBtnUsb;
+        private static Button _miniBtnSupport;
 
         private static Button _projBtnNew;
         private static Button _projBtnOpen;
         private static Button _projBtnSave;
         private static Button _projBtnSourceDir;
+        private static Button _supportCreatorBtn;
         private static Button _langSwitchBtn;
 
         private static TextBlock _sidebarTitleBlock;
@@ -103,9 +106,6 @@ namespace FieldTakHub.Builder.Services
             EnsureRootDockSidebar(win);
         }
 
-        // =========================================================================
-        // 1. START ZEROWY (ZERO-STATE) + NOWY / OTWÓRZ / ZAPISZ PROJEKT (Z MAPSTATE)
-        // =========================================================================
         private static void ApplyZeroStateOnApplicationStartup(Window win)
         {
             try
@@ -165,7 +165,7 @@ namespace FieldTakHub.Builder.Services
 
             var zeroJson = new JsonObject
             {
-                ["schemaVersion"] = "3.1",
+                ["schemaVersion"] = "3.2",
                 ["eventName"] = "NOWA OPERACJA",
                 ["factions"] = new JsonArray
                 {
@@ -258,6 +258,9 @@ namespace FieldTakHub.Builder.Services
             SwitchActiveModule(win, BuilderActiveModule.PackageGenerator);
         }
 
+        // =========================================================================
+        // OTWIERANIE PROJEKTU — DOKŁADNIE 1 OKNO WYBORU PLIKU (BEZ TRZYKROTNEGO DIALOGU)
+        // =========================================================================
         public static void OpenProjectInteractive(Window win)
         {
             var dlg = new OpenFileDialog
@@ -272,36 +275,24 @@ namespace FieldTakHub.Builder.Services
             _hasUserLoadedProject = true;
             CurrentProjectFilePath = dlg.FileName;
 
-            // 1. Oczyść plik z niewidocznych znaków (\u200B) i zsynchronizuj ze wszystkimi plikami sesji roboczej
+            // 1. Oczyść plik z niewidocznych znaków (\u200B), zapisz w sesji roboczej i wywołaj bezpośrednie metody ładujące
             ReloadProjectAndMapStateEverywhere(win, dlg.FileName);
 
-            // 2. Przekaż wybraną ścieżkę do wszystkich natywnych przycisków 'Wczytaj projekt' w TacticalConfigPanel,
-            //    aby wczytały zarówno strony konfliktu (factions), jak i pełny stan mapy (mapState: AO, Infil, Kod, Parking)
+            // 2. Jeśli w TacticalConfigPanel istnieje natywny przycisk wczytywania, przekaż mu ścieżkę przez PendingSidebarProjectPath
+            //    i wywołaj TYLKO JEDEN RAZ (z break;), aby nigdy nie otwierał kolejnych okien dialogowych!
             var allElements = GetAllVisualDescendants(win).ToList();
             CaptureAndCollapseTopMenuBar(allElements);
 
             SetPendingSidebarProjectPath(dlg.FileName);
             try
             {
-                foreach (var btn in allElements.OfType<ButtonBase>())
+                if (_originalLoadProjectButton != null)
                 {
-                    if (_injectedSidebarContainer != null && IsDescendantOf(_injectedSidebarContainer, btn))
-                        continue;
-
-                    string txt = GetCombinedText(btn);
-                    if (txt.Contains("Wczytaj projekt", StringComparison.OrdinalIgnoreCase) ||
-                        txt.Contains("Load Workspace", StringComparison.OrdinalIgnoreCase) ||
-                        txt.Contains("Wczytaj (.fthproj)", StringComparison.OrdinalIgnoreCase))
-                    {
-                        try
-                        {
-                            btn.IsEnabled = true;
-                            btn.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
-                        }
-                        catch { }
-                    }
+                    _originalLoadProjectButton.IsEnabled = true;
+                    _originalLoadProjectButton.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
                 }
             }
+            catch { }
             finally
             {
                 SetPendingSidebarProjectPath("");
@@ -312,7 +303,6 @@ namespace FieldTakHub.Builder.Services
                 _activeProjectFileLabel.Text = BuilderI18n.T("Projekt: ", "Project: ") + Path.GetFileName(dlg.FileName);
             }
 
-            // 3. Jeśli użytkownik znajduje się w Generatorze Map 1:1, odśwież widok mapy natychmiast
             if (_currentModule == BuilderActiveModule.MapGenerator && _originalMapTabButton != null)
             {
                 try
@@ -335,6 +325,48 @@ namespace FieldTakHub.Builder.Services
                 {
                     field.SetValue(null, value ?? "");
                 }
+            }
+            catch { }
+        }
+
+        public static void InvokeSupportCreatorAction(Window win)
+        {
+            var allElements = GetAllVisualDescendants(win).ToList();
+            CaptureAndCollapseTopMenuBar(allElements);
+
+            if (_originalSupportCreatorButton != null)
+            {
+                try
+                {
+                    _originalSupportCreatorButton.IsEnabled = true;
+                    _originalSupportCreatorButton.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
+                    return;
+                }
+                catch { }
+            }
+
+            foreach (var btn in allElements.OfType<ButtonBase>())
+            {
+                if (_injectedSidebarContainer != null && IsDescendantOf(_injectedSidebarContainer, btn))
+                    continue;
+
+                string txt = GetCombinedText(btn);
+                if (txt.Contains("Wesprzyj", StringComparison.OrdinalIgnoreCase) ||
+                    txt.Contains("Support Creator", StringComparison.OrdinalIgnoreCase))
+                {
+                    try
+                    {
+                        btn.IsEnabled = true;
+                        btn.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
+                        return;
+                    }
+                    catch { }
+                }
+            }
+
+            try
+            {
+                Process.Start(new ProcessStartInfo("https://buycoffee.to") { UseShellExecute = true });
             }
             catch { }
         }
@@ -427,7 +459,7 @@ namespace FieldTakHub.Builder.Services
 
                 var rootObj = new JsonObject
                 {
-                    ["schemaVersion"] = "3.1",
+                    ["schemaVersion"] = "3.2",
                     ["savedAtUtc"] = DateTime.UtcNow.ToString("o"),
                     ["eventName"] = snap.EventName,
                     ["factions"] = fArr
@@ -554,9 +586,6 @@ namespace FieldTakHub.Builder.Services
             }
         }
 
-        // =========================================================================
-        // 2. CHOWANY PASEK BOCZNEGO (STRZAŁKA ◀ / ▶) + CAŁKOWITE USUNIĘCIE DUPLIKATÓW
-        // =========================================================================
         public static void ToggleSidebarCollapsed()
         {
             _isSidebarCollapsed = !_isSidebarCollapsed;
@@ -777,12 +806,20 @@ namespace FieldTakHub.Builder.Services
                 else if (txt.Contains("Wczytaj projekt", StringComparison.OrdinalIgnoreCase) ||
                          txt.Contains("Load Workspace", StringComparison.OrdinalIgnoreCase))
                 {
-                    _originalLoadProjectButton = btn;
+                    if (_originalLoadProjectButton == null)
+                        _originalLoadProjectButton = btn;
                 }
                 else if (txt.Contains("Zapisz projekt roboczy", StringComparison.OrdinalIgnoreCase) ||
                          txt.Contains("Save Workspace", StringComparison.OrdinalIgnoreCase))
                 {
-                    _originalSaveProjectButton = btn;
+                    if (_originalSaveProjectButton == null)
+                        _originalSaveProjectButton = btn;
+                }
+                else if (txt.Contains("Wesprzyj twórcę", StringComparison.OrdinalIgnoreCase) ||
+                         txt.Contains("Support Creator", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (_originalSupportCreatorButton == null)
+                        _originalSupportCreatorButton = btn;
                 }
 
                 bool isTopBarButton =
@@ -797,6 +834,8 @@ namespace FieldTakHub.Builder.Services
                     txt.Contains("NATO OPORD Builder", StringComparison.OrdinalIgnoreCase) ||
                     txt.Contains("Zapisz projekt roboczy", StringComparison.OrdinalIgnoreCase) ||
                     txt.Contains("Wczytaj projekt", StringComparison.OrdinalIgnoreCase) ||
+                    txt.Contains("Wesprzyj twórcę", StringComparison.OrdinalIgnoreCase) ||
+                    txt.Contains("Support Creator", StringComparison.OrdinalIgnoreCase) ||
                     string.Equals(btn.Tag?.ToString(), "INJECTED_OPORD_TAB_BTN", StringComparison.Ordinal) ||
                     string.Equals(btn.Tag?.ToString(), "INJECTED_LANG_BTN", StringComparison.Ordinal);
 
@@ -822,7 +861,8 @@ namespace FieldTakHub.Builder.Services
                                     !cTxt.Contains("Generator Map", StringComparison.OrdinalIgnoreCase) &&
                                     !cTxt.Contains("OPORD", StringComparison.OrdinalIgnoreCase) &&
                                     !cTxt.Contains("projekt", StringComparison.OrdinalIgnoreCase) &&
-                                    !cTxt.Contains("Wesprzyj", StringComparison.OrdinalIgnoreCase))
+                                    !cTxt.Contains("Wesprzyj", StringComparison.OrdinalIgnoreCase) &&
+                                    !cTxt.Contains("Support Creator", StringComparison.OrdinalIgnoreCase))
                                 {
                                     allChildrenAreTopBarButtons = false;
                                     break;
@@ -894,7 +934,7 @@ namespace FieldTakHub.Builder.Services
         }
 
         // =========================================================================
-        // 3. BUDOWA CHOWANEGO PASKA BOCZNEGO (Z PRZYCISKIEM STRZAŁKI ◀ / ▶)
+        // BUDOWA CHOWANEGO PASKA BOCZNEGO (Z PRZYCISKIEM STRZAŁKI ◀/▶ ORAZ "WESPRZYJ TWÓRCĘ")
         // =========================================================================
         private static Border BuildTacticalSidebarControl(Window win)
         {
@@ -977,6 +1017,7 @@ namespace FieldTakHub.Builder.Services
             string iconMap = "M15,19L9,16.89V5L15,7.11M20.5,3C20.44,3 20.39,3 20.34,3L15,5.1L9,3L3.36,4.9C3.15,4.97 3,5.15 3,5.38V20.5A0.5,0.5 0 0,0 3.5,21C3.55,21 3.61,21 3.66,20.97L9,18.9L15,21L20.64,19.1C20.85,19 21,18.85 21,18.62V3.5A0.5,0.5 0 0,0 20.5,3Z";
             string iconOpord = "M19,3H14.82C14.4,1.84 13.3,1 12,1C10.7,1 9.6,1.84 9.18,3H5A2,2 0 0,0 3,5V19A2,2 0 0,0 5,21H19A2,2 0 0,0 21,19V5A2,2 0 0,0 19,3M12,3A1,1 0 0,1 13,4A1,1 0 0,1 12,5A1,1 0 0,1 11,4A1,1 0 0,1 12,3M7,7H17V9H7V7M7,11H17V13H7V11M7,15H14V17H7V15Z";
             string iconUsb = "M9,3V5H7A2,2 0 0,0 5,7V9H3V11H5V13H3V15H5V17A2,2 0 0,0 7,19H9V21H11V19H13V21H15V19H17A2,2 0 0,0 19,17V15H21V13H19V11H21V9H19V7A2,2 0 0,0 17,5H15V3H13V5H11V3H9M7,7H17V17H7V7M9,9V15H15V9H9Z";
+            string iconCoffee = "M2,21V19H20V21H2M20,8V5H18V8H20M20,3A2,2 0 0,1 22,5V8A2,2 0 0,1 20,10H18V13A4,4 0 0,1 14,17H8A4,4 0 0,1 4,13V3H20M16,5H6V13A2,2 0 0,0 8,15H14A2,2 0 0,0 16,13V5Z";
 
             _navBtnPackages = CreateSidebarNavButton(iconPkg, "Generator Paczek (.ftak)", () => SwitchActiveModule(win, BuilderActiveModule.PackageGenerator));
             topStack.Children.Add(_navBtnPackages);
@@ -1058,6 +1099,15 @@ namespace FieldTakHub.Builder.Services
             var bottomStack = new StackPanel { VerticalAlignment = VerticalAlignment.Bottom };
             DockPanel.SetDock(bottomStack, Dock.Bottom);
 
+            // Przywrócony przycisk "☕ Wesprzyj twórcę" (Support Creator)
+            _supportCreatorBtn = CreateSidebarActionButton(
+                iconCoffee,
+                "☕ Wesprzyj twórcę",
+                "#FF9F43",
+                () => InvokeSupportCreatorAction(win));
+            _supportCreatorBtn.BorderBrush = new SolidColorBrush(Color.FromRgb(180, 110, 35));
+            bottomStack.Children.Add(_supportCreatorBtn);
+
             _langSwitchBtn = CreateSidebarActionButton(
                 "M12,2A10,10 0 0,0 2,12A10,10 0 0,0 12,22A10,10 0 0,0 22,12A10,10 0 0,0 12,2M11,19.93C7.05,19.44 4,16.08 4,12C4,11.38 4.08,10.78 4.21,10.21L9,15V16A2,2 0 0,0 11,18M18.9,17.39C18.64,16.58 17.9,16 17,16H16V13A1,1 0 0,0 15,12H9V10H11A1,1 0 0,0 12,9V7H14A2,2 0 0,0 16,5V4.59C18.93,5.77 21,8.64 21,12C21,14.08 20.2,15.97 18.9,17.39Z",
                 "Język UI: PL / ENG",
@@ -1085,11 +1135,13 @@ namespace FieldTakHub.Builder.Services
             _miniBtnMaps = CreateCollapsedIconOnlyButton(iconMap, "Generator Map 1:1", () => SwitchActiveModule(win, BuilderActiveModule.MapGenerator));
             _miniBtnOpord = CreateCollapsedIconOnlyButton(iconOpord, "Generator OPORD", () => SwitchActiveModule(win, BuilderActiveModule.OpordGenerator));
             _miniBtnUsb = CreateCollapsedIconOnlyButton(iconUsb, "Programator Płytek USB", () => SwitchActiveModule(win, BuilderActiveModule.UsbProgrammer));
+            _miniBtnSupport = CreateCollapsedIconOnlyButton(iconCoffee, "☕ Wesprzyj twórcę", () => InvokeSupportCreatorAction(win));
 
             _collapsedSidebarStrip.Children.Add(_miniBtnPackages);
             _collapsedSidebarStrip.Children.Add(_miniBtnMaps);
             _collapsedSidebarStrip.Children.Add(_miniBtnOpord);
             _collapsedSidebarStrip.Children.Add(_miniBtnUsb);
+            _collapsedSidebarStrip.Children.Add(_miniBtnSupport);
 
             rootContainerGrid.Children.Add(_collapsedSidebarStrip);
             sidebarBorder.Child = rootContainerGrid;
@@ -1138,9 +1190,6 @@ namespace FieldTakHub.Builder.Services
             return btn;
         }
 
-        // =========================================================================
-        // 4. PRZEŁĄCZANIE MODUŁÓW WEWNĄTRZ KOLUMNY 1 (BEZ UKRYWANIA SIDEBARA)
-        // =========================================================================
         public static void SwitchActiveModule(Window win, BuilderActiveModule targetModule)
         {
             EnsureRootDockSidebar(win);
@@ -1302,11 +1351,14 @@ namespace FieldTakHub.Builder.Services
             SetButtonLabel(_projBtnOpen, BuilderI18n.T("Otwórz projekt (.fthproj)", "Open Project (.fthproj)"));
             SetButtonLabel(_projBtnSave, BuilderI18n.T("Zapisz projekt (.fthproj)", "Save Project (.fthproj)"));
             SetButtonLabel(_projBtnSourceDir, BuilderI18n.T("Folder Source (APK / Mapy)", "Source Folder (APK / Maps)"));
+            SetButtonLabel(_supportCreatorBtn, BuilderI18n.T("☕ Wesprzyj twórcę", "☕ Support Creator"));
             SetButtonLabel(_langSwitchBtn, BuilderI18n.T("Język UI: Polski (PL -> ENG)", "UI Language: English (ENG -> PL)"));
 
-            if (_activeProjectFileLabel != null && string.IsNullOrEmpty(CurrentProjectFilePath))
+            if (_activeProjectFileLabel != null)
             {
-                _activeProjectFileLabel.Text = BuilderI18n.T("Projekt: Nowy (Stan zerowy)", "Project: New (Zero-State)");
+                _activeProjectFileLabel.Text = string.IsNullOrEmpty(CurrentProjectFilePath)
+                    ? BuilderI18n.T("Projekt: Nowy (Stan zerowy)", "Project: New (Zero-State)")
+                    : (BuilderI18n.T("Projekt: ", "Project: ") + Path.GetFileName(CurrentProjectFilePath));
             }
         }
 

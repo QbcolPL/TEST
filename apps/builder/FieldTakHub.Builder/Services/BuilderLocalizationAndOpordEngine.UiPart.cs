@@ -21,7 +21,7 @@ namespace FieldTakHub.Builder.Services
     internal static partial class OpordBuilderManager
     {
         // =========================================================================
-        // 6. WIDOK GENERATORA OPORD v3.1 (WEKTOROWE +/-, METOC, SARNEG PL/EN, JAWNE/TAJNE, ZAŁĄCZNIK 1)
+        // 6. WIDOK GENERATORA OPORD v3.2 (NIEZALEŻNE DNI, WYBÓR DNI DO GENEROWANIA, JEDEN PRZYCISK SARNEG, PEŁNE PL/ENG)
         // =========================================================================
         public static Border CreateOrGetOpordOverlayView(Window win)
         {
@@ -65,12 +65,11 @@ namespace FieldTakHub.Builder.Services
                 var model = GetOrCreateModel(_activeOpordFaction);
                 model.ActiveDayIndex = Math.Clamp(model.ActiveDayIndex, 0, Math.Max(0, model.Days.Count - 1));
                 var activeDay = model.Days[model.ActiveDayIndex];
-                model.OperationDateIso = activeDay.DateIso;
 
                 string eventName = TacticalConfigPanel.GetEventNameFromWindow(win);
                 SyncModelRadioChannelsFromFactionGenerator(win, _activeOpordFaction, model);
 
-                // PASEK NAGŁÓWKOWY GENERATORA OPORD v3.1
+                // PASEK NAGŁÓWKOWY GENERATORA OPORD v3.2
                 var topCard = new Border
                 {
                     Background = TacticalConfigPanel.BrushCardBg,
@@ -85,8 +84,8 @@ namespace FieldTakHub.Builder.Services
                 topStack.Children.Add(new TextBlock
                 {
                     Text = BuilderI18n.T(
-                        "📋 GENERATOR ROZKAZU BOJOWEGO MILSIM / NATO (OPORD v3.1 + SARNEG + METOC) — " + eventName,
-                        "📋 MILSIM / NATO OPORD v3.1 BUILDER (SARNEG + METOC + SQUAD ROSTER) — " + eventName),
+                        "📋 GENERATOR ROZKAZU BOJOWEGO MILSIM / NATO (OPORD v3.2 + SARNEG + METOC) — " + eventName,
+                        "📋 MILSIM / NATO OPORD v3.2 BUILDER (SARNEG + METOC + SQUAD ROSTER) — " + eventName),
                     Foreground = TacticalConfigPanel.BrushAccent,
                     FontWeight = FontWeights.Bold,
                     FontSize = 14.5,
@@ -96,8 +95,8 @@ namespace FieldTakHub.Builder.Services
                 topStack.Children.Add(new TextBlock
                 {
                     Text = BuilderI18n.T(
-                        "Wzór drużynowy MilSim i NATO: przełącznik klauzuli JAWNE / TAJNE, wielodniowe zakładki (+ / -), zintegrowany moduł pogodowy METOC (automatycznie pobierający AO z Mapy), Tabela Składu (+ / -), generator 10-literowych słów SARNEG (PL/EN) oraz opcjonalny, edytowalny Załącznik 1 Ról.",
-                        "Complete MilSim & NATO OPORD suite: UNCLASSIFIED / SECRET toggle, multi-day tabs (+ / -), smart METOC weather (auto-pulling Map AO), Squad Table (+ / -), 10-letter SARNEG word generator (PL/EN), and optional editable Roles Annex."),
+                        "Wzór drużynowy MilSim i NATO: przełącznik JAWNE / TAJNE, niezależne zakładki dzienne (+ / -) z wyborem dni do wygenerowania, inteligentny moduł pogodowy METOC dla każdego dnia osobno, Tabela Składu (+ / -), generator słów SARNEG oraz opcjonalny Załącznik 1 Ról.",
+                        "Complete MilSim & NATO OPORD suite: UNCLASSIFIED / SECRET toggle, independent daily tabs (+ / -) with day selection for export, per-day smart METOC weather, Squad Roster (+ / -), SARNEG word generator, and optional editable Roles Annex."),
                     Foreground = TacticalConfigPanel.BrushMutedText,
                     FontSize = 10.5,
                     TextWrapping = TextWrapping.Wrap,
@@ -105,11 +104,11 @@ namespace FieldTakHub.Builder.Services
                 });
 
                 var actionBar = new Grid();
-                actionBar.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(160) });
+                actionBar.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(155) });
+                actionBar.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1.15, GridUnitType.Star) });
                 actionBar.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1.1, GridUnitType.Star) });
                 actionBar.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1.1, GridUnitType.Star) });
-                actionBar.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1.1, GridUnitType.Star) });
-                actionBar.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1.0, GridUnitType.Star) });
+                actionBar.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(0.95, GridUnitType.Star) });
 
                 var facCombo = new ComboBox
                 {
@@ -137,7 +136,7 @@ namespace FieldTakHub.Builder.Services
 
                 var btnExportHtml = new Button
                 {
-                    Content = BuilderI18n.T("🖨️ Drukuj OPORD A4 (HTML / PDF)", "🖨️ Print A4 OPORD (HTML / PDF)"),
+                    Content = BuilderI18n.T("🖨️ Generuj OPORD A4 (Wybrane dni)", "🖨️ Generate A4 OPORD (Selected Days)"),
                     Height = 32,
                     Margin = new Thickness(0, 0, 6, 0),
                     Background = TacticalConfigPanel.BrushButtonAccent,
@@ -182,7 +181,7 @@ namespace FieldTakHub.Builder.Services
 
                 var btnCopyDiscord = new Button
                 {
-                    Content = BuilderI18n.T("💬 Kopiuj na Discorda (Markdown)", "💬 Copy for Discord (Markdown)"),
+                    Content = BuilderI18n.T("💬 Kopiuj na Discorda (Wybrane dni)", "💬 Copy for Discord (Selected Days)"),
                     Height = 32,
                     Margin = new Thickness(0, 0, 6, 0),
                     Background = TacticalConfigPanel.BrushItemBg,
@@ -202,8 +201,8 @@ namespace FieldTakHub.Builder.Services
                     MessageBox.Show(
                         win,
                         BuilderI18n.T(
-                            "Skopiowano kompletny rozkaz OPORD strony " + _activeOpordFaction + " do schowka! Możesz wkleić go na Discordzie (Ctrl+V).",
-                            "Copied complete OPORD for " + _activeOpordFaction + " to clipboard!"),
+                            "Skopiowano rozkaz OPORD (dla zaznaczonych dni) strony " + _activeOpordFaction + " do schowka! Możesz wkleić go na Discordzie (Ctrl+V).",
+                            "Copied OPORD (for selected days) of " + _activeOpordFaction + " to clipboard!"),
                         "OPORD -> Discord Markdown",
                         MessageBoxButton.OK,
                         MessageBoxImage.Information);
@@ -232,7 +231,7 @@ namespace FieldTakHub.Builder.Services
                         BuilderI18n.T(
                             "Zapisano rozkaz OPORD_" + _activeOpordFaction + " w katalogu wyjściowym frakcji!",
                             "Saved OPORD_" + _activeOpordFaction + " to the faction output folder!"),
-                        "OPORD Saved",
+                        BuilderI18n.T("Zapisano OPORD", "OPORD Saved"),
                         MessageBoxButton.OK,
                         MessageBoxImage.Information);
                 };
@@ -243,7 +242,9 @@ namespace FieldTakHub.Builder.Services
                 topCard.Child = topStack;
                 mainStack.Children.Add(topCard);
 
-                // PASEK ZAKŁADEK KOLEJNYCH DNI OPERACJI (WEKTOROWY ZIELONY "+" I CZERWONY "-")
+                // =================================================================
+                // PASEK NIEZALEŻNYCH ZAKŁADEK DZIENNYCH + WYBÓR DNI DO GENEROWANIA OPORD
+                // =================================================================
                 var daysBarBorder = new Border
                 {
                     Background = new SolidColorBrush(Color.FromRgb(10, 24, 30)),
@@ -254,16 +255,68 @@ namespace FieldTakHub.Builder.Services
                     Margin = new Thickness(0, 0, 0, 10)
                 };
 
-                var daysDock = new DockPanel();
-                daysDock.Children.Add(new TextBlock
+                var daysOuterStack = new StackPanel();
+                var daysTopRow = new DockPanel { Margin = new Thickness(0, 0, 0, 6) };
+
+                daysTopRow.Children.Add(new TextBlock
                 {
-                    Text = BuilderI18n.T("📅 DNI OPERACJI (ZAKŁADKI DNI + / -):", "📅 OPERATION DAYS (DAY TABS + / -):"),
+                    Text = BuilderI18n.T(
+                        "📅 NIEZALEŻNE DNI OPERACJI (Zaznacz [✓] dni, które mają zostać ujęte przy generowaniu OPORD):",
+                        "📅 INDEPENDENT OPERATION DAYS (Check [✓] days to include when generating OPORD):"),
                     Foreground = TacticalConfigPanel.BrushAccent,
                     FontWeight = FontWeights.Bold,
-                    FontSize = 11.5,
-                    VerticalAlignment = VerticalAlignment.Center,
-                    Margin = new Thickness(0, 0, 12, 0)
+                    FontSize = 11,
+                    VerticalAlignment = VerticalAlignment.Center
                 });
+
+                var quickSelectWrap = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
+                DockPanel.SetDock(quickSelectWrap, Dock.Right);
+
+                var btnSelectAllDays = new Button
+                {
+                    Content = BuilderI18n.T("☑️ Generuj wszystkie dni", "☑️ Export All Days"),
+                    Height = 24,
+                    Padding = new Thickness(8, 1, 8, 1),
+                    Margin = new Thickness(0, 0, 6, 0),
+                    Background = new SolidColorBrush(Color.FromRgb(16, 42, 52)),
+                    Foreground = TacticalConfigPanel.BrushAccent,
+                    BorderBrush = TacticalConfigPanel.BrushAccent,
+                    BorderThickness = new Thickness(1),
+                    FontSize = 10,
+                    FontWeight = FontWeights.SemiBold,
+                    Cursor = Cursors.Hand
+                };
+                btnSelectAllDays.Click += (_, __) =>
+                {
+                    foreach (var d in model.Days) d.IncludeInExport = true;
+                    PersistModelToAppData(model);
+                    RebuildOpordForm();
+                };
+                quickSelectWrap.Children.Add(btnSelectAllDays);
+
+                var btnSelectOnlyActiveDay = new Button
+                {
+                    Content = BuilderI18n.T("1️⃣ Tylko aktywny dzień", "1️⃣ Only Active Day"),
+                    Height = 24,
+                    Padding = new Thickness(8, 1, 8, 1),
+                    Background = new SolidColorBrush(Color.FromRgb(16, 42, 52)),
+                    Foreground = Brushes.White,
+                    BorderBrush = TacticalConfigPanel.BrushInputBorder,
+                    BorderThickness = new Thickness(1),
+                    FontSize = 10,
+                    FontWeight = FontWeights.SemiBold,
+                    Cursor = Cursors.Hand
+                };
+                btnSelectOnlyActiveDay.Click += (_, __) =>
+                {
+                    for (int i = 0; i < model.Days.Count; i++)
+                        model.Days[i].IncludeInExport = (i == model.ActiveDayIndex);
+                    PersistModelToAppData(model);
+                    RebuildOpordForm();
+                };
+                quickSelectWrap.Children.Add(btnSelectOnlyActiveDay);
+                daysTopRow.Children.Add(quickSelectWrap);
+                daysOuterStack.Children.Add(daysTopRow);
 
                 var daysWrap = new WrapPanel { VerticalAlignment = VerticalAlignment.Center };
                 for (int dIdx = 0; dIdx < model.Days.Count; dIdx++)
@@ -272,16 +325,40 @@ namespace FieldTakHub.Builder.Services
                     var dayObj = model.Days[dIdx];
                     bool isSel = (dIdx == model.ActiveDayIndex);
 
+                    var tabChipBorder = new Border
+                    {
+                        Background = isSel ? new SolidColorBrush(Color.FromRgb(18, 60, 72)) : TacticalConfigPanel.BrushInputBg,
+                        BorderBrush = isSel ? TacticalConfigPanel.BrushAccent : TacticalConfigPanel.BrushInputBorder,
+                        BorderThickness = new Thickness(isSel ? 1.8 : 1.0),
+                        CornerRadius = new CornerRadius(6),
+                        Padding = new Thickness(6, 2, 4, 2),
+                        Margin = new Thickness(0, 0, 8, 4)
+                    };
+
+                    var chipRow = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+
+                    var exportCheck = new CheckBox
+                    {
+                        IsChecked = dayObj.IncludeInExport,
+                        VerticalAlignment = VerticalAlignment.Center,
+                        Margin = new Thickness(2, 0, 5, 0),
+                        ToolTip = BuilderI18n.T(
+                            "Uwzględnij '" + dayObj.DayTitle + "' przy generowaniu dokumentu OPORD",
+                            "Include '" + dayObj.DayTitle + "' when generating OPORD document"),
+                        Cursor = Cursors.Hand
+                    };
+                    exportCheck.Checked += (_, __) => { dayObj.IncludeInExport = true; PersistModelToAppData(model); };
+                    exportCheck.Unchecked += (_, __) => { dayObj.IncludeInExport = false; PersistModelToAppData(model); };
+                    chipRow.Children.Add(exportCheck);
+
                     var dayTabBtn = new Button
                     {
                         Content = "📆 " + dayObj.DayTitle + " (" + dayObj.DateIso + ")",
-                        Height = 28,
-                        Padding = new Thickness(12, 2, 12, 2),
-                        Margin = new Thickness(0, 0, 6, 0),
-                        Background = isSel ? TacticalConfigPanel.BrushButtonAccent : TacticalConfigPanel.BrushInputBg,
+                        Height = 26,
+                        Padding = new Thickness(8, 1, 8, 1),
+                        Background = isSel ? TacticalConfigPanel.BrushButtonAccent : Brushes.Transparent,
                         Foreground = isSel ? TacticalConfigPanel.BrushDarkFg : Brushes.White,
-                        BorderBrush = isSel ? TacticalConfigPanel.BrushAccent : TacticalConfigPanel.BrushInputBorder,
-                        BorderThickness = new Thickness(1.2),
+                        BorderThickness = new Thickness(0),
                         FontWeight = FontWeights.Bold,
                         FontSize = 11,
                         Cursor = Cursors.Hand
@@ -291,12 +368,19 @@ namespace FieldTakHub.Builder.Services
                         model.ActiveDayIndex = capturedIdx;
                         RebuildOpordForm();
                     };
-                    daysWrap.Children.Add(dayTabBtn);
+                    chipRow.Children.Add(dayTabBtn);
+
+                    tabChipBorder.Child = chipRow;
+                    daysWrap.Children.Add(tabChipBorder);
                 }
 
-                var btnAddDayPlus = CreateTacticalPlusMinusButton(true, BuilderI18n.T("Dodaj kolejny dzień operacji (+)", "Add next operation day (+)"), () =>
+                var btnAddDayPlus = CreateTacticalPlusMinusButton(true, BuilderI18n.T("Dodaj kolejny niezależny dzień operacji (+)", "Add next independent operation day (+)"), () =>
                 {
                     DateTime lastDt = DateTime.Today;
+                    string prevLocName = activeDay.LocationName ?? "";
+                    string prevLat = string.IsNullOrWhiteSpace(activeDay.LocationLat) ? "49.8494" : activeDay.LocationLat;
+                    string prevLon = string.IsNullOrWhiteSpace(activeDay.LocationLon) ? "18.8127" : activeDay.LocationLon;
+
                     if (model.Days.Count > 0 && DateTime.TryParseExact(model.Days.Last().DateIso, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out DateTime parsed))
                     {
                         lastDt = parsed.AddDays(1);
@@ -305,7 +389,15 @@ namespace FieldTakHub.Builder.Services
                     model.Days.Add(new OpordDayPlanModel
                     {
                         DayTitle = BuilderI18n.T("Dzień " + nextNum, "Day " + nextNum),
+                        IncludeInExport = true,
                         DateIso = lastDt.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
+                        LocationName = prevLocName,
+                        LocationLat = prevLat,
+                        LocationLon = prevLon,
+                        TerrainAndWeather = BuilderI18n.T(
+                            "Analiza terenu i pogody dla Dnia " + nextNum + " (kliknij przycisk METOC poniżej, aby pobrać niezależną prognozę na ten dzień).",
+                            "Terrain & weather analysis for Day " + nextNum + " (click METOC button below to fetch independent forecast for this day)."),
+                        MetocCondition = BuilderI18n.T("Brak pobranego raportu dla Dnia " + nextNum, "No METOC report fetched for Day " + nextNum),
                         DaySpecificTasks = BuilderI18n.T("• Zadania i harmonogram dla Dnia " + nextNum + "...", "• Tasks and schedule for Day " + nextNum + "...")
                     });
                     model.ActiveDayIndex = model.Days.Count - 1;
@@ -328,11 +420,13 @@ namespace FieldTakHub.Builder.Services
                 });
                 daysWrap.Children.Add(btnRemoveDayMinus);
 
-                daysDock.Children.Add(daysWrap);
-                daysBarBorder.Child = daysDock;
+                daysOuterStack.Children.Add(daysWrap);
+                daysBarBorder.Child = daysOuterStack;
                 mainStack.Children.Add(daysBarBorder);
 
+                // =================================================================
                 // 0. NAGŁÓWEK ROZKAZU + PRZEŁĄCZNIK KLAUZULI "JAWNE / TAJNE"
+                // =================================================================
                 var metaCard = CreateSectionCard(BuilderI18n.T(
                     "0. NAGŁÓWEK ROZKAZU, KLAUZULA TAJNOŚCI (JAWNE / TAJNE) ORAZ HARMONOGRAM: " + activeDay.DayTitle.ToUpperInvariant(),
                     "0. ORDER HEADER, CLASSIFICATION (UNCLASSIFIED / SECRET) & SCHEDULE: " + activeDay.DayTitle.ToUpperInvariant()));
@@ -426,12 +520,18 @@ namespace FieldTakHub.Builder.Services
                 metaStack.Children.Add(metaGrid);
 
                 metaStack.Children.Add(CreateLabeledMultilineBox(
-                    BuilderI18n.T("Harmonogram i zadania dla aktywnej zakładki (" + activeDay.DayTitle + " — " + activeDay.DateIso + "):", "Schedule & tasks for active day tab (" + activeDay.DayTitle + " — " + activeDay.DateIso + "):"),
-                    activeDay.DaySpecificTasks, 50, v => { activeDay.DaySpecificTasks = v; PersistModelToAppData(model); }));
+                    BuilderI18n.T(
+                        "Harmonogram i zadania specyficzne dla wybranego dnia (" + activeDay.DayTitle + " — " + activeDay.DateIso + "):",
+                        "Schedule & specific tasks for selected day (" + activeDay.DayTitle + " — " + activeDay.DateIso + "):"),
+                    activeDay.DaySpecificTasks, 54, v => { activeDay.DaySpecificTasks = v; PersistModelToAppData(model); }));
                 mainStack.Children.Add(metaCard);
 
-                // I. SYTUACJA (Z POJEDYNCZYM INTELIGENTNYM PRZYCISKIEM METOC + AUTO AO Z MAPY)
-                var sec1 = CreateSectionCard(BuilderI18n.T("I. SYTUACJA (1. SITUATION — OBSZAR ZAINTERESOWANIA, TEREN, METOC, WRÓG, SOJUSZNICY)", "I. SITUATION (AOI, TERRAIN, LIVE METOC, ENEMY, FRIENDLY FORCES)"));
+                // =================================================================
+                // I. SYTUACJA (NIEZALEŻNE DANE METOC I TERENU DLA KAŻDEGO DNIA!)
+                // =================================================================
+                var sec1 = CreateSectionCard(BuilderI18n.T(
+                    "I. SYTUACJA — " + activeDay.DayTitle.ToUpperInvariant() + " (OBSZAR ZAINTERESOWANIA, TEREN, NIEZALEŻNY METOC DNIA, WRÓG, SOJUSZNICY)",
+                    "I. SITUATION — " + activeDay.DayTitle.ToUpperInvariant() + " (AOI, TERRAIN, INDEPENDENT DAY METOC, ENEMY, FRIENDLY FORCES)"));
                 var sec1Stack = (StackPanel)sec1.Child;
 
                 var aoiBoxPanel = CreateLabeledMultilineBox(
@@ -453,8 +553,8 @@ namespace FieldTakHub.Builder.Services
                 metocStack.Children.Add(new TextBlock
                 {
                     Text = BuilderI18n.T(
-                        "🌦️ B.2. PROGNOZA POGODY, SŁOŃCE I FAZA KSIĘŻYCA (METOC — AUTOMATYCZNE ZACIĄGANIE OBSZARU AO Z MAPY LUB MIEJSCOWOŚCI)",
-                        "🌦️ B.2. WEATHER, SUNRISE/SUNSET & MOON PHASE (METOC — AUTO-PULLING MAP AO OR TOWN)"),
+                        "🌦️ B.2. PROGNOZA POGODY, SŁOŃCE I FAZA KSIĘŻYCA DLA: " + activeDay.DayTitle.ToUpperInvariant() + " (" + activeDay.DateIso + ")",
+                        "🌦️ B.2. WEATHER, SUNRISE/SUNSET & MOON PHASE FOR: " + activeDay.DayTitle.ToUpperInvariant() + " (" + activeDay.DateIso + ")"),
                     Foreground = TacticalConfigPanel.BrushAccent,
                     FontWeight = FontWeights.Bold,
                     FontSize = 11.5,
@@ -471,24 +571,28 @@ namespace FieldTakHub.Builder.Services
                 var dateBoxPanel = CreateLabeledTextBox(
                     BuilderI18n.T("Data (" + activeDay.DayTitle + ")", "Date (" + activeDay.DayTitle + ")"),
                     activeDay.DateIso,
-                    v => { activeDay.DateIso = v; model.OperationDateIso = v; PersistModelToAppData(model); });
+                    v =>
+                    {
+                        activeDay.DateIso = v;
+                        PersistModelToAppData(model);
+                    });
                 Grid.SetColumn(dateBoxPanel, 0);
                 metocInputsGrid.Children.Add(dateBoxPanel);
 
                 var cityBoxPanel = CreateLabeledTextBox(
-                    BuilderI18n.T("Miejscowość (puste = automatyczne AO z Mapy)", "Town (blank = auto Map AO)"),
-                    model.LocationName,
-                    v => { model.LocationName = v; PersistModelToAppData(model); });
+                    BuilderI18n.T("Miejscowość (" + activeDay.DayTitle + " — puste = AO z Mapy)", "Town (" + activeDay.DayTitle + " — blank = Map AO)"),
+                    activeDay.LocationName,
+                    v => { activeDay.LocationName = v; PersistModelToAppData(model); });
                 var cityTextBox = FindFirstDescendant<TextBox>(cityBoxPanel);
                 Grid.SetColumn(cityBoxPanel, 1);
                 metocInputsGrid.Children.Add(cityBoxPanel);
 
-                var latBoxPanel = CreateLabeledTextBox("Lat (°N)", model.LocationLat, v => { model.LocationLat = v; PersistModelToAppData(model); });
+                var latBoxPanel = CreateLabeledTextBox("Lat (°N)", activeDay.LocationLat, v => { activeDay.LocationLat = v; PersistModelToAppData(model); });
                 var latTextBox = FindFirstDescendant<TextBox>(latBoxPanel);
                 Grid.SetColumn(latBoxPanel, 2);
                 metocInputsGrid.Children.Add(latBoxPanel);
 
-                var lonBoxPanel = CreateLabeledTextBox("Lon (°E)", model.LocationLon, v => { model.LocationLon = v; PersistModelToAppData(model); });
+                var lonBoxPanel = CreateLabeledTextBox("Lon (°E)", activeDay.LocationLon, v => { activeDay.LocationLon = v; PersistModelToAppData(model); });
                 var lonTextBox = FindFirstDescendant<TextBox>(lonBoxPanel);
                 Grid.SetColumn(lonBoxPanel, 3);
                 metocInputsGrid.Children.Add(lonBoxPanel);
@@ -496,7 +600,9 @@ namespace FieldTakHub.Builder.Services
                 TextBox terrainWeatherTextBox = null;
                 var metocStatusText = new TextBlock
                 {
-                    Text = "☀️ Słońce: " + activeDay.MetocSunTimes + "   |   🌙 Księżyc: " + activeDay.MetocMoonPhase + "\n🌡️ Pogoda: " + activeDay.MetocCondition + "   |   💨 Wiatr: " + activeDay.MetocWind,
+                    Text = BuilderI18n.T(
+                        "☀️ Słońce (" + activeDay.DayTitle + "): " + activeDay.MetocSunTimes + "   |   🌙 Księżyc: " + activeDay.MetocMoonPhase + "\n🌡️ Pogoda: " + activeDay.MetocCondition + "   |   💨 Wiatr: " + activeDay.MetocWind,
+                        "☀️ Sun (" + activeDay.DayTitle + "): " + activeDay.MetocSunTimes + "   |   🌙 Moon: " + activeDay.MetocMoonPhase + "\n🌡️ Weather: " + activeDay.MetocCondition + "   |   💨 Wind: " + activeDay.MetocWind),
                     Foreground = Brushes.White,
                     FontFamily = new FontFamily("Consolas"),
                     FontSize = 10.5,
@@ -506,7 +612,7 @@ namespace FieldTakHub.Builder.Services
 
                 var btnFetchUnifiedMetoc = new Button
                 {
-                    Content = BuilderI18n.T("🌦️ Pobierz Pogodę, Słońce i Księżyc (METOC / AO)", "🌦️ Fetch Weather, Sun & Moon (METOC / AO)"),
+                    Content = BuilderI18n.T("🌦️ Pobierz METOC dla " + activeDay.DayTitle, "🌦️ Fetch METOC for " + activeDay.DayTitle),
                     Height = 28,
                     VerticalAlignment = VerticalAlignment.Bottom,
                     Margin = new Thickness(0, 0, 0, 4),
@@ -524,11 +630,14 @@ namespace FieldTakHub.Builder.Services
                     {
                         double lat = 49.8494;
                         double lon = 18.8127;
-                        double.TryParse((model.LocationLat ?? "").Replace(',', '.'), NumberStyles.Any, CultureInfo.InvariantCulture, out lat);
-                        double.TryParse((model.LocationLon ?? "").Replace(',', '.'), NumberStyles.Any, CultureInfo.InvariantCulture, out lon);
+                        double.TryParse((activeDay.LocationLat ?? "").Replace(',', '.'), NumberStyles.Any, CultureInfo.InvariantCulture, out lat);
+                        double.TryParse((activeDay.LocationLon ?? "").Replace(',', '.'), NumberStyles.Any, CultureInfo.InvariantCulture, out lon);
 
-                        string trimmedCity = (model.LocationName ?? "").Trim();
-                        bool isAutoMapLabel = string.IsNullOrWhiteSpace(trimmedCity) || trimmedCity.StartsWith("Obszar AO z", StringComparison.OrdinalIgnoreCase);
+                        string trimmedCity = (activeDay.LocationName ?? "").Trim();
+                        bool isAutoMapLabel =
+                            string.IsNullOrWhiteSpace(trimmedCity) ||
+                            trimmedCity.StartsWith("Obszar AO z", StringComparison.OrdinalIgnoreCase) ||
+                            trimmedCity.StartsWith("Map AO", StringComparison.OrdinalIgnoreCase);
 
                         if (!isAutoMapLabel)
                         {
@@ -537,12 +646,12 @@ namespace FieldTakHub.Builder.Services
                             {
                                 lat = geo.Lat;
                                 lon = geo.Lon;
-                                model.LocationLat = lat.ToString("0.0000", CultureInfo.InvariantCulture);
-                                model.LocationLon = lon.ToString("0.0000", CultureInfo.InvariantCulture);
-                                model.LocationName = geo.DisplayName;
-                                if (latTextBox != null) latTextBox.Text = model.LocationLat;
-                                if (lonTextBox != null) lonTextBox.Text = model.LocationLon;
-                                if (cityTextBox != null) cityTextBox.Text = model.LocationName;
+                                activeDay.LocationLat = lat.ToString("0.0000", CultureInfo.InvariantCulture);
+                                activeDay.LocationLon = lon.ToString("0.0000", CultureInfo.InvariantCulture);
+                                activeDay.LocationName = geo.DisplayName;
+                                if (latTextBox != null) latTextBox.Text = activeDay.LocationLat;
+                                if (lonTextBox != null) lonTextBox.Text = activeDay.LocationLon;
+                                if (cityTextBox != null) cityTextBox.Text = activeDay.LocationName;
                             }
                         }
                         else
@@ -552,12 +661,12 @@ namespace FieldTakHub.Builder.Services
                             {
                                 lat = aoRes.Lat;
                                 lon = aoRes.Lon;
-                                model.LocationLat = lat.ToString("0.0000", CultureInfo.InvariantCulture);
-                                model.LocationLon = lon.ToString("0.0000", CultureInfo.InvariantCulture);
-                                model.LocationName = aoRes.SourceDescription;
-                                if (latTextBox != null) latTextBox.Text = model.LocationLat;
-                                if (lonTextBox != null) lonTextBox.Text = model.LocationLon;
-                                if (cityTextBox != null) cityTextBox.Text = model.LocationName;
+                                activeDay.LocationLat = lat.ToString("0.0000", CultureInfo.InvariantCulture);
+                                activeDay.LocationLon = lon.ToString("0.0000", CultureInfo.InvariantCulture);
+                                activeDay.LocationName = aoRes.SourceDescription;
+                                if (latTextBox != null) latTextBox.Text = activeDay.LocationLat;
+                                if (lonTextBox != null) lonTextBox.Text = activeDay.LocationLon;
+                                if (cityTextBox != null) cityTextBox.Text = activeDay.LocationName;
 
                                 if (!string.IsNullOrWhiteSpace(aoRes.ExtractedPoiList) && aoiTextBox != null && !model.AreaOfInterestPoiDesc.Contains(aoRes.ExtractedPoiList))
                                 {
@@ -567,7 +676,7 @@ namespace FieldTakHub.Builder.Services
                             }
                         }
 
-                        var rep = await OpordMetocWeatherService.FetchMetocReportAsync(lat, lon, activeDay.DateIso, model.LocationName);
+                        var rep = await OpordMetocWeatherService.FetchMetocReportAsync(lat, lon, activeDay.DateIso, activeDay.LocationName);
                         activeDay.MetocCondition = rep.ConditionText;
                         activeDay.MetocTemperature = rep.TempRangeText;
                         activeDay.MetocWind = rep.WindText;
@@ -575,32 +684,25 @@ namespace FieldTakHub.Builder.Services
                         activeDay.MetocSunTimes = rep.SunTimesText;
                         activeDay.MetocMoonPhase = rep.MoonPhaseText;
 
-                        model.MetocCondition = rep.ConditionText;
-                        model.MetocTemperature = rep.TempRangeText;
-                        model.MetocWind = rep.WindText;
-                        model.MetocHumidityPrecip = rep.HumidityAndPrecipText;
-                        model.MetocSunTimes = rep.SunTimesText;
-                        model.MetocMoonPhase = rep.MoonPhaseText;
-
                         metocStatusText.Text =
                             "☀️ " + rep.SunTimesText + "\n" +
                             "🌙 " + rep.MoonPhaseText + "\n" +
                             "🌡️ Temp: " + rep.TempRangeText + "  |  " + rep.HumidityAndPrecipText + "\n" +
-                            "💨 Wiatr: " + rep.WindText;
+                            "💨 " + rep.WindText;
 
-                        string currentTerrain = (model.TerrainAndWeather ?? "").Trim();
-                        int oldIdx = currentTerrain.IndexOf("🌦️ [", StringComparison.Ordinal);
+                        string currentDayTerrain = (activeDay.TerrainAndWeather ?? "").Trim();
+                        int oldIdx = currentDayTerrain.IndexOf("🌦️ [", StringComparison.Ordinal);
                         if (oldIdx >= 0)
                         {
-                            currentTerrain = currentTerrain.Substring(0, oldIdx).TrimEnd();
+                            currentDayTerrain = currentDayTerrain.Substring(0, oldIdx).TrimEnd();
                         }
-                        model.TerrainAndWeather = string.IsNullOrWhiteSpace(currentTerrain)
+                        activeDay.TerrainAndWeather = string.IsNullOrWhiteSpace(currentDayTerrain)
                             ? rep.FullTacticalSummary
-                            : (currentTerrain + "\n\n" + rep.FullTacticalSummary);
+                            : (currentDayTerrain + "\n\n" + rep.FullTacticalSummary);
 
                         if (terrainWeatherTextBox != null)
                         {
-                            terrainWeatherTextBox.Text = model.TerrainAndWeather;
+                            terrainWeatherTextBox.Text = activeDay.TerrainAndWeather;
                         }
                         PersistModelToAppData(model);
                     }
@@ -618,8 +720,10 @@ namespace FieldTakHub.Builder.Services
                 sec1Stack.Children.Add(metocBar);
 
                 var terrainBoxPanel = CreateLabeledMultilineBox(
-                    BuilderI18n.T("B.1 & B.2. Obszar działań — Analiza terenu (wielkość, las/pola/budynki, ukształtowanie, przeszkody) + Pogoda METOC:", "B.1 & B.2. Area of Operations — Terrain analysis (size, cover, elevation, obstacles) + METOC Weather:"),
-                    model.TerrainAndWeather, 82, v => { model.TerrainAndWeather = v; PersistModelToAppData(model); });
+                    BuilderI18n.T(
+                        "B.1 & B.2. Obszar działań (" + activeDay.DayTitle + ") — Analiza terenu i pogoda METOC dla tego dnia:",
+                        "B.1 & B.2. Area of Operations (" + activeDay.DayTitle + ") — Terrain analysis & METOC weather for this day:"),
+                    activeDay.TerrainAndWeather, 82, v => { activeDay.TerrainAndWeather = v; PersistModelToAppData(model); });
                 terrainWeatherTextBox = FindFirstDescendant<TextBox>(terrainBoxPanel);
                 sec1Stack.Children.Add(terrainBoxPanel);
 
@@ -632,7 +736,9 @@ namespace FieldTakHub.Builder.Services
                     model.FriendlyForces, 50, v => { model.FriendlyForces = v; PersistModelToAppData(model); }));
                 mainStack.Children.Add(sec1);
 
+                // =================================================================
                 // II. MISJA
+                // =================================================================
                 var sec2 = CreateSectionCard(BuilderI18n.T("II. MISJA (2. MISSION — OPIS FABULARNY, GŁÓWNE ZADANIE 5W, ZADANIA DODATKOWE)", "II. MISSION (LORE, PRIMARY 5W TASK, ADDITIONAL TASKS)"));
                 var sec2Stack = (StackPanel)sec2.Child;
 
@@ -668,8 +774,10 @@ namespace FieldTakHub.Builder.Services
                     model.AdditionalTasksSummary, 48, v => { model.AdditionalTasksSummary = v; PersistModelToAppData(model); }));
                 mainStack.Children.Add(sec2);
 
-                // III. WYKONANIE (Z WEKTOROWYMI PRZYCISKAMI +/- ORAZ GENERATOREM SŁÓW SARNEG PL/EN)
-                var sec3 = CreateSectionCard(BuilderI18n.T("III. WYKONANIE (3. EXECUTION — ZAMIAR, STYL DZIAŁANIA, TABELA SKŁADU I RÓL, ŁĄCZNOŚĆ, GENERATOR SARNEG)", "III. EXECUTION (INTENT, STYLE OF ACTION, SQUAD ROSTER TABLE, COMMS, SARNEG WORD GENERATOR)"));
+                // =================================================================
+                // III. WYKONANIE + JEDEN PRZYCISK "🎲 GENERUJ SARNEG" Z LISTY TXT
+                // =================================================================
+                var sec3 = CreateSectionCard(BuilderI18n.T("III. WYKONANIE (3. EXECUTION — ZAMIAR, STYL DZIAŁANIA, TABELA SKŁADU I RÓL, ŁĄCZNOŚĆ, GENERATOR SARNEG)", "III. EXECUTION (INTENT, STYLE OF ACTION, SQUAD ROSTER TABLE, COMMS, SARNEG GENERATOR)"));
                 var sec3Stack = (StackPanel)sec3.Child;
 
                 sec3Stack.Children.Add(CreateLabeledMultilineBox(
@@ -684,7 +792,7 @@ namespace FieldTakHub.Builder.Services
                     BuilderI18n.T("C. Łańcuch dowodzenia (Dowódca -> Zastępca 1 -> Zastępca 2):", "C. Chain of Command (Commander -> Deputy 1 -> Deputy 2):"),
                     model.SuccessionOfCommand, v => { model.SuccessionOfCommand = v; PersistModelToAppData(model); }));
 
-                // III.D TABELA SKŁADU ODDZIAŁU (Z WEKTOROWYMI PRZYCISKAMI + / -)
+                // III.D TABELA SKŁADU ODDZIAŁU
                 var rosterCard = new Border
                 {
                     Background = new SolidColorBrush(Color.FromRgb(10, 24, 30)),
@@ -897,7 +1005,7 @@ namespace FieldTakHub.Builder.Services
                 };
                 sec3Stack.Children.Add(liveSignalInfo);
 
-                // III.F SYGNAŁY + GENERATOR 10-LITEROWYCH SŁÓW SARNEG (PL / EN + WŁASNE SŁOWA)
+                // III.F SYGNAŁY + JEDEN PRZYCISK "🎲 GENERUJ SARNEG" Z LISTY TXT
                 sec3Stack.Children.Add(CreateLabeledTextBox(
                     BuilderI18n.T("F.1. Kryptonimy celów i punktów na mapie:", "F.1. Objective & Waypoint Code Names:"),
                     model.TargetCodeNames, v => { model.TargetCodeNames = v; PersistModelToAppData(model); }));
@@ -915,8 +1023,8 @@ namespace FieldTakHub.Builder.Services
                 sarnegStack.Children.Add(new TextBlock
                 {
                     Text = BuilderI18n.T(
-                        "🔐 F.2. TABELA KRYPTO SARNEG (SZYFROWANIE WSPÓŁRZĘDNYCH 0–9) + GENERATOR SŁÓW 10-LITEROWYCH (PL / EN)",
-                        "🔐 F.2. SARNEG CRYPTO TABLE (0–9 GRID ENCRYPTION) + 10-LETTER WORD GENERATOR (PL / EN)"),
+                        "🔐 F.2. TABELA KRYPTO SARNEG (SZYFROWANIE WSPÓŁRZĘDNYCH 0–9) + LOSOWANIE Z LISTY SŁÓW 10-LITEROWYCH",
+                        "🔐 F.2. SARNEG CRYPTO TABLE (0–9 GRID ENCRYPTION) + 10-LETTER WORD GENERATOR"),
                     Foreground = new SolidColorBrush(Color.FromRgb(250, 208, 44)),
                     FontWeight = FontWeights.Bold,
                     FontSize = 11,
@@ -934,13 +1042,12 @@ namespace FieldTakHub.Builder.Services
                 };
 
                 var sarnegInputRow = new Grid { Margin = new Thickness(0, 0, 0, 4) };
-                sarnegInputRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1.4, GridUnitType.Star) });
-                sarnegInputRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1.0, GridUnitType.Star) });
+                sarnegInputRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1.6, GridUnitType.Star) });
                 sarnegInputRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1.0, GridUnitType.Star) });
 
                 TextBox sarnegKeyTextBox = null;
                 var sarnegKeyBoxPanel = CreateLabeledTextBox(
-                    BuilderI18n.T("10-literowe słowo-klucz SARNEG (wpisz własne lub wylosuj ze słownika PL/EN):", "10-letter SARNEG Key Word (type custom or draw from PL/EN dictionary):"),
+                    BuilderI18n.T("10-literowe słowo-klucz SARNEG (wpisz własne lub kliknij 'Generuj SARNEG'):", "10-letter SARNEG Key Word (type custom or click 'Generate SARNEG'):"),
                     model.SarnegKeyWord10,
                     v =>
                     {
@@ -952,63 +1059,30 @@ namespace FieldTakHub.Builder.Services
                 Grid.SetColumn(sarnegKeyBoxPanel, 0);
                 sarnegInputRow.Children.Add(sarnegKeyBoxPanel);
 
-                var btnDrawPlWord = new Button
+                var btnGenerateSarneg = new Button
                 {
-                    Content = BuilderI18n.T("🎲 Losuj słowo PL (10 liter)", "🎲 Draw Polish Word (10 letters)"),
+                    Content = BuilderI18n.T("🎲 Generuj SARNEG", "🎲 Generate SARNEG"),
                     Height = 28,
                     VerticalAlignment = VerticalAlignment.Bottom,
-                    Margin = new Thickness(4, 0, 4, 4),
+                    Margin = new Thickness(6, 0, 0, 4),
                     Background = new SolidColorBrush(Color.FromRgb(22, 54, 66)),
                     Foreground = new SolidColorBrush(Color.FromRgb(250, 208, 44)),
                     BorderBrush = new SolidColorBrush(Color.FromRgb(250, 208, 44)),
-                    BorderThickness = new Thickness(1.2),
+                    BorderThickness = new Thickness(1.4),
                     FontWeight = FontWeights.Bold,
-                    FontSize = 10.5,
+                    FontSize = 11,
                     Cursor = Cursors.Hand
                 };
-                btnDrawPlWord.Click += (_, __) =>
+                btnGenerateSarneg.Click += (_, __) =>
                 {
-                    string drawn = SarnegDictionaryService.DrawRandomWord(english: false);
+                    string drawn = SarnegDictionaryService.DrawRandomSarnegWord();
                     model.SarnegKeyWord10 = drawn;
                     if (sarnegKeyTextBox != null) sarnegKeyTextBox.Text = drawn;
                     sarnegPreviewLabel.Text = FormatSarnegMatrixPreview(drawn);
                     PersistModelToAppData(model);
                 };
-                Grid.SetColumn(btnDrawPlWord, 1);
-                sarnegInputRow.Children.Add(btnDrawPlWord);
-
-                var btnDrawEnWord = new Button
-                {
-                    Content = BuilderI18n.T("🎲 Losuj słowo EN (10 letters)", "🎲 Draw English Word (10 letters)"),
-                    Height = 28,
-                    VerticalAlignment = VerticalAlignment.Bottom,
-                    Margin = new Thickness(4, 0, 0, 4),
-                    Background = new SolidColorBrush(Color.FromRgb(22, 54, 66)),
-                    Foreground = TacticalConfigPanel.BrushAccent,
-                    BorderBrush = TacticalConfigPanel.BrushAccent,
-                    BorderThickness = new Thickness(1.2),
-                    FontWeight = FontWeights.Bold,
-                    FontSize = 10.5,
-                    Cursor = Cursors.Hand
-                };
-                btnDrawEnWord.Click += async (_, __) =>
-                {
-                    btnDrawEnWord.IsEnabled = false;
-                    try
-                    {
-                        string drawn = await SarnegDictionaryService.DrawRandomWordWithOnlineSupportAsync(english: true, OpordMetocWeatherService.Http);
-                        model.SarnegKeyWord10 = drawn;
-                        if (sarnegKeyTextBox != null) sarnegKeyTextBox.Text = drawn;
-                        sarnegPreviewLabel.Text = FormatSarnegMatrixPreview(drawn);
-                        PersistModelToAppData(model);
-                    }
-                    finally
-                    {
-                        btnDrawEnWord.IsEnabled = true;
-                    }
-                };
-                Grid.SetColumn(btnDrawEnWord, 2);
-                sarnegInputRow.Children.Add(btnDrawEnWord);
+                Grid.SetColumn(btnGenerateSarneg, 1);
+                sarnegInputRow.Children.Add(btnGenerateSarneg);
 
                 sarnegStack.Children.Add(sarnegInputRow);
                 sarnegStack.Children.Add(sarnegPreviewLabel);
@@ -1025,7 +1099,9 @@ namespace FieldTakHub.Builder.Services
 
                 mainStack.Children.Add(sec3);
 
-                // IV. LOGISTYKA + OPCJONALNY, EDYTOWALNY ZAŁĄCZNIK 1 (PODZIAŁ RÓL DRUŻYNOWYCH)
+                // =================================================================
+                // IV. LOGISTYKA + OPCJONALNY, EDYTOWALNY ZAŁĄCZNIK 1 (PODZIAŁ RÓL)
+                // =================================================================
                 var sec4 = CreateSectionCard(BuilderI18n.T("IV. LOGISTYKA ORAZ ZAŁĄCZNIKI (STYL WYPOSAŻENIA, SZPEJLISTA, DOJAZD, OPCJONALNY ZAŁĄCZNIK 1 RÓL)", "IV. LOGISTICS & ANNEXES (LOADOUT, GEAR CHECKLIST, TRAVEL, OPTIONAL EDITABLE ROLES ANNEX 1)"));
                 var sec4Stack = (StackPanel)sec4.Child;
 
@@ -1084,9 +1160,9 @@ namespace FieldTakHub.Builder.Services
                     model.EnableRolesAnnex = true;
                     model.CustomRolesAnnex.Add(new OpordRoleDefinitionRow
                     {
-                        RoleName = "Nowa Rola",
-                        Description = "Opis obowiązków w drużynie...",
-                        DutyMode = "Sytuacyjne"
+                        RoleName = BuilderI18n.T("Nowa Rola", "New Role"),
+                        Description = BuilderI18n.T("Opis obowiązków w drużynie...", "Squad duties description..."),
+                        DutyMode = BuilderI18n.T("Sytuacyjne", "Situational")
                     });
                     PersistModelToAppData(model);
                     RebuildOpordForm();
@@ -1228,12 +1304,12 @@ namespace FieldTakHub.Builder.Services
 
         private static string FormatSarnegMatrixPreview(string key10)
         {
-            string normalized = SarnegDictionaryService.NormalizePolishChars(key10 ?? "SZTURMOWCA").Trim();
+            string normalized = SarnegDictionaryService.NormalizePolishChars(key10 ?? "PRZEDMIOTY").Trim();
             string padded = normalized.PadRight(10, 'X').Substring(0, 10);
             bool isIso = SarnegDictionaryService.Has10UniqueLetters(padded);
 
-            var sbTop = new StringBuilder("LITERA SARNEG:  ");
-            var sbBot = new StringBuilder("CYFRA (0 - 9):  ");
+            var sbTop = new StringBuilder(BuilderI18n.T("LITERA SARNEG:  ", "SARNEG LETTER:  "));
+            var sbBot = new StringBuilder(BuilderI18n.T("CYFRA (0 - 9):  ", "DIGIT (0 - 9):  "));
             for (int i = 0; i < 10; i++)
             {
                 sbTop.Append("| ").Append(padded[i]).Append(' ');
@@ -1260,9 +1336,15 @@ namespace FieldTakHub.Builder.Services
             sb.AppendLine(BuilderI18n.T(
                 "📡 [ZACIĄGNIĘTE Z GENERATORA STRON KANAŁY RADIOWE I MESHTASTIC DLA: " + factionName + "]",
                 "📡 [SYNCED RADIO & MESHTASTIC CHANNELS FROM FACTION GENERATOR FOR: " + factionName + "]"));
-            sb.AppendLine("• Meshtastic LoRa: Kanał '" + chName + "'  |  Region: " + region + "  |  Preset: " + preset + "  |  Szyfrowanie: AES-256 PSK");
-            sb.AppendLine("• Serwer ATAK (OpenTAKServer): " + (string.IsNullOrWhiteSpace(ots) ? "Tryb lokalny / Off-Grid Mesh" : ots));
-            sb.AppendLine("• Telefon alarmowy ORGA / MEDEVAC (SOS MGRS): " + (string.IsNullOrWhiteSpace(phone) ? "Brak / 112" : phone));
+            sb.AppendLine(BuilderI18n.T(
+                "• Meshtastic LoRa: Kanał '" + chName + "'  |  Region: " + region + "  |  Preset: " + preset + "  |  Szyfrowanie: AES-256 PSK",
+                "• Meshtastic LoRa: Channel '" + chName + "'  |  Region: " + region + "  |  Preset: " + preset + "  |  Encryption: AES-256 PSK"));
+            sb.AppendLine(BuilderI18n.T(
+                "• Serwer ATAK (OpenTAKServer): " + (string.IsNullOrWhiteSpace(ots) ? "Tryb lokalny / Off-Grid Mesh" : ots),
+                "• ATAK Server (OpenTAKServer): " + (string.IsNullOrWhiteSpace(ots) ? "Local / Off-Grid Mesh" : ots)));
+            sb.AppendLine(BuilderI18n.T(
+                "• Telefon alarmowy ORGA / MEDEVAC (SOS MGRS): " + (string.IsNullOrWhiteSpace(phone) ? "Brak / 112" : phone),
+                "• Emergency Phone ORGA / MEDEVAC (SOS MGRS): " + (string.IsNullOrWhiteSpace(phone) ? "None / 112" : phone)));
 
             var vArr = (facJson?["VoiceChannels"] ?? facJson?["voiceChannels"]) as JsonArray;
             if (vArr != null && vArr.Count > 0)
@@ -1274,7 +1356,7 @@ namespace FieldTakHub.Builder.Services
                     string b = vo["bandType"]?.ToString() ?? vo["BandType"]?.ToString() ?? "PMR";
                     string f = vo["freqMhz"]?.ToString() ?? vo["FreqMhz"]?.ToString() ?? "-";
                     string t = vo["toneOrCode"]?.ToString() ?? vo["ToneOrCode"]?.ToString() ?? "-";
-                    sb.AppendLine("   - " + r + " [" + b + "]: " + f + "  (Ton/Kod: " + t + ")");
+                    sb.AppendLine("   - " + r + " [" + b + "]: " + f + "  (" + t + ")");
                 }
             }
             return sb.ToString().TrimEnd();
@@ -1316,8 +1398,8 @@ namespace FieldTakHub.Builder.Services
             root.Children.Add(new TextBlock
             {
                 Text = BuilderI18n.T(
-                    "Zeskanuj poniższy kod QR w aplikacji Field TAK Hub (lub aparatem telefonu), aby natychmiast otworzyć i zaimportować sam rozkaz OPORD przez Wi-Fi / LAN:",
-                    "Scan this QR code in Field TAK Hub (or phone camera) to view and import this OPORD over Wi-Fi / LAN:"),
+                    "Zeskanuj poniższy kod QR w aplikacji Field TAK Hub (lub aparatem telefonu), aby natychmiast otworzyć i zaimportować rozkaz OPORD (dla zaznaczonych dni) przez Wi-Fi / LAN:",
+                    "Scan this QR code in Field TAK Hub (or phone camera) to view and import this OPORD (for selected days) over Wi-Fi / LAN:"),
                 Foreground = TacticalConfigPanel.BrushMutedText,
                 FontSize = 10.5,
                 TextWrapping = TextWrapping.Wrap,

@@ -139,6 +139,11 @@ namespace FieldTakHub.Builder.Services
             return owner != null ? (ShowDialogWithSidebarSupport(dlg, owner)) : (ShowDialogWithSidebarSupport(dlg));
         }
 
+        public static bool ShowDialogWithSidebarSupport(Window modalWin)
+        {
+            return modalWin != null && modalWin.ShowDialog() == true;
+        }
+
         public static bool ShowDialogWithSidebarSupport(Microsoft.Win32.SaveFileDialog dlg, Window owner = null)
         {
             return owner != null ? (ShowDialogWithSidebarSupport(dlg, owner)) : (ShowDialogWithSidebarSupport(dlg));
@@ -651,7 +656,7 @@ namespace FieldTakHub.Builder.Services
                         ? Path.GetFileName(CurrentDraftProjectPath)
                         : $"{evName}_Wersja_Robocza.fthproj"
                 };
-                if (dlg.ShowDialog(win) != true) return false;
+                if (!ShowDialogWithSidebarSupport(dlg, win)) return false;
 
                 LastExportDirectory = Path.GetDirectoryName(dlg.FileName) ?? LastExportDirectory;
                 CurrentDraftProjectPath = dlg.FileName;
@@ -679,7 +684,7 @@ namespace FieldTakHub.Builder.Services
                     Filter = "Projekt roboczy Field TAK Hub (*.fthproj;*.json)|*.fthproj;*.json",
                     InitialDirectory = initDir
                 };
-                if (dlg.ShowDialog(win) != true) return false;
+                if (!ShowDialogWithSidebarSupport(dlg, win)) return false;
 
                 LastExportDirectory = Path.GetDirectoryName(dlg.FileName) ?? LastExportDirectory;
                 CurrentDraftProjectPath = dlg.FileName;
@@ -1795,7 +1800,7 @@ namespace FieldTakHub.Builder.Services
                     InitialDirectory = defaultDir,
                     FileName = $"Plakat_Safezone_A4_{eventName}_{cleanName}.png"
                 };
-                if (dlg.ShowDialog(win) != true) return;
+                if (!ShowDialogWithSidebarSupport(dlg, win)) return;
 
                 string posterOutPath = dlg.FileName;
                 string outDir = Path.GetDirectoryName(posterOutPath) ?? defaultDir;
