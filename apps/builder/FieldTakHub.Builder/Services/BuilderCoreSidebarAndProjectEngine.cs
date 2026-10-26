@@ -995,7 +995,7 @@ namespace FieldTakHub.Builder.Services
                     _lastAutoI18nTick = nowTick;
                     var currentDescendants = GetAllVisualDescendants(win).ToList();
                     CollapseObsoleteBuilderModeSelector(currentDescendants);
-                    BuilderI18n.ApplyLanguageToVisualTree(win);
+                    // I18n runs only on language toggle or module switch
                 }
                 if (_injectedSidebarContainer.Visibility != Visibility.Visible)
                     _injectedSidebarContainer.Visibility = Visibility.Visible;

@@ -321,6 +321,7 @@ namespace FieldTakHub.Builder.Services
                 daysTopRow.Children.Add(quickSelectWrap);
                 daysOuterStack.Children.Add(daysTopRow);
 
+                Button activeDayTabButtonRef = null;
                 var daysWrap = new WrapPanel { VerticalAlignment = VerticalAlignment.Center };
                 for (int dIdx = 0; dIdx < model.Days.Count; dIdx++)
                 {
@@ -356,6 +357,7 @@ namespace FieldTakHub.Builder.Services
 
                     var dayTabBtn = new Button
                     {
+                        Tag = "DYNAMIC_NO_I18N",
                         Content = "📆 " + dayObj.DayTitle + " (" + dayObj.DateIso + ") [SARNEG: " + dayObj.SarnegKeyWord10 + "]",
                         Height = 26,
                         Padding = new Thickness(8, 1, 8, 1),
@@ -371,6 +373,7 @@ namespace FieldTakHub.Builder.Services
                         model.ActiveDayIndex = capturedIdx;
                         RebuildOpordForm();
                     };
+                    if (isSel) activeDayTabButtonRef = dayTabBtn;
                     chipRow.Children.Add(dayTabBtn);
 
                     tabChipBorder.Child = chipRow;
@@ -578,6 +581,7 @@ namespace FieldTakHub.Builder.Services
                 TextBox terrainWeatherTextBox = null;
                 var metocStatusText = new TextBlock
                 {
+                    Tag = "DYNAMIC_NO_I18N",
                     Text = BuilderI18n.T(
                         "☀️ Słońce (" + activeDay.DayTitle + "): " + activeDay.MetocSunTimes + "   |   🌙 Księżyc: " + activeDay.MetocMoonPhase + "\n🌡️ Pogoda: " + activeDay.MetocCondition + "   |   💨 Wiatr: " + activeDay.MetocWind,
                         "☀️ Sun (" + activeDay.DayTitle + "): " + activeDay.MetocSunTimes + "   |   🌙 Moon: " + activeDay.MetocMoonPhase + "\n🌡️ Weather: " + activeDay.MetocCondition + "   |   💨 Wind: " + activeDay.MetocWind),
@@ -1015,6 +1019,7 @@ namespace FieldTakHub.Builder.Services
 
                 var sarnegPreviewLabel = new TextBlock
                 {
+                    Tag = "DYNAMIC_NO_I18N",
                     Text = FormatSarnegMatrixPreview(activeDay.SarnegKeyWord10),
                     Foreground = Brushes.White,
                     FontFamily = new FontFamily("Consolas"),
@@ -1028,16 +1033,40 @@ namespace FieldTakHub.Builder.Services
                 sarnegInputRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1.0, GridUnitType.Star) });
 
                 TextBox sarnegKeyTextBox = null;
+                bool isInternalSarnegUpdate = false;
                 var sarnegKeyBoxPanel = CreateLabeledTextBox(
-                    BuilderI18n.T("10-literowe słowo-klucz SARNEG (" + activeDay.DayTitle + "):", "10-letter SARNEG Key Word (" + activeDay.DayTitle + "):"),
+                    BuilderI18n.T("10-literowe słowo-klucz SARNEG (" + activeDay.DayTitle + "):", "10-letter SARNEG Key Word (" + activeDay.DayTitle + ")"),
                     activeDay.SarnegKeyWord10,
                     v =>
                     {
-                        activeDay.SarnegKeyWord10 = v.ToUpperInvariant();
-                        sarnegPreviewLabel.Text = FormatSarnegMatrixPreview(activeDay.SarnegKeyWord10);
+                        if (isInternalSarnegUpdate) return;
+                        string clean = SarnegDictionaryService.NormalizePolishChars(v ?? "").Trim();
+                        activeDay.SarnegKeyWord10 = clean;
+                        model.SarnegKeyWord10 = clean;
+
+                        if (sarnegKeyTextBox != null && sarnegKeyTextBox.Text != clean)
+                        {
+                            isInternalSarnegUpdate = true;
+                            int caret = sarnegKeyTextBox.CaretIndex;
+                            sarnegKeyTextBox.Text = clean;
+                            sarnegKeyTextBox.CaretIndex = Math.Clamp(caret, 0, clean.Length);
+                            isInternalSarnegUpdate = false;
+                        }
+
+                        sarnegPreviewLabel.Text = FormatSarnegMatrixPreview(clean);
+                        if (activeDayTabButtonRef != null)
+                        {
+                            activeDayTabButtonRef.Content = "📆 " + activeDay.DayTitle + " (" + activeDay.DateIso + ") [SARNEG: " + clean + "]";
+                        }
                         PersistModelToAppData(model);
                     });
                 sarnegKeyTextBox = FindFirstDescendant<TextBox>(sarnegKeyBoxPanel);
+                if (sarnegKeyTextBox != null)
+                {
+                    sarnegKeyTextBox.MaxLength = 10;
+                    sarnegKeyTextBox.IsReadOnly = false;
+                    sarnegKeyTextBox.IsEnabled = true;
+                }
                 Grid.SetColumn(sarnegKeyBoxPanel, 0);
                 sarnegInputRow.Children.Add(sarnegKeyBoxPanel);
 
@@ -1059,10 +1088,20 @@ namespace FieldTakHub.Builder.Services
                 {
                     string drawn = SarnegDictionaryService.DrawRandomSarnegWord(activeDay.SarnegKeyWord10);
                     activeDay.SarnegKeyWord10 = drawn;
-                    if (sarnegKeyTextBox != null) sarnegKeyTextBox.Text = drawn;
+                    model.SarnegKeyWord10 = drawn;
+                    if (sarnegKeyTextBox != null)
+                    {
+                        isInternalSarnegUpdate = true;
+                        sarnegKeyTextBox.Text = drawn;
+                        sarnegKeyTextBox.CaretIndex = drawn.Length;
+                        isInternalSarnegUpdate = false;
+                    }
                     sarnegPreviewLabel.Text = FormatSarnegMatrixPreview(drawn);
+                    if (activeDayTabButtonRef != null)
+                    {
+                        activeDayTabButtonRef.Content = "📆 " + activeDay.DayTitle + " (" + activeDay.DateIso + ") [SARNEG: " + drawn + "]";
+                    }
                     PersistModelToAppData(model);
-                    RebuildOpordForm();
                 };
                 Grid.SetColumn(btnGenerateSarneg, 1);
                 sarnegInputRow.Children.Add(btnGenerateSarneg);
@@ -1291,7 +1330,7 @@ namespace FieldTakHub.Builder.Services
         private static string FormatSarnegMatrixPreview(string key10)
         {
             string normalized = SarnegDictionaryService.NormalizePolishChars(key10 ?? "PRZEDMIOTY").Trim();
-            string padded = normalized.PadRight(10, 'X').Substring(0, 10);
+            string padded = normalized.PadRight(10, '_').Substring(0, 10);
             bool isIso = SarnegDictionaryService.Has10UniqueLetters(padded);
 
             var sbTop = new StringBuilder(BuilderI18n.T("LITERA SARNEG:  ", "SARNEG LETTER:  "));
@@ -1304,7 +1343,9 @@ namespace FieldTakHub.Builder.Services
             sbTop.Append("|   ");
             sbTop.Append(isIso
                 ? BuilderI18n.T("✓ [10 UNIKALNYCH LITER — KLUCZ PRAWIDŁOWY]", "✓ [10 UNIQUE LETTERS — VALID KEY]")
-                : BuilderI18n.T("⚠️ [UWAGA: POWTÓRZONE LITERY W SŁOWIE!]", "⚠️ [WARNING: DUPLICATE LETTERS IN WORD!]"));
+                : (normalized.Length < 10
+                    ? BuilderI18n.T($"⏳ [WPISANO {normalized.Length}/10 LITER — WPISZ 10 UNIKALNYCH LITER]", $"⏳ [TYPED {normalized.Length}/10 LETTERS — ENTER 10 UNIQUE LETTERS]")
+                    : BuilderI18n.T("⚠️ [UWAGA: POWTÓRZONE LITERY W SŁOWIE!]", "⚠️ [WARNING: DUPLICATE LETTERS IN WORD!]")));
             sbBot.Append('|');
             return sbTop + "\n" + sbBot;
         }

@@ -33,6 +33,9 @@ namespace FieldTakHub.Builder.Services
         private static readonly DependencyProperty OriginalPlTextProperty =
             DependencyProperty.RegisterAttached("OriginalPlText", typeof(string), typeof(BuilderI18n), new PropertyMetadata(null));
 
+        private static readonly DependencyProperty LastAppliedI18nTextProperty =
+            DependencyProperty.RegisterAttached("LastAppliedI18nText", typeof(string), typeof(BuilderI18n), new PropertyMetadata(null));
+
         private static readonly DependencyProperty OriginalPlToolTipProperty =
             DependencyProperty.RegisterAttached("OriginalPlToolTip", typeof(string), typeof(BuilderI18n), new PropertyMetadata(null));
 
@@ -380,15 +383,17 @@ namespace FieldTakHub.Builder.Services
                             }
                         }
                     }
-                    else if (!string.IsNullOrWhiteSpace(tb.Text))
+                    else if (!string.IsNullOrWhiteSpace(tb.Text) && !string.Equals(tb.Tag?.ToString(), "DYNAMIC_NO_I18N", StringComparison.Ordinal))
                     {
                         string origTb = tb.GetValue(OriginalPlTextProperty) as string;
-                        if (origTb == null)
+                        string lastApplied = tb.GetValue(LastAppliedI18nTextProperty) as string;
+                        if (origTb == null || (lastApplied != null && !string.Equals(tb.Text, lastApplied, StringComparison.Ordinal)))
                         {
                             origTb = tb.Text;
                             tb.SetValue(OriginalPlTextProperty, origTb);
                         }
                         string targetTb = toEn ? TranslateTextSmart(origTb, true) : origTb;
+                        tb.SetValue(LastAppliedI18nTextProperty, targetTb);
                         if (!string.Equals(tb.Text, targetTb, StringComparison.Ordinal))
                         {
                             tb.Text = targetTb;
