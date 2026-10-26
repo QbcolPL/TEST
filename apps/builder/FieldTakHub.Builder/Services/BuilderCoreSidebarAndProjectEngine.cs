@@ -157,6 +157,9 @@ namespace FieldTakHub.Builder.Services
             catch { }
         }
 
+        // =========================================================================
+        // 1. CZYSTY STAN ZEROWY OBEJMUJĄCY PACZKI .FTAK ORAZ GENERATOR MAP (mapState)
+        // =========================================================================
         private static string WriteCleanZeroStateDraftFile()
         {
             string appData = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "FieldTakHub");
@@ -221,33 +224,234 @@ namespace FieldTakHub.Builder.Services
                             }
                         }
                     }
+                },
+                ["mapState"] = new JsonObject
+                {
+                    ["centerLat"] = 52.0693,
+                    ["centerLon"] = 19.4803,
+                    ["zoom"] = 15,
+                    ["scale"] = 5000,
+                    ["orientation"] = "Poziomo",
+                    ["sheetFormat"] = "A4 — Sztabowy (297 × 210 mm)",
+                    ["layerId"] = "google_sat",
+                    ["showLidar"] = false,
+                    ["lidarOpacity"] = 0.45,
+                    ["coordSystem"] = "MGRS / UTM (Siatka wojskowa w metrach)",
+                    ["subGridDivision"] = "Brak podziału (Tylko 100 m)",
+                    ["gridLabelsMode"] = "Tylko główne linie MGRS",
+                    ["labelBgStyle"] = "Kaseton (Kolor tła RGB)",
+                    ["gridThickness"] = 0.8,
+                    ["fontScale"] = 1.2,
+                    ["mainGridOpacity"] = 0.8,
+                    ["subGridOpacity"] = 0.75,
+                    ["subLabelBgOpacity"] = 0.82,
+                    ["mapDimmerOpacity"] = 0.0,
+                    ["mainGridColorHex"] = "#FAD02C",
+                    ["subGridLineColorHex"] = "#1FE0C5",
+                    ["subLabelTextColorHex"] = "#FFFFFF",
+                    ["subLabelBgColorHex"] = "#061014",
+                    ["gridHaloMode"] = "Pełny czarny obrys",
+                    ["aoOutPattern"] = "Jednolite tło RGB poza AO",
+                    ["aoOutMaskOpacity"] = 0.1,
+                    ["showAllObjectLabels"] = true,
+                    ["showRotationHandlesOnMap"] = true,
+                    ["showNorthArrow"] = true,
+                    ["showScaleBar"] = true,
+                    ["showLegend"] = false,
+                    ["showNatoSymbolsInLegend"] = true,
+                    ["selectedFactions"] = new JsonArray { "BLUFOR", "OPFOR" },
+                    ["objects"] = new JsonArray(),
+                    ["searchQuery"] = "",
+                    ["selectedObjectColorHex"] = "#2684FF",
+                    ["selectedNatoSymbolCode"] = "INFANTRY",
+                    ["defaultObjectName"] = "Punkt",
+                    ["newObjectShowLabelDefault"] = true,
+                    ["dotMarkerSizePx"] = 14,
+                    ["natoMarkerScale"] = 1.0
                 }
             };
 
             string jsonText = zeroJson.ToJsonString(new JsonSerializerOptions { WriteIndented = true });
             File.WriteAllText(zeroDraftPath, jsonText, Encoding.UTF8);
             File.WriteAllText(Path.Combine(appData, "draft_session.json"), jsonText, Encoding.UTF8);
+            File.WriteAllText(Path.Combine(appData, "map_state.json"), zeroJson["mapState"]!.ToJsonString(new JsonSerializerOptions { WriteIndented = true }), Encoding.UTF8);
             TacticalConfigPanel.CurrentDraftProjectPath = zeroDraftPath;
             return zeroDraftPath;
         }
 
+        // =========================================================================
+        // 2. OKNO POTWIERDZENIA NOWEGO PROJEKTU (Z OPCJĄ ZAPISU OBECNEGO PROJEKTU)
+        //    ORAZ PEŁNY RESET PACZEK .FTAK, GENERATORA MAP 1:1 I GENERATORA OPORD
+        // =========================================================================
+        private static int ShowNewProjectConfirmationDialog(Window owner)
+        {
+            // Zwraca: 1 = Zapisz obecny i utwórz nowy, 2 = Utwórz nowy bez zapisywania, 0 = Anuluj
+            int choice = 0;
+
+            var dlg = new Window
+            {
+                Title = BuilderI18n.T("Nowy Projekt — Ostrzeżenie o niezapisanych danych", "New Project — Unsaved Data Warning"),
+                Width = 540,
+                Height = 250,
+                WindowStartupLocation = WindowStartupLocation.CenterOwner,
+                Owner = owner,
+                Background = new SolidColorBrush(Color.FromRgb(10, 24, 30)),
+                Foreground = Brushes.White,
+                ResizeMode = ResizeMode.NoResize,
+                WindowStyle = WindowStyle.ToolWindow
+            };
+
+            var rootBorder = new Border
+            {
+                BorderBrush = TacticalConfigPanel.BrushAccent,
+                BorderThickness = new Thickness(1.5),
+                Padding = new Thickness(18, 16, 18, 16)
+            };
+
+            var stack = new StackPanel();
+            stack.Children.Add(new TextBlock
+            {
+                Text = BuilderI18n.T(
+                    "⚠️ CZY NA PEWNO CHCESZ UTWORZYĆ NOWY PROJEKT?",
+                    "⚠️ ARE YOU SURE YOU WANT TO CREATE A NEW PROJECT?"),
+                Foreground = new SolidColorBrush(Color.FromRgb(250, 208, 44)),
+                FontWeight = FontWeights.Bold,
+                FontSize = 14,
+                Margin = new Thickness(0, 0, 0, 8)
+            });
+
+            stack.Children.Add(new TextBlock
+            {
+                Text = BuilderI18n.T(
+                    "Wszystkie niezapisane dane we wszystkich modułach:\n• Generator Paczek (.ftak) — strony konfliktu, klucze PSK, częstotliwości\n• Generator Map 1:1 — granica terenu AO, punkty POI, trasy i ustawienia siatki\n• Generator OPORD — rozkazy dzienne, pogoda METOC, tabela składu i kryptonimy\nzostaną bezpowrotnie utracone i wyzerowane do stanu początkowego.",
+                    "All unsaved data across all modules:\n• Package Builder (.ftak) — factions, PSK keys, radio channels\n• 1:1 Map Generator — AO boundary, POI markers, routes and grid settings\n• OPORD Builder — daily plans, METOC weather, squad roster and codewords\nwill be permanently lost and reset to initial zero-state."),
+                Foreground = new SolidColorBrush(Color.FromRgb(215, 230, 238)),
+                FontSize = 11.5,
+                LineHeight = 17,
+                TextWrapping = TextWrapping.Wrap,
+                Margin = new Thickness(0, 0, 0, 18)
+            });
+
+            var btnGrid = new Grid();
+            btnGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1.35, GridUnitType.Star) });
+            btnGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1.25, GridUnitType.Star) });
+            btnGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(0.75, GridUnitType.Star) });
+
+            var btnSaveAndNew = new Button
+            {
+                Content = BuilderI18n.T("💾 Zapisz obecny i utwórz nowy", "💾 Save Current & Create New"),
+                Height = 36,
+                Margin = new Thickness(0, 0, 6, 0),
+                Background = new SolidColorBrush(Color.FromRgb(20, 88, 52)),
+                Foreground = Brushes.White,
+                BorderBrush = new SolidColorBrush(Color.FromRgb(46, 204, 113)),
+                BorderThickness = new Thickness(1.5),
+                FontWeight = FontWeights.Bold,
+                FontSize = 11,
+                Cursor = Cursors.Hand
+            };
+            btnSaveAndNew.Click += (_, __) => { choice = 1; dlg.Close(); };
+            Grid.SetColumn(btnSaveAndNew, 0);
+            btnGrid.Children.Add(btnSaveAndNew);
+
+            var btnDiscardAndNew = new Button
+            {
+                Content = BuilderI18n.T("🗑️ Utwórz nowy bez zapisywania", "🗑️ Create New Without Saving"),
+                Height = 36,
+                Margin = new Thickness(0, 0, 6, 0),
+                Background = new SolidColorBrush(Color.FromRgb(98, 24, 24)),
+                Foreground = Brushes.White,
+                BorderBrush = new SolidColorBrush(Color.FromRgb(235, 64, 52)),
+                BorderThickness = new Thickness(1.5),
+                FontWeight = FontWeights.Bold,
+                FontSize = 11,
+                Cursor = Cursors.Hand
+            };
+            btnDiscardAndNew.Click += (_, __) => { choice = 2; dlg.Close(); };
+            Grid.SetColumn(btnDiscardAndNew, 1);
+            btnGrid.Children.Add(btnDiscardAndNew);
+
+            var btnCancel = new Button
+            {
+                Content = BuilderI18n.T("Anuluj", "Cancel"),
+                Height = 36,
+                Background = TacticalConfigPanel.BrushInputBg,
+                Foreground = Brushes.White,
+                BorderBrush = TacticalConfigPanel.BrushInputBorder,
+                BorderThickness = new Thickness(1),
+                FontWeight = FontWeights.SemiBold,
+                FontSize = 11,
+                Cursor = Cursors.Hand
+            };
+            btnCancel.Click += (_, __) => { choice = 0; dlg.Close(); };
+            Grid.SetColumn(btnCancel, 2);
+            btnGrid.Children.Add(btnCancel);
+
+            stack.Children.Add(btnGrid);
+            rootBorder.Child = stack;
+            dlg.Content = rootBorder;
+            dlg.ShowDialog();
+
+            return choice;
+        }
+
         public static void CreateNewZeroProjectInteractive(Window win)
         {
-            var res = MessageBox.Show(
-                win,
-                BuilderI18n.T(
-                    "Czy na pewno chcesz utworzyć całkowicie NOWY PROJEKT?\nWszystkie niezapisane zmiany w bieżącym projekcie zostaną wyzerowane do ustawień początkowych.",
-                    "Are you sure you want to start a completely NEW PROJECT?\nAll unsaved changes in the current workspace will be reset to zero-state defaults."),
-                BuilderI18n.T("Nowy Projekt — Reset do stanu zerowego", "New Project — Reset to Zero-State"),
-                MessageBoxButton.YesNo,
-                MessageBoxImage.Question);
+            int userAction = ShowNewProjectConfirmationDialog(win);
+            if (userAction == 0) return;
 
-            if (res != MessageBoxResult.Yes) return;
+            if (userAction == 1)
+            {
+                // Użytkownik wybrał "Zapisz obecny i utwórz nowy" — jeśli anuluje okno zapisu, przerywamy reset
+                bool savedOk = SaveProjectInteractiveWithResult(win);
+                if (!savedOk) return;
+            }
 
             _hasUserLoadedProject = false;
             CurrentProjectFilePath = "";
+
+            // 1. Zapisz czysty stan zerowy (obejmujący zarówno Factions jak i puste mapState)
             string zeroPath = WriteCleanZeroStateDraftFile();
+
+            // 2. Wyczyść pliki tymczasowe mapy (GPX / KML / map_state.json) w source\maps
+            try
+            {
+                string sourceDir = TacticalConfigPanel.GetPrimarySourceDirectory(win);
+                string mapsDir = Path.Combine(sourceDir, "maps");
+                if (Directory.Exists(mapsDir))
+                {
+                    foreach (string mf in Directory.GetFiles(mapsDir, "*.*", SearchOption.AllDirectories))
+                    {
+                        try { File.Delete(mf); } catch { }
+                    }
+                }
+            }
+            catch { }
+
+            // 3. Zresetuj całkowicie Generator OPORD (pamięć, pliki opord_*.json oraz widok UI)
+            OpordBuilderManager.ResetAllOpordsToZeroState(win);
+
+            // 4. Przeładuj stan zerowy we wszystkich modułach (w tym wywołaj natywny loader z zeroPath, aby wyczyścić obiekty na Mapie 1:1)
             ReloadProjectAndMapStateEverywhere(win, zeroPath);
+
+            var allElements = GetAllVisualDescendants(win).ToList();
+            CaptureAndCollapseTopMenuBar(allElements);
+
+            SetPendingSidebarProjectPath(zeroPath);
+            try
+            {
+                if (_originalLoadProjectButton != null)
+                {
+                    _originalLoadProjectButton.IsEnabled = true;
+                    _originalLoadProjectButton.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
+                }
+            }
+            catch { }
+            finally
+            {
+                SetPendingSidebarProjectPath("");
+            }
+
             ResetMainWindowTextBoxesToZeroState(win);
 
             if (_activeProjectFileLabel != null)
@@ -255,12 +459,10 @@ namespace FieldTakHub.Builder.Services
                 _activeProjectFileLabel.Text = BuilderI18n.T("Projekt: Nowy (Stan zerowy)", "Project: New (Zero-State)");
             }
 
-            SwitchActiveModule(win, BuilderActiveModule.PackageGenerator);
+            // 5. Odśwież aktualnie otwarty moduł (np. jeśli użytkownik był na Mapie lub OPORD, od razu zobaczy wyzerowany ekran)
+            SwitchActiveModule(win, _currentModule);
         }
 
-        // =========================================================================
-        // OTWIERANIE PROJEKTU — DOKŁADNIE 1 OKNO WYBORU PLIKU (BEZ TRZYKROTNEGO DIALOGU)
-        // =========================================================================
         public static void OpenProjectInteractive(Window win)
         {
             var dlg = new OpenFileDialog
@@ -275,11 +477,8 @@ namespace FieldTakHub.Builder.Services
             _hasUserLoadedProject = true;
             CurrentProjectFilePath = dlg.FileName;
 
-            // 1. Oczyść plik z niewidocznych znaków (\u200B), zapisz w sesji roboczej i wywołaj bezpośrednie metody ładujące
             ReloadProjectAndMapStateEverywhere(win, dlg.FileName);
 
-            // 2. Jeśli w TacticalConfigPanel istnieje natywny przycisk wczytywania, przekaż mu ścieżkę przez PendingSidebarProjectPath
-            //    i wywołaj TYLKO JEDEN RAZ (z break;), aby nigdy nie otwierał kolejnych okien dialogowych!
             var allElements = GetAllVisualDescendants(win).ToList();
             CaptureAndCollapseTopMenuBar(allElements);
 
@@ -373,6 +572,11 @@ namespace FieldTakHub.Builder.Services
 
         public static void SaveProjectInteractive(Window win)
         {
+            SaveProjectInteractiveWithResult(win);
+        }
+
+        public static bool SaveProjectInteractiveWithResult(Window win)
+        {
             try { TacticalConfigPanel.SaveSessionStateAuto(win); } catch { }
             try { OpordBuilderManager.SaveAllOpordsToDisk(win); } catch { }
 
@@ -380,18 +584,31 @@ namespace FieldTakHub.Builder.Services
 
             if (_originalSaveProjectButton != null)
             {
+                DateTime beforeWrite = DateTime.MinValue;
+                string beforePath = TacticalConfigPanel.CurrentDraftProjectPath ?? "";
+                if (!string.IsNullOrWhiteSpace(beforePath) && File.Exists(beforePath))
+                {
+                    try { beforeWrite = File.GetLastWriteTimeUtc(beforePath); } catch { }
+                }
+
                 _originalSaveProjectButton.IsEnabled = true;
                 _originalSaveProjectButton.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
+
                 string savedPath = TacticalConfigPanel.CurrentDraftProjectPath ?? "";
-                if (!string.IsNullOrWhiteSpace(savedPath))
+                if (!string.IsNullOrWhiteSpace(savedPath) && File.Exists(savedPath))
                 {
-                    CurrentProjectFilePath = savedPath;
-                    if (_activeProjectFileLabel != null)
+                    DateTime afterWrite = File.GetLastWriteTimeUtc(savedPath);
+                    if (savedPath != beforePath || afterWrite > beforeWrite)
                     {
-                        _activeProjectFileLabel.Text = BuilderI18n.T("Projekt: ", "Project: ") + Path.GetFileName(savedPath);
+                        CurrentProjectFilePath = savedPath;
+                        if (_activeProjectFileLabel != null)
+                        {
+                            _activeProjectFileLabel.Text = BuilderI18n.T("Projekt: ", "Project: ") + Path.GetFileName(savedPath);
+                        }
+                        return true;
                     }
                 }
-                return;
+                return false;
             }
 
             string evName = TacticalConfigPanel.GetEventNameFromWindow(win);
@@ -476,7 +693,10 @@ namespace FieldTakHub.Builder.Services
                 {
                     _activeProjectFileLabel.Text = BuilderI18n.T("Projekt: ", "Project: ") + Path.GetFileName(dlg.FileName);
                 }
+                return true;
             }
+
+            return false;
         }
 
         private static void ReloadProjectAndMapStateEverywhere(Window win, string filePath)
@@ -579,7 +799,8 @@ namespace FieldTakHub.Builder.Services
             {
                 string val = (tb.Text ?? "").Trim();
                 if (val.Contains("ggzstak", StringComparison.OrdinalIgnoreCase) ||
-                    val.Contains("GGZS", StringComparison.OrdinalIgnoreCase))
+                    val.Contains("GGZS", StringComparison.OrdinalIgnoreCase) ||
+                    val.Contains("MILSIM", StringComparison.OrdinalIgnoreCase))
                 {
                     tb.Text = "";
                 }
@@ -933,9 +1154,6 @@ namespace FieldTakHub.Builder.Services
             }
         }
 
-        // =========================================================================
-        // BUDOWA CHOWANEGO PASKA BOCZNEGO (Z PRZYCISKIEM STRZAŁKI ◀/▶ ORAZ "WESPRZYJ TWÓRCĘ")
-        // =========================================================================
         private static Border BuildTacticalSidebarControl(Window win)
         {
             var sidebarBorder = new Border
@@ -1099,7 +1317,6 @@ namespace FieldTakHub.Builder.Services
             var bottomStack = new StackPanel { VerticalAlignment = VerticalAlignment.Bottom };
             DockPanel.SetDock(bottomStack, Dock.Bottom);
 
-            // Przywrócony przycisk "☕ Wesprzyj twórcę" (Support Creator)
             _supportCreatorBtn = CreateSidebarActionButton(
                 iconCoffee,
                 "☕ Wesprzyj twórcę",

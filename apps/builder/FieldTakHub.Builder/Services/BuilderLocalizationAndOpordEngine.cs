@@ -751,7 +751,49 @@ namespace FieldTakHub.Builder.Services
             ("Czujka", "Przechodnie", "Przewodzi podczas marszu, koryguje trasę, szuka przejścia, wypatruje zagrożenia z przodu.")
         };
 
-        public static OpordParagraphModel GetOrCreateModel(string factionName)
+        
+        public static void ResetAllOpordsToZeroState(Window win)
+        {
+            try
+            {
+                ModelsByFaction.Clear();
+                _activeOpordFaction = "BLUFOR";
+
+                string appData = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "FieldTakHub");
+                if (Directory.Exists(appData))
+                {
+                    foreach (string f in Directory.GetFiles(appData, "opord_*.json", SearchOption.TopDirectoryOnly))
+                    {
+                        try { File.Delete(f); } catch { }
+                    }
+                }
+
+                if (win != null)
+                {
+                    string sourceDir = TacticalConfigPanel.GetPrimarySourceDirectory(win);
+                    string factionsDir = Path.Combine(sourceDir, "factions");
+                    if (Directory.Exists(factionsDir))
+                    {
+                        foreach (string f in Directory.GetFiles(factionsDir, "*opord*", SearchOption.AllDirectories))
+                        {
+                            try { File.Delete(f); } catch { }
+                        }
+                    }
+                }
+
+                if (_cachedOpordOverlay != null)
+                {
+                    if (VisualTreeHelper.GetParent(_cachedOpordOverlay) is Panel parentPanel)
+                    {
+                        parentPanel.Children.Remove(_cachedOpordOverlay);
+                    }
+                    _cachedOpordOverlay = null;
+                }
+            }
+            catch { }
+        }
+
+public static OpordParagraphModel GetOrCreateModel(string factionName)
         {
             string key = string.IsNullOrWhiteSpace(factionName) ? "BLUFOR" : factionName.Trim();
             if (!ModelsByFaction.TryGetValue(key, out var model))
