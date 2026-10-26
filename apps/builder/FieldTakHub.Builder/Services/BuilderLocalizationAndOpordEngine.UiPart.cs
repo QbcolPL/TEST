@@ -64,6 +64,7 @@ namespace FieldTakHub.Builder.Services
                 }
 
                 var model = GetOrCreateModel(_activeOpordFaction);
+                TranslateOpordModelToCurrentLanguage(model);
                 model.ActiveDayIndex = Math.Clamp(model.ActiveDayIndex, 0, Math.Max(0, model.Days.Count - 1));
                 var activeDay = model.Days[model.ActiveDayIndex];
                 EnsureDayDefaultsInitialized(activeDay, _activeOpordFaction);
@@ -664,7 +665,7 @@ namespace FieldTakHub.Builder.Services
                         metocStatusText.Text =
                             "☀️ " + rep.SunTimesText + "\n" +
                             "🌙 " + rep.MoonPhaseText + "\n" +
-                            "🌡️ Temp: " + rep.TempRangeText + "  |  " + rep.HumidityAndPrecipText + "\n" +
+                            BuilderI18n.T("🌡️ Temp: ", "🌡️ Temp: ") + rep.TempRangeText + "  |  " + rep.HumidityAndPrecipText + "\n" +
                             "💨 " + rep.WindText;
 
                         string currentDayTerrain = (activeDay.TerrainAndWeather ?? "").Trim();

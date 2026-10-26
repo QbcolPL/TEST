@@ -31,6 +31,7 @@ namespace FieldTakHub.Builder.Services
         private static readonly HashSet<int> InitializedWindows = new HashSet<int>();
         private static bool _zeroStateAppliedOnBoot;
         private static bool _isUpdatingNav;
+        private static long _lastAutoI18nTick;
         private static bool _hasUserLoadedProject;
 
         private static Grid _rootDockGrid;
@@ -436,6 +437,7 @@ namespace FieldTakHub.Builder.Services
 
             var allElements = GetAllVisualDescendants(win).ToList();
             CaptureAndCollapseTopMenuBar(allElements);
+                CollapseObsoleteBuilderModeSelector(allElements);
 
             SetPendingSidebarProjectPath(zeroPath);
             try
@@ -481,6 +483,7 @@ namespace FieldTakHub.Builder.Services
 
             var allElements = GetAllVisualDescendants(win).ToList();
             CaptureAndCollapseTopMenuBar(allElements);
+                CollapseObsoleteBuilderModeSelector(allElements);
 
             SetPendingSidebarProjectPath(dlg.FileName);
             try
@@ -512,7 +515,10 @@ namespace FieldTakHub.Builder.Services
                 catch { }
             }
 
-            RemoveDuplicateInnerSidebars(win, GetAllVisualDescendants(win).ToList());
+            var updatedDescendants = GetAllVisualDescendants(win).ToList();
+            CollapseObsoleteBuilderModeSelector(updatedDescendants);
+            RemoveDuplicateInnerSidebars(win, updatedDescendants);
+            BuilderI18n.ApplyLanguageToVisualTree(win);
         }
 
         private static void SetPendingSidebarProjectPath(string value)
@@ -532,6 +538,7 @@ namespace FieldTakHub.Builder.Services
         {
             var allElements = GetAllVisualDescendants(win).ToList();
             CaptureAndCollapseTopMenuBar(allElements);
+                CollapseObsoleteBuilderModeSelector(allElements);
 
             if (_originalSupportCreatorButton != null)
             {
@@ -850,6 +857,7 @@ namespace FieldTakHub.Builder.Services
                 var allElements = GetAllVisualDescendants(win).ToList();
 
                 CaptureAndCollapseTopMenuBar(allElements);
+                CollapseObsoleteBuilderModeSelector(allElements);
                 CollapseLegacyLeftSidebarColumn(win, allElements);
 
                 if (win.Content is Grid currentTopGrid && string.Equals(currentTopGrid.Tag?.ToString(), "FTH_ROOT_LAYOUT_GRID", StringComparison.Ordinal))
@@ -909,7 +917,10 @@ namespace FieldTakHub.Builder.Services
                 _rootDockGrid.Children.Add(_rightWorkspaceGrid);
                 win.Content = _rootDockGrid;
 
-                RemoveDuplicateInnerSidebars(win, GetAllVisualDescendants(win).ToList());
+                var updatedDescendants = GetAllVisualDescendants(win).ToList();
+            CollapseObsoleteBuilderModeSelector(updatedDescendants);
+            RemoveDuplicateInnerSidebars(win, updatedDescendants);
+            BuilderI18n.ApplyLanguageToVisualTree(win);
                 ApplySidebarCollapseState();
                 RefreshSidebarLocalization(win);
                 UpdateSidebarActiveButtonHighlight();
@@ -977,6 +988,15 @@ namespace FieldTakHub.Builder.Services
             if (_isUpdatingNav || _rootDockGrid == null || _injectedSidebarContainer == null) return;
             try
             {
+                CollapseObsoleteBuilderModeSelector(GetAllVisualDescendants(win).ToList());
+                long nowTick = Environment.TickCount64;
+                if (nowTick - _lastAutoI18nTick > 250)
+                {
+                    _lastAutoI18nTick = nowTick;
+                    var currentDescendants = GetAllVisualDescendants(win).ToList();
+                    CollapseObsoleteBuilderModeSelector(currentDescendants);
+                    BuilderI18n.ApplyLanguageToVisualTree(win);
+                }
                 if (_injectedSidebarContainer.Visibility != Visibility.Visible)
                     _injectedSidebarContainer.Visibility = Visibility.Visible;
                 if (Grid.GetColumn(_injectedSidebarContainer) != 0)
@@ -999,7 +1019,96 @@ namespace FieldTakHub.Builder.Services
             catch { }
         }
 
-        private static void CaptureAndCollapseTopMenuBar(List<DependencyObject> allElements)
+        
+        private static void CollapseObsoleteBuilderModeSelector(List<DependencyObject> allElements)
+        {
+            try
+            {
+                foreach (var tb in allElements.OfType<TextBlock>())
+                {
+                    string t = (tb.Text ?? "").Trim();
+                    if (t.Equals("Tryb Buildera", StringComparison.OrdinalIgnoreCase) ||
+                        t.Equals("Tryb Buildera:", StringComparison.OrdinalIgnoreCase) ||
+                        t.Equals("Builder Mode", StringComparison.OrdinalIgnoreCase) ||
+                        t.Equals("Builder Mode:", StringComparison.OrdinalIgnoreCase))
+                    {
+                        tb.Visibility = Visibility.Collapsed;
+                        tb.Width = 0;
+                        tb.Height = 0;
+                        tb.Margin = new Thickness(0);
+
+                        DependencyObject parent = VisualTreeHelper.GetParent(tb);
+                        if (parent is Panel p)
+                        {
+                            foreach (UIElement ch in p.Children)
+                            {
+                                if (ch is ComboBox cb)
+                                {
+                                    cb.Visibility = Visibility.Collapsed;
+                                    cb.Width = 0;
+                                    cb.Height = 0;
+                                    cb.Margin = new Thickness(0);
+                                }
+                            }
+                            if (p.Children.Count <= 3)
+                            {
+                                p.Visibility = Visibility.Collapsed;
+                                p.Width = 0;
+                                p.Height = 0;
+                                p.Margin = new Thickness(0);
+                                if (VisualTreeHelper.GetParent(p) is Border b && b.ActualHeight < 80 && b.ActualWidth < 450)
+                                {
+                                    b.Visibility = Visibility.Collapsed;
+                                    b.Width = 0;
+                                    b.Height = 0;
+                                    b.Margin = new Thickness(0);
+                                    b.Padding = new Thickness(0);
+                                }
+                            }
+                        }
+                    }
+                }
+
+                foreach (var cb in allElements.OfType<ComboBox>())
+                {
+                    if (_injectedSidebarContainer != null && IsDescendantOf(_injectedSidebarContainer, cb))
+                        continue;
+
+                    bool isModeCombo = false;
+                    foreach (var item in cb.Items)
+                    {
+                        string itemStr = (item is ComboBoxItem cbi ? cbi.Content?.ToString() : item?.ToString()) ?? "";
+                        if (itemStr.Contains("Tryb prosty", StringComparison.OrdinalIgnoreCase) ||
+                            itemStr.Contains("Tryb zaawansowany", StringComparison.OrdinalIgnoreCase) ||
+                            itemStr.Contains("Simple Mode", StringComparison.OrdinalIgnoreCase) ||
+                            itemStr.Contains("Advanced Mode", StringComparison.OrdinalIgnoreCase))
+                        {
+                            isModeCombo = true;
+                            break;
+                        }
+                    }
+
+                    if (isModeCombo)
+                    {
+                        cb.Visibility = Visibility.Collapsed;
+                        cb.Width = 0;
+                        cb.Height = 0;
+                        cb.Margin = new Thickness(0);
+
+                        if (VisualTreeHelper.GetParent(cb) is Panel p && p.Children.Count <= 3)
+                        {
+                            p.Visibility = Visibility.Collapsed;
+                            p.Width = 0;
+                            p.Height = 0;
+                            p.Margin = new Thickness(0);
+                        }
+                    }
+                }
+            }
+            catch { }
+        }
+
+private static void CaptureAndCollapseTopMenuBar(List<DependencyObject> allElements)
         {
             foreach (var btn in allElements.OfType<ButtonBase>())
             {
@@ -1416,6 +1525,7 @@ namespace FieldTakHub.Builder.Services
 
             var allElements = GetAllVisualDescendants(win).ToList();
             CaptureAndCollapseTopMenuBar(allElements);
+                CollapseObsoleteBuilderModeSelector(allElements);
             CollapseLegacyLeftSidebarColumn(win, allElements);
             RemoveDuplicateInnerSidebars(win, allElements);
 
@@ -1496,7 +1606,10 @@ namespace FieldTakHub.Builder.Services
                     break;
             }
 
-            RemoveDuplicateInnerSidebars(win, GetAllVisualDescendants(win).ToList());
+            var updatedDescendants = GetAllVisualDescendants(win).ToList();
+            CollapseObsoleteBuilderModeSelector(updatedDescendants);
+            RemoveDuplicateInnerSidebars(win, updatedDescendants);
+            BuilderI18n.ApplyLanguageToVisualTree(win);
             if (_injectedSidebarContainer != null)
             {
                 _injectedSidebarContainer.Visibility = Visibility.Visible;

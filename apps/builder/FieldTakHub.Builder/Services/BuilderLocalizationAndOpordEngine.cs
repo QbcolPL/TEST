@@ -30,27 +30,51 @@ namespace FieldTakHub.Builder.Services
         public static string CurrentLang { get; private set; } = LoadSavedLanguage();
         public static event Action<string> LanguageChanged;
 
+        private static readonly DependencyProperty OriginalPlTextProperty =
+            DependencyProperty.RegisterAttached("OriginalPlText", typeof(string), typeof(BuilderI18n), new PropertyMetadata(null));
+
+        private static readonly DependencyProperty OriginalPlToolTipProperty =
+            DependencyProperty.RegisterAttached("OriginalPlToolTip", typeof(string), typeof(BuilderI18n), new PropertyMetadata(null));
+
         private static readonly Dictionary<string, string> PlToEn = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
-            ["📦 Konfigurator Paczek (.ftak)"] = "📦 Faction & Package Builder (.ftak)",
-            ["📋 Generator Rozkazu (OPORD)"] = "📋 NATO / MilSim OPORD Builder",
-            ["🗺️ Generator Map Taktycznych 1:1"] = "🗺️ 1:1 Tactical Map Studio",
-            ["🔌 Masowy Programator USB LoRa"] = "🔌 Bulk USB LoRa Programmer",
-            ["💾 Zapisz projekt roboczy (.fthproj)"] = "💾 Save Workspace (.fthproj)",
-            ["📂 Wczytaj projekt (.fthproj)"] = "📂 Load Workspace (.fthproj)",
+            // Pasek boczny i nawigacja
+            ["MODUŁY OPERACYJNE"] = "OPERATIONAL MODULES",
+            ["ZARZĄDZANIE PROJEKTEM"] = "PROJECT WORKSPACE",
+            ["Generator Paczek (.ftak)"] = "Package Builder (.ftak)",
+            ["Generator Map 1:1"] = "1:1 Map Generator",
+            ["Generator OPORD"] = "OPORD Builder",
+            ["Programator Płytek USB"] = "USB Board Programmer",
+            ["Nowy projekt (Stan zerowy)"] = "New Project (Zero-State)",
+            ["Otwórz projekt (.fthproj)"] = "Open Project (.fthproj)",
+            ["Zapisz projekt (.fthproj)"] = "Save Project (.fthproj)",
+            ["Folder Source (APK / Mapy)"] = "Source Folder (APK / Maps)",
             ["☕ Wesprzyj twórcę"] = "☕ Support Creator",
+            ["Zamknij"] = "Close",
+            ["Anuluj"] = "Cancel",
+            ["Zapisz"] = "Save",
+            ["Wczytaj"] = "Load",
+            ["Odśwież"] = "Refresh",
+            ["Kopiuj"] = "Copy",
+            ["Usuń"] = "Delete",
+            ["Dodaj"] = "Add",
+
+            // Generator Paczek (.ftak)
             ["➕ Dodaj stronę"] = "➕ Add Faction",
             ["🗑 Usuń stronę"] = "🗑 Remove Faction",
+            ["🗑️ Usuń stronę"] = "🗑️ Remove Faction",
             ["🖨 Plakat A4 Safezone (HTML)"] = "🖨 A4 Safezone Poster (HTML)",
+            ["🖨️ Plakat A4 Safezone (HTML)"] = "🖨️ A4 Safezone Poster (HTML)",
             ["🔑 Generuj nowy PSK (AES-256)"] = "🔑 Generate New PSK (AES-256)",
+            ["🔑 Generuj PSK"] = "🔑 Generate PSK",
             ["➕ Dodaj kanał"] = "➕ Add Channel",
+            ["➕ Dodaj kanał głosowy"] = "➕ Add Voice Channel",
             ["⚡ Buduj .FTAK dla WSZYSTKICH stron"] = "⚡ Build .FTAK for ALL Factions",
             ["📦 Buduj .FTAK dla aktywnej strony"] = "📦 Build .FTAK for Active Faction",
             ["📱 Pokaż Kod QR aktywnej strony (Wi-Fi / Offline)"] = "📱 Show Active Faction QR (Wi-Fi / Offline)",
             ["📂 Otwórz folder z plikiem .FTAK"] = "📂 Open .FTAK Output Folder",
-            ["Zamknij"] = "Close",
-            ["Anuluj"] = "Cancel",
             ["Nazwa wydarzenia / operacji"] = "Event / Operation Name",
+            ["Nazwa wydarzenia / operacji:"] = "Event / Operation Name:",
             ["Nazwa strony konfliktu"] = "Faction / Side Name",
             ["Kolor taktyczny (HEX)"] = "Tactical Color (HEX)",
             ["Nazwa kanału Meshtastic"] = "Meshtastic Channel Name",
@@ -61,7 +85,15 @@ namespace FieldTakHub.Builder.Services
             ["Adres serwera OpenTAK (OTS Host)"] = "OpenTAKServer Address (OTS Host)",
             ["Telefon alarmowy ORGA / MEDEVAC"] = "Emergency Phone (ORGA / MEDEVAC)",
             ["Kanały Głosowe (PMR / VHF / UHF / DMR) — Ściąga Operacyjna"] = "Voice Radio Channels (PMR / VHF / UHF / DMR) — Field Cheat Sheet",
+            ["Rola / Przeznaczenie"] = "Role / Purpose",
+            ["Pasmo"] = "Band",
+            ["Częstotliwość / Kanał"] = "Frequency / Channel",
+            ["Ton CTCSS / DCS / Kod DMR"] = "CTCSS / DCS Tone / DMR Code",
+
+            // Generator Map 1:1
             ["Szukaj miejscowości lub współrzędnych"] = "Search town or coordinates",
+            ["🔍 Szukaj"] = "🔍 Search",
+            ["🎯 Wyśrodkuj na AO"] = "🎯 Center on AO",
             ["Skala mapy"] = "Map Scale",
             ["Orientacja arkusza"] = "Sheet Orientation",
             ["Format arkusza"] = "Sheet Format",
@@ -75,9 +107,182 @@ namespace FieldTakHub.Builder.Services
             ["Buduj Mapę Offline (.mbtiles / .sqlitedb)"] = "Build Offline Map (.mbtiles / .sqlitedb)"
         };
 
-        private static readonly Dictionary<string, string> EnToPl = PlToEn
-            .GroupBy(kv => kv.Value, StringComparer.OrdinalIgnoreCase)
-            .ToDictionary(g => g.Key, g => g.First().Key, StringComparer.OrdinalIgnoreCase);
+        // Kompleksowy słownik fraz (od najdłuższych do najkrótszych) tłumaczący całe widoki Generatora Paczek, Map 1:1, USB i OPORD
+        private static readonly Dictionary<string, string> PhraseReplacementsPlToEn = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["Kanały Głosowe (PMR / VHF / UHF / DMR) — Ściąga Operacyjna"] = "Voice Radio Channels (PMR / VHF / UHF / DMR) — Field Cheat Sheet",
+            ["Pokaż Kod QR aktywnej strony (Wi-Fi / Offline)"] = "Show Active Faction QR (Wi-Fi / Offline)",
+            ["Buduj .FTAK dla WSZYSTKICH stron"] = "Build .FTAK for ALL Factions",
+            ["Buduj .FTAK dla aktywnej strony"] = "Build .FTAK for Active Faction",
+            ["Otwórz folder z plikiem .FTAK"] = "Open .FTAK Output Folder",
+            ["Generuj nowy PSK (AES-256)"] = "Generate New PSK (AES-256)",
+            ["Plakat A4 Safezone (HTML)"] = "A4 Safezone Poster (HTML)",
+            ["Konfigurator Paczek (.ftak)"] = "Faction & Package Builder (.ftak)",
+            ["Generator Map Taktycznych 1:1"] = "1:1 Tactical Map Studio",
+            ["Generator Map 1:1"] = "1:1 Map Generator",
+            ["Generator Rozkazu (OPORD)"] = "NATO / MilSim OPORD Builder",
+            ["Programator Płytek USB"] = "USB Board Programmer",
+            ["Masowy Programator USB"] = "Bulk USB Programmer",
+            ["Nowy projekt (Stan zerowy)"] = "New Project (Zero-State)",
+            ["Projekt: Nowy (Stan zerowy)"] = "Project: New (Zero-State)",
+            ["Projekt: "] = "Project: ",
+            ["Otwórz projekt"] = "Open Project",
+            ["Zapisz projekt roboczy"] = "Save Workspace Project",
+            ["Zapisz projekt"] = "Save Project",
+            ["Wczytaj projekt"] = "Load Project",
+            ["Folder Source (APK / Mapy)"] = "Source Folder (APK / Maps)",
+            ["Wesprzyj twórcę"] = "Support Creator",
+
+            // Etykiety i sekcje Generatora Paczek (.ftak)
+            ["Nazwa wydarzenia / operacji"] = "Event / Operation Name",
+            ["Nazwa wydarzenia"] = "Event Name",
+            ["Nazwa operacji"] = "Operation Name",
+            ["Strony konfliktu i konfiguracja frakcji"] = "Conflict Sides & Faction Configuration",
+            ["Strony konfliktu"] = "Conflict Sides",
+            ["Nazwa strony konfliktu"] = "Faction / Side Name",
+            ["Nazwa strony"] = "Faction Name",
+            ["Aktywna strona"] = "Active Faction",
+            ["Dodaj stronę"] = "Add Faction",
+            ["Usuń stronę"] = "Remove Faction",
+            ["Kolor taktyczny (HEX)"] = "Tactical Color (HEX)",
+            ["Kolor taktyczny"] = "Tactical Color",
+            ["Kolor strony"] = "Faction Color",
+            ["Nazwa kanału Meshtastic"] = "Meshtastic Channel Name",
+            ["Nazwa kanału"] = "Channel Name",
+            ["Klucz szyfrowania PSK (Base64)"] = "Encryption Key PSK (Base64)",
+            ["Klucz szyfrowania PSK"] = "PSK Encryption Key",
+            ["Klucz szyfrowania"] = "Encryption Key",
+            ["URL kanału Meshtastic"] = "Meshtastic Channel URL",
+            ["Region LoRa"] = "LoRa Region",
+            ["Preset modemu LoRa"] = "LoRa Modem Preset",
+            ["Preset modemu"] = "Modem Preset",
+            ["Limit skoków (Hop Limit)"] = "Hop Limit",
+            ["Limit skoków"] = "Hop Limit",
+            ["Adres serwera OpenTAK (OTS Host)"] = "OpenTAKServer Address (OTS Host)",
+            ["Adres serwera OpenTAK"] = "OpenTAKServer Address",
+            ["Serwer OpenTAK"] = "OpenTAKServer",
+            ["Adres serwera"] = "Server Address",
+            ["URI subskrypcji / Enrollment"] = "Enrollment / Subscription URI",
+            ["Telefon alarmowy ORGA / MEDEVAC"] = "Emergency Phone (ORGA / MEDEVAC)",
+            ["Telefon alarmowy"] = "Emergency Phone",
+            ["Profil raportowania PLI"] = "PLI Reporting Profile",
+            ["Strategia PLI"] = "PLI Strategy",
+            ["Profil sieci Mesh"] = "Mesh Network Profile",
+            ["Tryb pracy Mesh"] = "Mesh Mode",
+            ["Rola urządzenia"] = "Device Role",
+            ["Model sprzętowy"] = "Hardware Model",
+            ["Dodaj kanał"] = "Add Channel",
+            ["Usuń kanał"] = "Remove Channel",
+            ["Kanały Głosowe"] = "Voice Channels",
+            ["Ściąga Operacyjna"] = "Field Cheat Sheet",
+            ["Rola / Kanał"] = "Role / Channel",
+            ["Rola / Przeznaczenie"] = "Role / Purpose",
+            ["Częstotliwość / Kanał"] = "Frequency / Channel",
+            ["Częstotliwość"] = "Frequency",
+            ["Ton CTCSS / Kod DMR"] = "CTCSS Tone / DMR Code",
+            ["Ton / Kod"] = "Tone / Code",
+            ["Brak tonu"] = "No Tone",
+            ["Dowodzenie HQ"] = "HQ Command",
+            ["Ratunkowy ORGA"] = "ORGA Emergency",
+            ["Taktyczny"] = "Tactical",
+            ["Pliki źródłowe"] = "Source Files",
+            ["Katalog źródłowy"] = "Source Directory",
+            ["Katalog wyjściowy"] = "Output Directory",
+            ["Otwórz folder"] = "Open Folder",
+
+            // Etykiety i sekcje Generatora Map Taktycznych 1:1
+            ["Generator Map Taktycznych"] = "Tactical Map Generator",
+            ["Szukaj miejscowości lub współrzędnych"] = "Search town or coordinates",
+            ["Wyszukaj miejscowość"] = "Search town",
+            ["Szukaj miejscowości"] = "Search town",
+            ["Szukaj"] = "Search",
+            ["Wyśrodkuj na AO"] = "Center on AO",
+            ["Wyśrodkuj"] = "Center",
+            ["Skala mapy"] = "Map Scale",
+            ["Skala arkusza"] = "Sheet Scale",
+            ["Skala"] = "Scale",
+            ["Orientacja arkusza"] = "Sheet Orientation",
+            ["Orientacja"] = "Orientation",
+            ["Format arkusza"] = "Sheet Format",
+            ["Format papieru"] = "Paper Format",
+            ["Warstwa podkładowa"] = "Base Map Layer",
+            ["Podkład mapowy"] = "Base Map Layer",
+            ["Pokaż cieniowanie LiDAR (ISOK)"] = "Show LiDAR Hillshade (ISOK)",
+            ["Pokaż cieniowanie LiDAR"] = "Show LiDAR Hillshade",
+            ["Cieniowanie LiDAR"] = "LiDAR Hillshade",
+            ["Nakładka LiDAR"] = "LiDAR Overlay",
+            ["Przezroczystość LiDAR"] = "LiDAR Opacity",
+            ["Przezroczystość głównej siatki"] = "Main Grid Opacity",
+            ["Przezroczystość podsiatki"] = "Sub-grid Opacity",
+            ["Przezroczystość tła etykiet"] = "Label Box Opacity",
+            ["Przezroczystość maski poza AO"] = "Outside AO Mask Opacity",
+            ["Przyciemnienie mapy"] = "Map Dimmer Opacity",
+            ["Przezroczystość"] = "Opacity",
+            ["System współrzędnych siatki"] = "Grid Coordinate System",
+            ["Układ współrzędnych"] = "Coordinate System",
+            ["Podział kwadratów 100 m"] = "100 m Square Subdivision",
+            ["Podział kwadratów"] = "Square Subdivision",
+            ["Tryb etykiet siatki"] = "Grid Labels Mode",
+            ["Styl tła etykiet"] = "Label Background Style",
+            ["Grubość linii siatki"] = "Grid Line Thickness",
+            ["Grubość siatki"] = "Grid Thickness",
+            ["Skala czcionki"] = "Font Scale",
+            ["Kolor głównej siatki"] = "Main Grid Color",
+            ["Kolor podsiatki"] = "Sub-grid Color",
+            ["Kolor tekstu etykiet"] = "Label Text Color",
+            ["Kolor tła etykiet"] = "Label Background Color",
+            ["Obrys tekstu (Halo)"] = "Text Halo / Outline",
+            ["Maska poza AO"] = "Outside AO Mask",
+            ["Pokaż wszystkie etykiety obiektów"] = "Show all object labels",
+            ["Pokaż etykiety"] = "Show labels",
+            ["Pokaż uchwyty obrotu"] = "Show rotation handles",
+            ["Pokaż strzałkę północy"] = "Show North Arrow",
+            ["Strzałka północy"] = "North Arrow",
+            ["Pokaż podziałkę skali"] = "Show Scale Bar",
+            ["Podziałka skali"] = "Scale Bar",
+            ["Pokaż legendę"] = "Show Legend",
+            ["Legenda taktyczna"] = "Tactical Legend",
+            ["Pokaż znaki NATO w legendzie"] = "Show NATO symbols in legend",
+            ["Granica Terenu Gry (AO)"] = "Game Area Boundary (AO)",
+            ["Granica AO"] = "AO Boundary",
+            ["Rysuj granicę AO"] = "Draw AO Boundary",
+            ["Zakończ rysowanie"] = "Finish Drawing",
+            ["Obiekty na mapie"] = "Map Objects",
+            ["Obiekty taktyczne"] = "Tactical Objects",
+            ["Dodaj punkt"] = "Add Point",
+            ["Dodaj obiekt"] = "Add Object",
+            ["Usuń obiekt"] = "Delete Object",
+            ["Wyczyść obiekty"] = "Clear Objects",
+            ["Wyczyść wszystko"] = "Clear All",
+            ["Nazwa obiektu"] = "Object Name",
+            ["Domyślna nazwa"] = "Default Name",
+            ["Rozmiar punktu"] = "Dot Size",
+            ["Skala znaku NATO"] = "NATO Symbol Scale",
+            ["Obrót"] = "Rotation",
+            ["Eksportuj Mapę A4 (HTML / Druk PDF)"] = "Export A4 Map (HTML / Print PDF)",
+            ["Eksportuj Mapę"] = "Export Map",
+            ["Drukuj Mapę"] = "Print Map",
+            ["Eksportuj KMZ"] = "Export KMZ",
+            ["Eksportuj GPX"] = "Export GPX",
+            ["Buduj Mapę Offline"] = "Build Offline Map",
+            ["Generuj Mapę Offline"] = "Generate Offline Map",
+            ["Mapa Offline"] = "Offline Map",
+            ["Minimalny zoom"] = "Min Zoom",
+            ["Maksymalny zoom"] = "Max Zoom",
+            ["Wypal LiDAR w mapie offline"] = "Bake LiDAR into offline map",
+            ["Dołącz wektory (KMZ/GPX)"] = "Include vectors (KMZ/GPX)",
+
+            // Programator USB
+            ["Masowy Programator Płytek USB"] = "Bulk USB Board Programmer",
+            ["Skanuj porty COM"] = "Scan COM Ports",
+            ["Wykryte urządzenia"] = "Detected Devices",
+            ["Programuj wybraną płytkę"] = "Flash Selected Board",
+            ["Programuj wszystkie"] = "Flash All Boards"
+        };
+
+        private static readonly List<KeyValuePair<string, string>> SortedPhrasesPlToEn = PhraseReplacementsPlToEn
+            .OrderByDescending(kv => kv.Key.Length)
+            .ToList();
 
         public static string T(string plText, string enText) =>
             string.Equals(CurrentLang, "EN", StringComparison.OrdinalIgnoreCase) ? enText : plText;
@@ -105,28 +310,118 @@ namespace FieldTakHub.Builder.Services
             LanguageChanged?.Invoke(CurrentLang);
         }
 
+        public static string TranslateTextSmart(string inputPlText, bool toEn)
+        {
+            if (string.IsNullOrWhiteSpace(inputPlText)) return inputPlText;
+            if (!toEn) return inputPlText;
+
+            string trimmed = inputPlText.Trim();
+            if (PlToEn.TryGetValue(trimmed, out string exact))
+            {
+                return exact;
+            }
+
+            string result = inputPlText;
+            foreach (var kv in SortedPhrasesPlToEn)
+            {
+                if (result.IndexOf(kv.Key, StringComparison.OrdinalIgnoreCase) >= 0)
+                {
+                    result = Regex.Replace(result, Regex.Escape(kv.Key), kv.Value, RegexOptions.IgnoreCase);
+                }
+            }
+            return result;
+        }
+
         public static void ApplyLanguageToVisualTree(DependencyObject root)
         {
             if (root == null) return;
             bool toEn = string.Equals(CurrentLang, "EN", StringComparison.OrdinalIgnoreCase);
-            var map = toEn ? PlToEn : EnToPl;
 
             var queue = new Queue<DependencyObject>();
             queue.Enqueue(root);
             while (queue.Count > 0)
             {
                 var curr = queue.Dequeue();
-                if (curr is TextBlock tb && !string.IsNullOrWhiteSpace(tb.Text))
+
+                if (curr is FrameworkElement fe && fe.ToolTip is string tipStr && !string.IsNullOrWhiteSpace(tipStr))
                 {
-                    string trimmed = tb.Text.Trim();
-                    if (map.TryGetValue(trimmed, out string translated))
-                        tb.Text = translated;
+                    string origTip = fe.GetValue(OriginalPlToolTipProperty) as string;
+                    if (origTip == null)
+                    {
+                        origTip = tipStr;
+                        fe.SetValue(OriginalPlToolTipProperty, origTip);
+                    }
+                    string targetTip = toEn ? TranslateTextSmart(origTip, true) : origTip;
+                    if (!string.Equals(tipStr, targetTip, StringComparison.Ordinal))
+                    {
+                        fe.ToolTip = targetTip;
+                    }
                 }
-                else if (curr is ContentControl cc && cc.Content is string s && !string.IsNullOrWhiteSpace(s))
+
+                if (curr is TextBlock tb)
                 {
-                    string trimmed = s.Trim();
-                    if (map.TryGetValue(trimmed, out string translated))
-                        cc.Content = translated;
+                    if (tb.Inlines != null && tb.Inlines.Count > 1)
+                    {
+                        foreach (var inline in tb.Inlines)
+                        {
+                            if (inline is System.Windows.Documents.Run run && !string.IsNullOrWhiteSpace(run.Text))
+                            {
+                                string origRun = run.GetValue(OriginalPlTextProperty) as string;
+                                if (origRun == null)
+                                {
+                                    origRun = run.Text;
+                                    run.SetValue(OriginalPlTextProperty, origRun);
+                                }
+                                string targetRun = toEn ? TranslateTextSmart(origRun, true) : origRun;
+                                if (!string.Equals(run.Text, targetRun, StringComparison.Ordinal))
+                                {
+                                    run.Text = targetRun;
+                                }
+                            }
+                        }
+                    }
+                    else if (!string.IsNullOrWhiteSpace(tb.Text))
+                    {
+                        string origTb = tb.GetValue(OriginalPlTextProperty) as string;
+                        if (origTb == null)
+                        {
+                            origTb = tb.Text;
+                            tb.SetValue(OriginalPlTextProperty, origTb);
+                        }
+                        string targetTb = toEn ? TranslateTextSmart(origTb, true) : origTb;
+                        if (!string.Equals(tb.Text, targetTb, StringComparison.Ordinal))
+                        {
+                            tb.Text = targetTb;
+                        }
+                    }
+                }
+                else if (curr is HeaderedContentControl hcc && hcc.Header is string hdrStr && !string.IsNullOrWhiteSpace(hdrStr))
+                {
+                    string origHdr = hcc.GetValue(OriginalPlTextProperty) as string;
+                    if (origHdr == null)
+                    {
+                        origHdr = hdrStr;
+                        hcc.SetValue(OriginalPlTextProperty, origHdr);
+                    }
+                    string targetHdr = toEn ? TranslateTextSmart(origHdr, true) : origHdr;
+                    if (!string.Equals(hdrStr, targetHdr, StringComparison.Ordinal))
+                    {
+                        hcc.Header = targetHdr;
+                    }
+                }
+                else if (curr is ContentControl cc && !(curr is ComboBoxItem) && !(curr is ComboBox) && cc.Content is string s && !string.IsNullOrWhiteSpace(s))
+                {
+                    string origContent = cc.GetValue(OriginalPlTextProperty) as string;
+                    if (origContent == null)
+                    {
+                        origContent = s;
+                        cc.SetValue(OriginalPlTextProperty, origContent);
+                    }
+                    string targetContent = toEn ? TranslateTextSmart(origContent, true) : origContent;
+                    if (!string.Equals(s, targetContent, StringComparison.Ordinal))
+                    {
+                        cc.Content = targetContent;
+                    }
                 }
 
                 int count = 0;
@@ -156,9 +451,6 @@ namespace FieldTakHub.Builder.Services
         }
     }
 
-    // =========================================================================
-    // 2. GENERATOR SARNEG OPARTY NA ZAŁĄCZONEJ LIŚCIE 100 SŁÓW (sarneg_words_PL_EN.txt)
-    // =========================================================================
     internal static class SarnegDictionaryService
     {
         private static readonly Random Rng = new Random();
@@ -844,6 +1136,160 @@ namespace FieldTakHub.Builder.Services
                 }
             }
             catch { }
+        }
+
+        private static readonly (string Pl, string En)[] OpordBilingualPairs = new (string Pl, string En)[]
+        {
+            // Nazwy ról drużynowych i trybów pracy
+            ("Lider (Dowódca polowy)", "Leader (Field Commander)"),
+            ("Navi (Nawigator)", "Navi (Navigator)"),
+            ("RTO (Radiooperator)", "RTO (Radio Operator)"),
+            ("Med (Medyk)", "Med (Medic)"),
+            ("Adiutant", "Adjutant"),
+            ("LARP (Aktor)", "LARP (Roleplayer)"),
+            ("Foto (Fotograf)", "Photo (Photographer)"),
+            ("Tragarz", "Carrier (Mission Props)"),
+            ("O-O (Organizator Obrony)", "D-O (Defense Organizer)"),
+            ("Czujka", "Pointman (Scout)"),
+            ("Szturmowiec", "Rifleman (Assault)"),
+            ("Strzelec wyborowy (DMR)", "Designated Marksman (DMR)"),
+            ("Snajper", "Sniper"),
+            ("Wsparcie (KM)", "Support (LMG)"),
+            ("Brak", "None"),
+            ("Sytuacyjne", "Situational"),
+            ("Przechodnie", "Rotational"),
+
+            // Opisy ról w Załączniku 1
+            ("Dowodzi zespołem w trakcie działań, podejmuje kluczowe decyzje, odpowiada za wykonanie zadań.", "Commands the squad during operations, makes key tactical decisions, responsible for mission accomplishment."),
+            ("Nadzoruje mapę, informacje o POI, wyznacza trasy, nadzoruje kierunek marszu.", "Monitors the map and POI data, plots routes, and maintains marching azimuth."),
+            ("Odpowiada za kontakt ze sztabem, odbieranie rozkazów i podawanie kluczowych informacji, zna szyfrowanie.", "Maintains comms with HQ, receives orders, relays key sitreps, handles SARNEG encryption."),
+            ("Odpowiada za sprawy medyczne: leczenie, opatrunki, ilość dostępnych respów, karty ran itp.", "Handles squad medical procedures: bandages, respawn counters, and MEDEVAC rules."),
+            ("Szczegółowo analizuje treść zadań oraz dodatkowych informacji, spisuje kluczowe dane i punkty, przekazuje dowódcy.", "Analyzes mission briefs and intel, logs key points and time windows, advises the squad leader."),
+            ("Osoba do larpowania, kontaktu z NPC oraz innymi osobami larpującymi, znająca fabułę gry.", "Handles in-character roleplay, interacts with NPCs, and tracks game lore."),
+            ("Osoba odpowiedzialna za dokumentowanie działań (np. zdjęcia celów, kodów), wypełnianie dokumentów dot. misji.", "Documents mission objectives (photos of targets/codes) and completes field paperwork."),
+            ("Osoba odpowiedzialna za przedmioty wymagane do zadań: transport i przygotowanie przedmiotów fabularnych.", "Carries, secures, and prepares mission props and special equipment."),
+            ("Odpowiada za ustanawianie obrony w trakcie postoju: rozstawienie na sektory, wysunięcie czujki, obstawianie wzgórz.", "Establishes 360° perimeter defense during halts, assigns sectors and outposts."),
+            ("Przewodzi podczas marszu, koryguje trasę, szuka przejścia, wypatruje zagrożenia z przodu.", "Leads the formation on the move, picks safe terrain paths, and spots forward threats."),
+
+            // Domyślny sprzęt w Tabeli Składu
+            ("Karabinek szturmowy + ATAK", "Assault Rifle + ATAK"),
+            ("Karabinek szturmowy + Garmin/ATAK", "Assault Rifle + Garmin/ATAK"),
+            ("Karabinek szturmowy + Radio DualBand + LoRa", "Assault Rifle + DualBand Radio + LoRa"),
+            ("DMR / Wsparcie + Pakiet Medyczny", "DMR / Support + Medic Kit"),
+            ("Karabinek szturmowy + Radio", "Assault Rifle + Radio"),
+
+            // Domyślne teksty sekcji OPORD
+            ("JAWNE / UNCLASSIFIED — MILSIM DRUŻYNOWY OPORD", "UNCLASSIFIED / JAWNE — MILSIM SQUAD OPORD"),
+            ("TOC / SZTAB DRUŻYNY", "TOC / SQUAD HQ"),
+            ("Mapa Taktyczna MGRS 1:5000 (W załączeniu .FTAK / .KMZ / .GPX)", "1:5000 MGRS Tactical Map (Attached in .FTAK / .KMZ / .GPX)"),
+            ("Brak pobranego raportu (kliknij przycisk METOC dla tego dnia)", "No METOC report fetched yet (click METOC button for this day)"),
+            ("• 08:30 — Odprawa sztabowa i sprawdzenie łączności\n• 09:00 — Wejście w rejon działań\n• 14:00 — Rotacja i realizacja zadań głównych", "• 08:30 — HQ briefing and radio check\n• 09:00 — Infiltration into AO\n• 14:00 — Rotation and primary mission execution"),
+            ("Punkty kluczowe (FOB, Respawn, OBJ ALPHA, LZ) zdefiniowane w załączonym pliku .KMZ (ATAK) oraz .GPX (Garmin/Suunto).", "Key waypoints (FOB, Respawn, OBJ ALPHA, LZ) defined in the attached .KMZ (ATAK) and .GPX (Garmin/Suunto) files."),
+            ("Wielkość AO: ok. 2x2 km. Rodzaj: las mieszany, polany, zabudowania leśne. Ukształtowanie: pagórkowate ze skarpami.", "AO Size: approx. 2x2 km. Terrain: mixed forest, clearings, forest structures. Relief: hilly with ridges."),
+            ("1. Skład, dyspozycja i siła: Pluton lekki przeciwnika podzielony na patrole 4-6 osobowe.\n2. Lokalizacje i możliwości: Posterunki na skrzyżowaniach dróg.\n3. Kursy działań wroga (COA): Obrona rejonu centralnego i zasadzki.", "1. Composition & strength: Enemy light platoon split into 4-6 man patrols.\n2. Locations & capabilities: Outposts at road intersections.\n3. Enemy COA: Defense of central sector and ambushes."),
+            ("1. Misja i zamiar wyższego dowództwa (HQ): Opanowanie i kontrola sektora przed zmrokiem.\n2. Misja sąsiednich jednostek: Wsparcie na skrzydłach.", "1. Higher HQ mission & intent: Secure and control the sector before nightfall.\n2. Adjacent units mission: Flank support."),
+            ("Opis fabularny (opcjonalnie): Działania rozpoznawczo-dywersyjne na zapleczu ugrupowania przeciwnika.", "Story / Lore (optional): Reconnaissance and sabotage operations behind enemy lines."),
+            ("zlokalizuje i zabezpieczy kody sektorowe oraz utrzyma obiekt OBJ ALPHA", "will locate and secure sector codes and hold OBJ ALPHA"),
+            ("w godzinach operacyjnych 09:00 - 17:00", "during operational hours 09:00 - 17:00"),
+            ("w wyznaczonym obszarze AO (siatka MGRS)", "within the designated AO (MGRS grid)"),
+            ("w celu uzyskania przewagi punktowej i odcięcia zaopatrzenia przeciwnika.", "in order to gain tactical score superiority and cut off enemy supply lines."),
+            ("• Zadanie poboczne 1: Rozpoznanie stanowisk dowodzenia wroga (Foto).\n• Zadanie poboczne 2: Przejęcie pojemnika fabularnego (szczegóły w Załączniku 2).", "• Secondary Task 1: Photographic recon of enemy command posts (Photo).\n• Secondary Task 2: Secure mission container (details in Annex 2)."),
+            ("Jedziemy działać zespołowo, przećwiczyć nawigację MGRS/ATAK i zrealizować 100% zadań głównych bez zbędnych strat.", "Operate as a cohesive squad, practice MGRS/ATAK navigation, and accomplish 100% of primary objectives with minimal casualties."),
+            ("Priorytety i styl działania: Skryte przemieszczanie czujką z przodu. Unikamy niepotrzebnego kontaktu ogniowego podczas marszu do celu.", "Priorities & style of action: Stealth movement with pointman ahead. Avoid unnecessary firefights while moving to the objective."),
+            ("Dowódca (Lider)  ->  1. Zastępca (Navi / RTO)  ->  2. Zastępca (Dowódca sekcji)", "Squad Leader  ->  1st Deputy (Navi / RTO)  ->  2nd Deputy (Fireteam Leader)"),
+            ("• OBJ ALPHA = 'ZAMEK'   |   • Punkt Zbiórki (RP) = 'KUŹNIA'   |   • FOB / Respawn = 'BAZA'", "• OBJ ALPHA = 'CASTLE'   |   • Rally Point (RP) = 'FORGE'   |   • FOB / Respawn = 'BASE'"),
+            ("a) Werbalne (Wywołanie - Odpowiedź - Potwierdzenie): GROM - BŁYSK - TARCZA (Suma cyfr: 7)\nb) Niewerbalne (Wywołanie - Odzew): 2 błyski czerwonym światłem - 1 błysk + podniesienie lewej ręki", "a) Verbal (Challenge - Reply - Confirm): THUNDER - FLASH - SHIELD (Running number: 7)\nb) Non-verbal (Challenge - Reply): 2 red light flashes - 1 flash + raised left hand"),
+            ("Pierwsze trafienie: opatrunek przez medyka lub członka drużyny (czas 2 min). Drugie trafienie: odejście na Respawn. W razie wypadku: przycisk 🚨 SOS MGRS w Field TAK Hub.", "First hit: bandage applied by medic or teammate (2 min). Second hit: bleed out to Respawn. Real emergency: use 🚨 SOS MGRS button in Field TAK Hub."),
+            ("Styl wyposażenia: Na 12h w terenie (woda min. 2L, racja żywnościowa, zapasowe baterie do radia i powerbank do ATAK).", "Loadout style: 12h self-sustained field gear (min. 2L water, field ration, spare radio batteries, powerbank for ATAK)."),
+            ("SZPEJLISTA: Okulary ochronne, czerwona szmatka (dead-rag), latarka czerwona, radio PMR/VHF, telefon z Field TAK Hub & ATAK-CIV, kompas.", "GEAR CHECKLIST: Eyepro, red dead-rag, red flashlight, PMR/VHF radio, phone with Field TAK Hub & ATAK-CIV, compass."),
+            ("Wyposażenie specjalne: Rekwizyty misyjne ze sztabu, znaczniki chemiczne (lightstick), aparat/telefon dla Fotografa.", "Special equipment: HQ mission props, chemlights, camera/phone for Photographer."),
+            ("1. Parking: Zgodnie z pinezką zbiórki w paczce .GPX / .KMZ.\n2. Odległość z parkingu na miejsce gry: ok. 300 m.\n3. Transport: Auto 1, Auto 2.", "1. Parking: At the rally pin in the .GPX / .KMZ package.\n2. Distance from parking to AO: approx. 300 m.\n3. Vehicles: Car 1, Car 2."),
+            ("ZAŁĄCZNIK 2 — OPRACOWANIE ZADAŃ:\n• Analiza priorytetów punktowych, okna czasowe na wykonanie misji specjalnych oraz podział zespołów na zadania równoległe.", "ANNEX 2 — TASKS BREAKDOWN:\n• Objective scoring priority analysis, time windows for special missions, and fireteam split for parallel tasks.")
+        };
+
+        private static string MapBilingualString(string currentVal, bool toEn)
+        {
+            if (string.IsNullOrWhiteSpace(currentVal)) return currentVal;
+            string trimmed = currentVal.Trim();
+
+            foreach (var pair in OpordBilingualPairs)
+            {
+                if (toEn && string.Equals(trimmed, pair.Pl, StringComparison.OrdinalIgnoreCase))
+                    return pair.En;
+                if (!toEn && string.Equals(trimmed, pair.En, StringComparison.OrdinalIgnoreCase))
+                    return pair.Pl;
+            }
+
+            if (toEn && trimmed.StartsWith("Drużyna ", StringComparison.OrdinalIgnoreCase))
+                return "Squad " + trimmed.Substring("Drużyna ".Length);
+            if (!toEn && trimmed.StartsWith("Squad ", StringComparison.OrdinalIgnoreCase))
+                return "Drużyna " + trimmed.Substring("Squad ".Length);
+
+            if (toEn && Regex.IsMatch(trimmed, @"^Dzień\s+(\d+)$", RegexOptions.IgnoreCase))
+                return Regex.Replace(trimmed, @"^Dzień\s+(\d+)$", "Day $1", RegexOptions.IgnoreCase);
+            if (!toEn && Regex.IsMatch(trimmed, @"^Day\s+(\d+)$", RegexOptions.IgnoreCase))
+                return Regex.Replace(trimmed, @"^Day\s+(\d+)$", "Dzień $1", RegexOptions.IgnoreCase);
+
+            return currentVal;
+        }
+
+        public static void TranslateOpordModelToCurrentLanguage(OpordParagraphModel m)
+        {
+            if (m == null || m.Days == null) return;
+            bool toEn = string.Equals(BuilderI18n.CurrentLang, "EN", StringComparison.OrdinalIgnoreCase);
+
+            foreach (var d in m.Days)
+            {
+                d.DayTitle = MapBilingualString(d.DayTitle, toEn);
+                d.Classification = MapBilingualString(d.Classification, toEn);
+                d.IssuingHq = MapBilingualString(d.IssuingHq, toEn);
+                d.MapReferences = MapBilingualString(d.MapReferences, toEn);
+                d.DaySpecificTasks = MapBilingualString(d.DaySpecificTasks, toEn);
+                d.AreaOfInterestPoiDesc = MapBilingualString(d.AreaOfInterestPoiDesc, toEn);
+                d.TerrainAndWeather = MapBilingualString(d.TerrainAndWeather, toEn);
+                d.MetocCondition = MapBilingualString(d.MetocCondition, toEn);
+                d.EnemyForces = MapBilingualString(d.EnemyForces, toEn);
+                d.FriendlyForces = MapBilingualString(d.FriendlyForces, toEn);
+                d.MissionLoreDesc = MapBilingualString(d.MissionLoreDesc, toEn);
+                d.MissionWho = MapBilingualString(d.MissionWho, toEn);
+                d.MissionWhat = MapBilingualString(d.MissionWhat, toEn);
+                d.MissionWhen = MapBilingualString(d.MissionWhen, toEn);
+                d.MissionWhere = MapBilingualString(d.MissionWhere, toEn);
+                d.MissionWhy = MapBilingualString(d.MissionWhy, toEn);
+                d.MissionFullStatement = Compose5WMissionTextForDay(d);
+                d.AdditionalTasksSummary = MapBilingualString(d.AdditionalTasksSummary, toEn);
+                d.CommandersIntent = MapBilingualString(d.CommandersIntent, toEn);
+                d.ConceptOfOperations = MapBilingualString(d.ConceptOfOperations, toEn);
+                d.SuccessionOfCommand = MapBilingualString(d.SuccessionOfCommand, toEn);
+                d.TargetCodeNames = MapBilingualString(d.TargetCodeNames, toEn);
+                d.ChallengeAndPassword = MapBilingualString(d.ChallengeAndPassword, toEn);
+                d.MedevacRules = MapBilingualString(d.MedevacRules, toEn);
+                d.RespawnAndSupply = MapBilingualString(d.RespawnAndSupply, toEn);
+                d.SquadGearChecklist = MapBilingualString(d.SquadGearChecklist, toEn);
+                d.SpecialEquipment = MapBilingualString(d.SpecialEquipment, toEn);
+                d.TravelAndParking = MapBilingualString(d.TravelAndParking, toEn);
+                d.Annex2TasksAnalysis = MapBilingualString(d.Annex2TasksAnalysis, toEn);
+
+                if (d.SquadRoster != null)
+                {
+                    foreach (var r in d.SquadRoster)
+                    {
+                        r.PrimaryRole = MapBilingualString(r.PrimaryRole, toEn);
+                        r.SecondaryRole = MapBilingualString(r.SecondaryRole, toEn);
+                        r.WeaponAndGear = MapBilingualString(r.WeaponAndGear, toEn);
+                    }
+                }
+
+                if (d.CustomRolesAnnex != null)
+                {
+                    foreach (var rd in d.CustomRolesAnnex)
+                    {
+                        rd.RoleName = MapBilingualString(rd.RoleName, toEn);
+                        rd.Description = MapBilingualString(rd.Description, toEn);
+                        rd.DutyMode = MapBilingualString(rd.DutyMode, toEn);
+                    }
+                }
+            }
         }
 
         public static OpordParagraphModel GetOrCreateModel(string factionName)
