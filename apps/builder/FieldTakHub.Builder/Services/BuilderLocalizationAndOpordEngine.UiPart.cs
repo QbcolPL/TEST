@@ -21,7 +21,8 @@ namespace FieldTakHub.Builder.Services
     internal static partial class OpordBuilderManager
     {
         // =========================================================================
-        // 6. WIDOK GENERATORA OPORD v3.2 (NIEZALEŻNE DNI, WYBÓR DNI DO GENEROWANIA, JEDEN PRZYCISK SARNEG, PEŁNE PL/ENG)
+        // 6. WIDOK GENERATORA OPORD v3.3 — KAŻDA ZAKŁADKA DNIA POSIADA WŁASNY,
+        //    CAŁKOWICIE NIEZALEŻNY STAN WSZYSTKICH SEKCJI (0, I, II, III, IV, ZAŁ. 1 i 2)
         // =========================================================================
         public static Border CreateOrGetOpordOverlayView(Window win)
         {
@@ -65,11 +66,12 @@ namespace FieldTakHub.Builder.Services
                 var model = GetOrCreateModel(_activeOpordFaction);
                 model.ActiveDayIndex = Math.Clamp(model.ActiveDayIndex, 0, Math.Max(0, model.Days.Count - 1));
                 var activeDay = model.Days[model.ActiveDayIndex];
+                EnsureDayDefaultsInitialized(activeDay, _activeOpordFaction);
 
                 string eventName = TacticalConfigPanel.GetEventNameFromWindow(win);
-                SyncModelRadioChannelsFromFactionGenerator(win, _activeOpordFaction, model);
+                SyncDayRadioChannelsFromFactionGenerator(win, _activeOpordFaction, activeDay);
 
-                // PASEK NAGŁÓWKOWY GENERATORA OPORD v3.2
+                // PASEK NAGŁÓWKOWY GENERATORA OPORD v3.3
                 var topCard = new Border
                 {
                     Background = TacticalConfigPanel.BrushCardBg,
@@ -84,8 +86,8 @@ namespace FieldTakHub.Builder.Services
                 topStack.Children.Add(new TextBlock
                 {
                     Text = BuilderI18n.T(
-                        "📋 GENERATOR ROZKAZU BOJOWEGO MILSIM / NATO (OPORD v3.2 + SARNEG + METOC) — " + eventName,
-                        "📋 MILSIM / NATO OPORD v3.2 BUILDER (SARNEG + METOC + SQUAD ROSTER) — " + eventName),
+                        "📋 GENERATOR ROZKAZU BOJOWEGO MILSIM / NATO (OPORD v3.3 — PEŁNA NIEZALEŻNOŚĆ DNI) — " + eventName,
+                        "📋 MILSIM / NATO OPORD v3.3 BUILDER (FULLY INDEPENDENT DAY TABS) — " + eventName),
                     Foreground = TacticalConfigPanel.BrushAccent,
                     FontWeight = FontWeights.Bold,
                     FontSize = 14.5,
@@ -95,8 +97,8 @@ namespace FieldTakHub.Builder.Services
                 topStack.Children.Add(new TextBlock
                 {
                     Text = BuilderI18n.T(
-                        "Wzór drużynowy MilSim i NATO: przełącznik JAWNE / TAJNE, niezależne zakładki dzienne (+ / -) z wyborem dni do wygenerowania, inteligentny moduł pogodowy METOC dla każdego dnia osobno, Tabela Składu (+ / -), generator słów SARNEG oraz opcjonalny Załącznik 1 Ról.",
-                        "Complete MilSim & NATO OPORD suite: UNCLASSIFIED / SECRET toggle, independent daily tabs (+ / -) with day selection for export, per-day smart METOC weather, Squad Roster (+ / -), SARNEG word generator, and optional editable Roles Annex."),
+                        "Każda zakładka dnia (Dzień 1, Dzień 2...) jest w 100% niezależnym arkuszem rozkazu: posiada własną Sytuację, METOC, Misję 5W, Tabelę Składu i Ról, własne słowo-klucz SARNEG, własne hasła rozpoznawcze oraz Logistykę. Zaznacz [✓], które dni wygenerować.",
+                        "Each day tab (Day 1, Day 2...) is a 100% independent OPORD sheet: own Situation, METOC, 5W Mission, Squad Roster, own SARNEG keyword, own challenge/passwords, and Logistics. Check [✓] which days to export."),
                     Foreground = TacticalConfigPanel.BrushMutedText,
                     FontSize = 10.5,
                     TextWrapping = TextWrapping.Wrap,
@@ -243,7 +245,7 @@ namespace FieldTakHub.Builder.Services
                 mainStack.Children.Add(topCard);
 
                 // =================================================================
-                // PASEK NIEZALEŻNYCH ZAKŁADEK DZIENNYCH + WYBÓR DNI DO GENEROWANIA OPORD
+                // PASEK NIEZALEŻNYCH ZAKŁADEK DZIENNYCH + WYBÓR DNI DO GENEROWANIA
                 // =================================================================
                 var daysBarBorder = new Border
                 {
@@ -261,8 +263,8 @@ namespace FieldTakHub.Builder.Services
                 daysTopRow.Children.Add(new TextBlock
                 {
                     Text = BuilderI18n.T(
-                        "📅 NIEZALEŻNE DNI OPERACJI (Zaznacz [✓] dni, które mają zostać ujęte przy generowaniu OPORD):",
-                        "📅 INDEPENDENT OPERATION DAYS (Check [✓] days to include when generating OPORD):"),
+                        "📅 NIEZALEŻNE ZAKŁADKI DZIENNE (Każdy dzień ma własny Skład, SARNEG, Misję i Sytuację — zaznacz [✓] dni do wygenerowania):",
+                        "📅 INDEPENDENT DAY TABS (Each day has its own Roster, SARNEG, Mission & Situation — check [✓] days to generate):"),
                     Foreground = TacticalConfigPanel.BrushAccent,
                     FontWeight = FontWeights.Bold,
                     FontSize = 11,
@@ -353,7 +355,7 @@ namespace FieldTakHub.Builder.Services
 
                     var dayTabBtn = new Button
                     {
-                        Content = "📆 " + dayObj.DayTitle + " (" + dayObj.DateIso + ")",
+                        Content = "📆 " + dayObj.DayTitle + " (" + dayObj.DateIso + ") [SARNEG: " + dayObj.SarnegKeyWord10 + "]",
                         Height = 26,
                         Padding = new Thickness(8, 1, 8, 1),
                         Background = isSel ? TacticalConfigPanel.BrushButtonAccent : Brushes.Transparent,
@@ -376,30 +378,9 @@ namespace FieldTakHub.Builder.Services
 
                 var btnAddDayPlus = CreateTacticalPlusMinusButton(true, BuilderI18n.T("Dodaj kolejny niezależny dzień operacji (+)", "Add next independent operation day (+)"), () =>
                 {
-                    DateTime lastDt = DateTime.Today;
-                    string prevLocName = activeDay.LocationName ?? "";
-                    string prevLat = string.IsNullOrWhiteSpace(activeDay.LocationLat) ? "49.8494" : activeDay.LocationLat;
-                    string prevLon = string.IsNullOrWhiteSpace(activeDay.LocationLon) ? "18.8127" : activeDay.LocationLon;
-
-                    if (model.Days.Count > 0 && DateTime.TryParseExact(model.Days.Last().DateIso, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out DateTime parsed))
-                    {
-                        lastDt = parsed.AddDays(1);
-                    }
                     int nextNum = model.Days.Count + 1;
-                    model.Days.Add(new OpordDayPlanModel
-                    {
-                        DayTitle = BuilderI18n.T("Dzień " + nextNum, "Day " + nextNum),
-                        IncludeInExport = true,
-                        DateIso = lastDt.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
-                        LocationName = prevLocName,
-                        LocationLat = prevLat,
-                        LocationLon = prevLon,
-                        TerrainAndWeather = BuilderI18n.T(
-                            "Analiza terenu i pogody dla Dnia " + nextNum + " (kliknij przycisk METOC poniżej, aby pobrać niezależną prognozę na ten dzień).",
-                            "Terrain & weather analysis for Day " + nextNum + " (click METOC button below to fetch independent forecast for this day)."),
-                        MetocCondition = BuilderI18n.T("Brak pobranego raportu dla Dnia " + nextNum, "No METOC report fetched for Day " + nextNum),
-                        DaySpecificTasks = BuilderI18n.T("• Zadania i harmonogram dla Dnia " + nextNum + "...", "• Tasks and schedule for Day " + nextNum + "...")
-                    });
+                    var newIndependentDay = CreateIndependentNextDay(activeDay, nextNum, _activeOpordFaction);
+                    model.Days.Add(newIndependentDay);
                     model.ActiveDayIndex = model.Days.Count - 1;
                     PersistModelToAppData(model);
                     RebuildOpordForm();
@@ -425,17 +406,17 @@ namespace FieldTakHub.Builder.Services
                 mainStack.Children.Add(daysBarBorder);
 
                 // =================================================================
-                // 0. NAGŁÓWEK ROZKAZU + PRZEŁĄCZNIK KLAUZULI "JAWNE / TAJNE"
+                // 0. NAGŁÓWEK ROZKAZU + PRZEŁĄCZNIK KLAUZULI "JAWNE / TAJNE" (DLA ACTIVE DAY)
                 // =================================================================
                 var metaCard = CreateSectionCard(BuilderI18n.T(
-                    "0. NAGŁÓWEK ROZKAZU, KLAUZULA TAJNOŚCI (JAWNE / TAJNE) ORAZ HARMONOGRAM: " + activeDay.DayTitle.ToUpperInvariant(),
-                    "0. ORDER HEADER, CLASSIFICATION (UNCLASSIFIED / SECRET) & SCHEDULE: " + activeDay.DayTitle.ToUpperInvariant()));
+                    "0. NAGŁÓWEK ROZKAZU, KLAUZULA TAJNOŚCI (JAWNE / TAJNE) ORAZ HARMONOGRAM — " + activeDay.DayTitle.ToUpperInvariant(),
+                    "0. ORDER HEADER, CLASSIFICATION (UNCLASSIFIED / SECRET) & SCHEDULE — " + activeDay.DayTitle.ToUpperInvariant()));
                 var metaStack = (StackPanel)metaCard.Child;
 
                 var classToggleRow = new DockPanel { Margin = new Thickness(0, 0, 0, 8) };
                 classToggleRow.Children.Add(new TextBlock
                 {
-                    Text = BuilderI18n.T("Klauzula dokumentu OPORD:", "OPORD Security Classification:"),
+                    Text = BuilderI18n.T("Klauzula dokumentu (" + activeDay.DayTitle + "):", "Security Classification (" + activeDay.DayTitle + "):"),
                     Foreground = TacticalConfigPanel.BrushMutedText,
                     FontWeight = FontWeights.Bold,
                     FontSize = 11,
@@ -466,8 +447,8 @@ namespace FieldTakHub.Builder.Services
 
                 void UpdateSecretToggleVisuals()
                 {
-                    bool isSec = model.IsSecretClassification || model.Classification.Contains("TAJNE", StringComparison.OrdinalIgnoreCase) || model.Classification.Contains("SECRET", StringComparison.OrdinalIgnoreCase);
-                    model.IsSecretClassification = isSec;
+                    bool isSec = activeDay.IsSecretClassification || activeDay.Classification.Contains("TAJNE", StringComparison.OrdinalIgnoreCase) || activeDay.Classification.Contains("SECRET", StringComparison.OrdinalIgnoreCase);
+                    activeDay.IsSecretClassification = isSec;
 
                     btnJawne.Background = !isSec ? new SolidColorBrush(Color.FromRgb(22, 92, 54)) : TacticalConfigPanel.BrushInputBg;
                     btnJawne.Foreground = Brushes.White;
@@ -482,22 +463,22 @@ namespace FieldTakHub.Builder.Services
 
                 btnJawne.Click += (_, __) =>
                 {
-                    model.IsSecretClassification = false;
-                    model.Classification = BuilderI18n.T(
+                    activeDay.IsSecretClassification = false;
+                    activeDay.Classification = BuilderI18n.T(
                         "JAWNE / UNCLASSIFIED — MILSIM DRUŻYNOWY OPORD",
                         "UNCLASSIFIED / JAWNE — MILSIM SQUAD OPORD");
-                    if (classificationTextBoxRef != null) classificationTextBoxRef.Text = model.Classification;
+                    if (classificationTextBoxRef != null) classificationTextBoxRef.Text = activeDay.Classification;
                     UpdateSecretToggleVisuals();
                     PersistModelToAppData(model);
                 };
 
                 btnTajne.Click += (_, __) =>
                 {
-                    model.IsSecretClassification = true;
-                    model.Classification = BuilderI18n.T(
+                    activeDay.IsSecretClassification = true;
+                    activeDay.Classification = BuilderI18n.T(
                         "TAJNE / SECRET — TYLKO DO WIADOMOŚCI STRONY " + _activeOpordFaction.ToUpperInvariant(),
                         "SECRET / TAJNE — " + _activeOpordFaction.ToUpperInvariant() + " EYES ONLY");
-                    if (classificationTextBoxRef != null) classificationTextBoxRef.Text = model.Classification;
+                    if (classificationTextBoxRef != null) classificationTextBoxRef.Text = activeDay.Classification;
                     UpdateSecretToggleVisuals();
                     PersistModelToAppData(model);
                 };
@@ -509,14 +490,14 @@ namespace FieldTakHub.Builder.Services
                 metaStack.Children.Add(classToggleRow);
 
                 var metaGrid = new UniformGrid { Columns = 4 };
-                var classBoxPanel = CreateLabeledTextBox(BuilderI18n.T("Nagłówek Klasyfikacji", "Classification Banner"), model.Classification, v => { model.Classification = v; UpdateSecretToggleVisuals(); PersistModelToAppData(model); });
+                var classBoxPanel = CreateLabeledTextBox(BuilderI18n.T("Nagłówek Klasyfikacji (" + activeDay.DayTitle + ")", "Classification Banner (" + activeDay.DayTitle + ")"), activeDay.Classification, v => { activeDay.Classification = v; UpdateSecretToggleVisuals(); PersistModelToAppData(model); });
                 classificationTextBoxRef = FindFirstDescendant<TextBox>(classBoxPanel);
                 UpdateSecretToggleVisuals();
 
                 metaGrid.Children.Add(classBoxPanel);
-                metaGrid.Children.Add(CreateLabeledTextBox(BuilderI18n.T("Nr Rozkazu / Strzelanki", "Order / Event No."), model.OperationNumber, v => { model.OperationNumber = v; PersistModelToAppData(model); }));
-                metaGrid.Children.Add(CreateLabeledTextBox(BuilderI18n.T("Grupa Data-Czas (DTG)", "Date-Time Group (DTG)"), model.DtgIssued, v => { model.DtgIssued = v; PersistModelToAppData(model); }));
-                metaGrid.Children.Add(CreateLabeledTextBox(BuilderI18n.T("Sztab wydający (HQ)", "Issuing HQ"), model.IssuingHq, v => { model.IssuingHq = v; PersistModelToAppData(model); }));
+                metaGrid.Children.Add(CreateLabeledTextBox(BuilderI18n.T("Nr Rozkazu (" + activeDay.DayTitle + ")", "Order No. (" + activeDay.DayTitle + ")"), activeDay.OperationNumber, v => { activeDay.OperationNumber = v; PersistModelToAppData(model); }));
+                metaGrid.Children.Add(CreateLabeledTextBox(BuilderI18n.T("Grupa Data-Czas (DTG)", "Date-Time Group (DTG)"), activeDay.DtgIssued, v => { activeDay.DtgIssued = v; PersistModelToAppData(model); }));
+                metaGrid.Children.Add(CreateLabeledTextBox(BuilderI18n.T("Sztab wydający (HQ)", "Issuing HQ"), activeDay.IssuingHq, v => { activeDay.IssuingHq = v; PersistModelToAppData(model); }));
                 metaStack.Children.Add(metaGrid);
 
                 metaStack.Children.Add(CreateLabeledMultilineBox(
@@ -527,16 +508,16 @@ namespace FieldTakHub.Builder.Services
                 mainStack.Children.Add(metaCard);
 
                 // =================================================================
-                // I. SYTUACJA (NIEZALEŻNE DANE METOC I TERENU DLA KAŻDEGO DNIA!)
+                // I. SYTUACJA (NIEZALEŻNA SYTUACJA, POI, METOC, WRÓG I SOJUSZNICY DLA ACTIVE DAY)
                 // =================================================================
                 var sec1 = CreateSectionCard(BuilderI18n.T(
-                    "I. SYTUACJA — " + activeDay.DayTitle.ToUpperInvariant() + " (OBSZAR ZAINTERESOWANIA, TEREN, NIEZALEŻNY METOC DNIA, WRÓG, SOJUSZNICY)",
-                    "I. SITUATION — " + activeDay.DayTitle.ToUpperInvariant() + " (AOI, TERRAIN, INDEPENDENT DAY METOC, ENEMY, FRIENDLY FORCES)"));
+                    "I. SYTUACJA — " + activeDay.DayTitle.ToUpperInvariant() + " (OBSZAR ZAINTERESOWANIA, TEREN, METOC, WRÓG, SOJUSZNICY)",
+                    "I. SITUATION — " + activeDay.DayTitle.ToUpperInvariant() + " (AOI, TERRAIN, METOC, ENEMY, FRIENDLY FORCES)"));
                 var sec1Stack = (StackPanel)sec1.Child;
 
                 var aoiBoxPanel = CreateLabeledMultilineBox(
-                    BuilderI18n.T("A. Obszar zainteresowania (1. Mapa terenu gry, 2. Opis punktów na mapie POI, 3. Pliki punktów KML / GPX):", "A. Area of Interest (1. Game Map, 2. Map Points / POI description, 3. KML / GPX files):"),
-                    model.AreaOfInterestPoiDesc, 50, v => { model.AreaOfInterestPoiDesc = v; PersistModelToAppData(model); });
+                    BuilderI18n.T("A. Obszar zainteresowania (" + activeDay.DayTitle + " — 1. Mapa terenu gry, 2. Opis punktów POI, 3. Pliki KML / GPX):", "A. Area of Interest (" + activeDay.DayTitle + " — 1. Game Map, 2. POI description, 3. KML / GPX files):"),
+                    activeDay.AreaOfInterestPoiDesc, 50, v => { activeDay.AreaOfInterestPoiDesc = v; PersistModelToAppData(model); });
                 var aoiTextBox = FindFirstDescendant<TextBox>(aoiBoxPanel);
                 sec1Stack.Children.Add(aoiBoxPanel);
 
@@ -571,11 +552,7 @@ namespace FieldTakHub.Builder.Services
                 var dateBoxPanel = CreateLabeledTextBox(
                     BuilderI18n.T("Data (" + activeDay.DayTitle + ")", "Date (" + activeDay.DayTitle + ")"),
                     activeDay.DateIso,
-                    v =>
-                    {
-                        activeDay.DateIso = v;
-                        PersistModelToAppData(model);
-                    });
+                    v => { activeDay.DateIso = v; PersistModelToAppData(model); });
                 Grid.SetColumn(dateBoxPanel, 0);
                 metocInputsGrid.Children.Add(dateBoxPanel);
 
@@ -668,10 +645,10 @@ namespace FieldTakHub.Builder.Services
                                 if (lonTextBox != null) lonTextBox.Text = activeDay.LocationLon;
                                 if (cityTextBox != null) cityTextBox.Text = activeDay.LocationName;
 
-                                if (!string.IsNullOrWhiteSpace(aoRes.ExtractedPoiList) && aoiTextBox != null && !model.AreaOfInterestPoiDesc.Contains(aoRes.ExtractedPoiList))
+                                if (!string.IsNullOrWhiteSpace(aoRes.ExtractedPoiList) && aoiTextBox != null && !activeDay.AreaOfInterestPoiDesc.Contains(aoRes.ExtractedPoiList))
                                 {
-                                    model.AreaOfInterestPoiDesc = model.AreaOfInterestPoiDesc.TrimEnd() + "\n" + aoRes.ExtractedPoiList;
-                                    aoiTextBox.Text = model.AreaOfInterestPoiDesc;
+                                    activeDay.AreaOfInterestPoiDesc = activeDay.AreaOfInterestPoiDesc.TrimEnd() + "\n" + aoRes.ExtractedPoiList;
+                                    aoiTextBox.Text = activeDay.AreaOfInterestPoiDesc;
                                 }
                             }
                         }
@@ -728,71 +705,75 @@ namespace FieldTakHub.Builder.Services
                 sec1Stack.Children.Add(terrainBoxPanel);
 
                 sec1Stack.Children.Add(CreateLabeledMultilineBox(
-                    BuilderI18n.T("C. Siły wroga (1. Skład, dyspozycja i siła, 2. Lokalizacje i możliwości, 3. Kursy działań wroga — COA):", "C. Enemy Forces (1. Composition & strength, 2. Locations & capabilities, 3. Courses of Action — COA):"),
-                    model.EnemyForces, 60, v => { model.EnemyForces = v; PersistModelToAppData(model); }));
+                    BuilderI18n.T("C. Siły wroga (" + activeDay.DayTitle + " — 1. Skład i siła, 2. Lokalizacje, 3. Kursy działań wroga COA):", "C. Enemy Forces (" + activeDay.DayTitle + " — 1. Composition & strength, 2. Locations, 3. COA):"),
+                    activeDay.EnemyForces, 60, v => { activeDay.EnemyForces = v; PersistModelToAppData(model); }));
 
                 sec1Stack.Children.Add(CreateLabeledMultilineBox(
-                    BuilderI18n.T("D. Siły przyjazne (1. Misja i zamiar wyższego dowództwa HQ, 2. Misja sąsiednich jednostek):", "D. Friendly Forces (1. Higher HQ mission & intent, 2. Adjacent units mission):"),
-                    model.FriendlyForces, 50, v => { model.FriendlyForces = v; PersistModelToAppData(model); }));
+                    BuilderI18n.T("D. Siły przyjazne (" + activeDay.DayTitle + " — 1. Misja i zamiar wyższego dowództwa HQ, 2. Misja sąsiednich jednostek):", "D. Friendly Forces (" + activeDay.DayTitle + " — 1. Higher HQ mission & intent, 2. Adjacent units):"),
+                    activeDay.FriendlyForces, 50, v => { activeDay.FriendlyForces = v; PersistModelToAppData(model); }));
                 mainStack.Children.Add(sec1);
 
                 // =================================================================
-                // II. MISJA
+                // II. MISJA (NIEZALEŻNE CELE I MISJA 5W DLA ACTIVE DAY)
                 // =================================================================
-                var sec2 = CreateSectionCard(BuilderI18n.T("II. MISJA (2. MISSION — OPIS FABULARNY, GŁÓWNE ZADANIE 5W, ZADANIA DODATKOWE)", "II. MISSION (LORE, PRIMARY 5W TASK, ADDITIONAL TASKS)"));
+                var sec2 = CreateSectionCard(BuilderI18n.T(
+                    "II. MISJA — " + activeDay.DayTitle.ToUpperInvariant() + " (OPIS FABULARNY, GŁÓWNE ZADANIE 5W DNIA, ZADANIA DODATKOWE DNIA)",
+                    "II. MISSION — " + activeDay.DayTitle.ToUpperInvariant() + " (LORE, PRIMARY 5W TASK OF THE DAY, ADDITIONAL DAY TASKS)"));
                 var sec2Stack = (StackPanel)sec2.Child;
 
                 sec2Stack.Children.Add(CreateLabeledMultilineBox(
-                    BuilderI18n.T("A. Opis fabularny (nieobowiązkowy):", "A. Story / Lore Background (optional):"),
-                    model.MissionLoreDesc, 42, v => { model.MissionLoreDesc = v; PersistModelToAppData(model); }));
+                    BuilderI18n.T("A. Opis fabularny (" + activeDay.DayTitle + "):", "A. Story / Lore Background (" + activeDay.DayTitle + "):"),
+                    activeDay.MissionLoreDesc, 42, v => { activeDay.MissionLoreDesc = v; PersistModelToAppData(model); }));
 
                 var w5Grid = new UniformGrid { Columns = 5, Margin = new Thickness(0, 0, 0, 6) };
                 TextBox fullMissionBox = null;
 
                 void AutoUpdate5W()
                 {
-                    model.MissionFullStatement = Compose5WMissionText(model);
-                    if (fullMissionBox != null) fullMissionBox.Text = model.MissionFullStatement;
+                    activeDay.MissionFullStatement = Compose5WMissionTextForDay(activeDay);
+                    if (fullMissionBox != null) fullMissionBox.Text = activeDay.MissionFullStatement;
                     PersistModelToAppData(model);
                 }
 
-                w5Grid.Children.Add(CreateLabeledTextBox(BuilderI18n.T("KTO (Oddział)", "WHO (Unit)"), model.MissionWho, v => { model.MissionWho = v; AutoUpdate5W(); }));
-                w5Grid.Children.Add(CreateLabeledTextBox(BuilderI18n.T("CO (Główne zadanie)", "WHAT (Primary Task)"), model.MissionWhat, v => { model.MissionWhat = v; AutoUpdate5W(); }));
-                w5Grid.Children.Add(CreateLabeledTextBox(BuilderI18n.T("KIEDY (Czas)", "WHEN (Time)"), model.MissionWhen, v => { model.MissionWhen = v; AutoUpdate5W(); }));
-                w5Grid.Children.Add(CreateLabeledTextBox(BuilderI18n.T("GDZIE (Sektor / MGRS)", "WHERE (Grid / AO)"), model.MissionWhere, v => { model.MissionWhere = v; AutoUpdate5W(); }));
-                w5Grid.Children.Add(CreateLabeledTextBox(BuilderI18n.T("DLACZEGO (Cel)", "WHY (Purpose)"), model.MissionWhy, v => { model.MissionWhy = v; AutoUpdate5W(); }));
+                w5Grid.Children.Add(CreateLabeledTextBox(BuilderI18n.T("KTO (Oddział)", "WHO (Unit)"), activeDay.MissionWho, v => { activeDay.MissionWho = v; AutoUpdate5W(); }));
+                w5Grid.Children.Add(CreateLabeledTextBox(BuilderI18n.T("CO (Zadanie — " + activeDay.DayTitle + ")", "WHAT (Task — " + activeDay.DayTitle + ")"), activeDay.MissionWhat, v => { activeDay.MissionWhat = v; AutoUpdate5W(); }));
+                w5Grid.Children.Add(CreateLabeledTextBox(BuilderI18n.T("KIEDY (Czas)", "WHEN (Time)"), activeDay.MissionWhen, v => { activeDay.MissionWhen = v; AutoUpdate5W(); }));
+                w5Grid.Children.Add(CreateLabeledTextBox(BuilderI18n.T("GDZIE (Sektor / MGRS)", "WHERE (Grid / AO)"), activeDay.MissionWhere, v => { activeDay.MissionWhere = v; AutoUpdate5W(); }));
+                w5Grid.Children.Add(CreateLabeledTextBox(BuilderI18n.T("DLACZEGO (Cel)", "WHY (Purpose)"), activeDay.MissionWhy, v => { activeDay.MissionWhy = v; AutoUpdate5W(); }));
                 sec2Stack.Children.Add(w5Grid);
 
                 var fullMissionPanel = CreateLabeledMultilineBox(
-                    BuilderI18n.T("B. Główne zadanie (np. zbieranie kodów / utrzymanie sektora):", "B. Primary Mission Statement:"),
-                    model.MissionFullStatement, 44, v => { model.MissionFullStatement = v; PersistModelToAppData(model); });
+                    BuilderI18n.T("B. Główne zadanie na " + activeDay.DayTitle + ":", "B. Primary Mission Statement for " + activeDay.DayTitle + ":"),
+                    activeDay.MissionFullStatement, 44, v => { activeDay.MissionFullStatement = v; PersistModelToAppData(model); });
                 fullMissionBox = FindFirstDescendant<TextBox>(fullMissionPanel);
                 sec2Stack.Children.Add(fullMissionPanel);
 
                 sec2Stack.Children.Add(CreateLabeledMultilineBox(
-                    BuilderI18n.T("C. Dodatkowe zadania (lista zadań — szczegółowa analiza w Załączniku 2 na dole):", "C. Additional Tasks (task list — detailed analysis in Annex 2 below):"),
-                    model.AdditionalTasksSummary, 48, v => { model.AdditionalTasksSummary = v; PersistModelToAppData(model); }));
+                    BuilderI18n.T("C. Dodatkowe zadania na " + activeDay.DayTitle + ":", "C. Additional Tasks for " + activeDay.DayTitle + ":"),
+                    activeDay.AdditionalTasksSummary, 48, v => { activeDay.AdditionalTasksSummary = v; PersistModelToAppData(model); }));
                 mainStack.Children.Add(sec2);
 
                 // =================================================================
-                // III. WYKONANIE + JEDEN PRZYCISK "🎲 GENERUJ SARNEG" Z LISTY TXT
+                // III. WYKONANIE (NIEZALEŻNY SKŁAD, ŁĄCZNOŚĆ, SARNEG I HASŁA DLA ACTIVE DAY)
                 // =================================================================
-                var sec3 = CreateSectionCard(BuilderI18n.T("III. WYKONANIE (3. EXECUTION — ZAMIAR, STYL DZIAŁANIA, TABELA SKŁADU I RÓL, ŁĄCZNOŚĆ, GENERATOR SARNEG)", "III. EXECUTION (INTENT, STYLE OF ACTION, SQUAD ROSTER TABLE, COMMS, SARNEG GENERATOR)"));
+                var sec3 = CreateSectionCard(BuilderI18n.T(
+                    "III. WYKONANIE — " + activeDay.DayTitle.ToUpperInvariant() + " (ZAMIAR, TABELA SKŁADU I RÓL DNIA, ŁĄCZNOŚĆ, SARNEG DNIA, HASŁA DNIA)",
+                    "III. EXECUTION — " + activeDay.DayTitle.ToUpperInvariant() + " (INTENT, DAY SQUAD ROSTER, COMMS, DAY SARNEG, DAY PASSWORDS)"));
                 var sec3Stack = (StackPanel)sec3.Child;
 
                 sec3Stack.Children.Add(CreateLabeledMultilineBox(
-                    BuilderI18n.T("A. Zamiar dowódcy (Cel wyjazdu: wygrana / dobra zabawa / trening taktyczny / priorytet):", "A. Commander's Intent (Primary mindset & goal of the operation):"),
-                    model.CommandersIntent, 46, v => { model.CommandersIntent = v; PersistModelToAppData(model); }));
+                    BuilderI18n.T("A. Zamiar dowódcy (" + activeDay.DayTitle + "):", "A. Commander's Intent (" + activeDay.DayTitle + "):"),
+                    activeDay.CommandersIntent, 46, v => { activeDay.CommandersIntent = v; PersistModelToAppData(model); }));
 
                 sec3Stack.Children.Add(CreateLabeledMultilineBox(
-                    BuilderI18n.T("B. Priorytety i styl działania (Czy unikamy kontaktu i zrywamy, czy walczymy? Warunki podjęcia walki):", "B. Priorities & Style of Action (Avoid contact & break vs engage; engagement criteria):"),
-                    model.ConceptOfOperations, 50, v => { model.ConceptOfOperations = v; PersistModelToAppData(model); }));
+                    BuilderI18n.T("B. Priorytety i styl działania (" + activeDay.DayTitle + "):", "B. Priorities & Style of Action (" + activeDay.DayTitle + "):"),
+                    activeDay.ConceptOfOperations, 50, v => { activeDay.ConceptOfOperations = v; PersistModelToAppData(model); }));
 
                 sec3Stack.Children.Add(CreateLabeledTextBox(
-                    BuilderI18n.T("C. Łańcuch dowodzenia (Dowódca -> Zastępca 1 -> Zastępca 2):", "C. Chain of Command (Commander -> Deputy 1 -> Deputy 2):"),
-                    model.SuccessionOfCommand, v => { model.SuccessionOfCommand = v; PersistModelToAppData(model); }));
+                    BuilderI18n.T("C. Łańcuch dowodzenia (" + activeDay.DayTitle + "):", "C. Chain of Command (" + activeDay.DayTitle + "):"),
+                    activeDay.SuccessionOfCommand, v => { activeDay.SuccessionOfCommand = v; PersistModelToAppData(model); }));
 
-                // III.D TABELA SKŁADU ODDZIAŁU
+                // III.D NIEZALEŻNA TABELA SKŁADU ODDZIAŁU DLA ACTIVE DAY
                 var rosterCard = new Border
                 {
                     Background = new SolidColorBrush(Color.FromRgb(10, 24, 30)),
@@ -807,10 +788,10 @@ namespace FieldTakHub.Builder.Services
                 var rosterHeaderDock = new DockPanel { Margin = new Thickness(0, 0, 0, 6) };
                 var rosterToggleCheck = new CheckBox
                 {
-                    IsChecked = model.EnableSquadRosterTable,
+                    IsChecked = activeDay.EnableSquadRosterTable,
                     Content = BuilderI18n.T(
-                        "  D. Aktywuj Tabelę Składu Oddziału, Podziału Ról i Sprzętu (Operator/Zespół | Rola 1 | Rola 2 | Broń/Sprzęt)",
-                        "  D. Enable Squad Roster, Roles & Equipment Table (Operator/Team | Role 1 | Role 2 | Weapon/Gear)"),
+                        "  D. Tabela Składu Oddziału, Podziału Ról i Sprzętu dla: " + activeDay.DayTitle,
+                        "  D. Squad Roster, Roles & Equipment Table for: " + activeDay.DayTitle),
                     Foreground = TacticalConfigPanel.BrushAccent,
                     FontWeight = FontWeights.Bold,
                     FontSize = 11.5,
@@ -822,10 +803,10 @@ namespace FieldTakHub.Builder.Services
                 var rosterButtonsPanel = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
                 DockPanel.SetDock(rosterButtonsPanel, Dock.Right);
 
-                var btnAddOperatorPlus = CreateTacticalPlusMinusButton(true, BuilderI18n.T("Dodaj wiersz Operatora / Zespołu (+)", "Add Operator / Team row (+)"), () =>
+                var btnAddOperatorPlus = CreateTacticalPlusMinusButton(true, BuilderI18n.T("Dodaj wiersz Operatora / Zespołu w " + activeDay.DayTitle + " (+)", "Add Operator / Team row in " + activeDay.DayTitle + " (+)"), () =>
                 {
-                    int nextNum = model.SquadRoster.Count + 1;
-                    model.SquadRoster.Add(new OpordRosterRow
+                    int nextNum = activeDay.SquadRoster.Count + 1;
+                    activeDay.SquadRoster.Add(new OpordRosterRow
                     {
                         OperatorOrTeam = "ALFA-" + nextNum,
                         PrimaryRole = "Czujka",
@@ -837,11 +818,11 @@ namespace FieldTakHub.Builder.Services
                 });
                 rosterButtonsPanel.Children.Add(btnAddOperatorPlus);
 
-                var btnRemoveLastOperatorMinus = CreateTacticalPlusMinusButton(false, BuilderI18n.T("Usuń ostatni wiersz tabeli (-)", "Remove last table row (-)"), () =>
+                var btnRemoveLastOperatorMinus = CreateTacticalPlusMinusButton(false, BuilderI18n.T("Usuń ostatni wiersz tabeli w " + activeDay.DayTitle + " (-)", "Remove last table row in " + activeDay.DayTitle + " (-)"), () =>
                 {
-                    if (model.SquadRoster.Count > 0)
+                    if (activeDay.SquadRoster.Count > 0)
                     {
-                        model.SquadRoster.RemoveAt(model.SquadRoster.Count - 1);
+                        activeDay.SquadRoster.RemoveAt(activeDay.SquadRoster.Count - 1);
                         PersistModelToAppData(model);
                         RebuildOpordForm();
                     }
@@ -852,18 +833,18 @@ namespace FieldTakHub.Builder.Services
 
                 var rosterTableContainer = new StackPanel
                 {
-                    Visibility = model.EnableSquadRosterTable ? Visibility.Visible : Visibility.Collapsed
+                    Visibility = activeDay.EnableSquadRosterTable ? Visibility.Visible : Visibility.Collapsed
                 };
 
                 rosterToggleCheck.Checked += (_, __) =>
                 {
-                    model.EnableSquadRosterTable = true;
+                    activeDay.EnableSquadRosterTable = true;
                     rosterTableContainer.Visibility = Visibility.Visible;
                     PersistModelToAppData(model);
                 };
                 rosterToggleCheck.Unchecked += (_, __) =>
                 {
-                    model.EnableSquadRosterTable = false;
+                    activeDay.EnableSquadRosterTable = false;
                     rosterTableContainer.Visibility = Visibility.Collapsed;
                     PersistModelToAppData(model);
                 };
@@ -878,9 +859,9 @@ namespace FieldTakHub.Builder.Services
                 string[] colNames = new[]
                 {
                     BuilderI18n.T("Operator / Zespół (Ksywa)", "Operator / Team (Callsign)"),
-                    BuilderI18n.T("Rola 1 (Załącznik 1)", "Primary Role (Annex 1)"),
-                    BuilderI18n.T("Rola 2 (Opcjonalnie)", "Secondary Role (Optional)"),
-                    BuilderI18n.T("Typ broni i sprzęt (Szturm / DMR / Snajper)", "Weapon Type & Equipment"),
+                    BuilderI18n.T("Rola 1 (" + activeDay.DayTitle + ")", "Primary Role (" + activeDay.DayTitle + ")"),
+                    BuilderI18n.T("Rola 2 (" + activeDay.DayTitle + ")", "Secondary Role (" + activeDay.DayTitle + ")"),
+                    BuilderI18n.T("Typ broni i sprzęt / Zadanie", "Weapon Type & Equipment / Task"),
                     ""
                 };
                 for (int c = 0; c < colNames.Length; c++)
@@ -897,12 +878,12 @@ namespace FieldTakHub.Builder.Services
                 }
                 rosterTableContainer.Children.Add(colHdrGrid);
 
-                string[] roleOptions = model.CustomRolesAnnex.Select(r => r.RoleName).Concat(new[] { "Szturmowiec", "Strzelec wyborowy (DMR)", "Snajper", "Wsparcie (KM)", "Brak" }).Distinct().ToArray();
+                string[] roleOptions = activeDay.CustomRolesAnnex.Select(r => r.RoleName).Concat(new[] { "Szturmowiec", "Strzelec wyborowy (DMR)", "Snajper", "Wsparcie (KM)", "Brak" }).Distinct().ToArray();
 
-                for (int rIdx = 0; rIdx < model.SquadRoster.Count; rIdx++)
+                for (int rIdx = 0; rIdx < activeDay.SquadRoster.Count; rIdx++)
                 {
                     int capturedRowIdx = rIdx;
-                    var rowModel = model.SquadRoster[rIdx];
+                    var rowModel = activeDay.SquadRoster[rIdx];
 
                     var rowGrid = new Grid { Margin = new Thickness(0, 0, 0, 4) };
                     rowGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1.0, GridUnitType.Star) });
@@ -929,7 +910,7 @@ namespace FieldTakHub.Builder.Services
 
                     var btnDelRow = CreateTacticalPlusMinusButton(false, BuilderI18n.T("Usuń ten wiersz (-)", "Remove this row (-)"), () =>
                     {
-                        model.SquadRoster.RemoveAt(capturedRowIdx);
+                        activeDay.SquadRoster.RemoveAt(capturedRowIdx);
                         PersistModelToAppData(model);
                         RebuildOpordForm();
                     });
@@ -943,13 +924,13 @@ namespace FieldTakHub.Builder.Services
                 rosterCard.Child = rosterOuterStack;
                 sec3Stack.Children.Add(rosterCard);
 
-                // III.E TABELA ŁĄCZNOŚCI
+                // III.E TABELA ŁĄCZNOŚCI DLA ACTIVE DAY
                 var commsHeaderDock = new DockPanel { Margin = new Thickness(0, 4, 0, 4) };
                 commsHeaderDock.Children.Add(new TextBlock
                 {
                     Text = BuilderI18n.T(
-                        "E. Tabela łączności (Kanał główny, zapasowy, HQ + automatyczna lista z Generatora Stron):",
-                        "E. Communications Table (Primary, Backup, HQ + live channels from Faction Generator):"),
+                        "E. Tabela łączności (" + activeDay.DayTitle + " — Kanał główny, zapasowy, HQ):",
+                        "E. Communications Table (" + activeDay.DayTitle + " — Primary, Backup, HQ):"),
                     Foreground = TacticalConfigPanel.BrushAccent,
                     FontWeight = FontWeights.Bold,
                     FontSize = 11.5,
@@ -958,7 +939,7 @@ namespace FieldTakHub.Builder.Services
 
                 var btnSyncRadioNow = new Button
                 {
-                    Content = BuilderI18n.T("🔄 Odśwież częstotliwości z Generatora Stron", "🔄 Sync Frequencies from Faction Generator"),
+                    Content = BuilderI18n.T("🔄 Pobierz z Generatora Stron", "🔄 Sync from Faction Generator"),
                     Height = 26,
                     Padding = new Thickness(10, 2, 10, 2),
                     HorizontalAlignment = HorizontalAlignment.Right,
@@ -973,7 +954,7 @@ namespace FieldTakHub.Builder.Services
                 DockPanel.SetDock(btnSyncRadioNow, Dock.Right);
                 btnSyncRadioNow.Click += (_, __) =>
                 {
-                    SyncModelRadioChannelsFromFactionGenerator(win, _activeOpordFaction, model, forceOverwrite: true);
+                    SyncDayRadioChannelsFromFactionGenerator(win, _activeOpordFaction, activeDay, forceOverwrite: true);
                     PersistModelToAppData(model);
                     RebuildOpordForm();
                 };
@@ -981,9 +962,9 @@ namespace FieldTakHub.Builder.Services
                 sec3Stack.Children.Add(commsHeaderDock);
 
                 var radio3Grid = new UniformGrid { Columns = 3, Margin = new Thickness(0, 0, 0, 6) };
-                radio3Grid.Children.Add(CreateLabeledTextBox(BuilderI18n.T("Kanał główny", "Primary Channel"), model.PrimaryRadioFreq, v => { model.PrimaryRadioFreq = v; PersistModelToAppData(model); }));
-                radio3Grid.Children.Add(CreateLabeledTextBox(BuilderI18n.T("Kanał zapasowy", "Backup Channel"), model.BackupRadioFreq, v => { model.BackupRadioFreq = v; PersistModelToAppData(model); }));
-                radio3Grid.Children.Add(CreateLabeledTextBox(BuilderI18n.T("Kanał HQ (Sztab)", "HQ Channel"), model.HqRadioFreq, v => { model.HqRadioFreq = v; PersistModelToAppData(model); }));
+                radio3Grid.Children.Add(CreateLabeledTextBox(BuilderI18n.T("Kanał główny (" + activeDay.DayTitle + ")", "Primary Channel (" + activeDay.DayTitle + ")"), activeDay.PrimaryRadioFreq, v => { activeDay.PrimaryRadioFreq = v; PersistModelToAppData(model); }));
+                radio3Grid.Children.Add(CreateLabeledTextBox(BuilderI18n.T("Kanał zapasowy (" + activeDay.DayTitle + ")", "Backup Channel (" + activeDay.DayTitle + ")"), activeDay.BackupRadioFreq, v => { activeDay.BackupRadioFreq = v; PersistModelToAppData(model); }));
+                radio3Grid.Children.Add(CreateLabeledTextBox(BuilderI18n.T("Kanał HQ (" + activeDay.DayTitle + ")", "HQ Channel (" + activeDay.DayTitle + ")"), activeDay.HqRadioFreq, v => { activeDay.HqRadioFreq = v; PersistModelToAppData(model); }));
                 sec3Stack.Children.Add(radio3Grid);
 
                 var liveSignalInfo = new Border
@@ -1005,10 +986,10 @@ namespace FieldTakHub.Builder.Services
                 };
                 sec3Stack.Children.Add(liveSignalInfo);
 
-                // III.F SYGNAŁY + JEDEN PRZYCISK "🎲 GENERUJ SARNEG" Z LISTY TXT
+                // III.F KRYPTONIMY, NIEZALEŻNY SARNEG ORAZ HASŁA DLA ACTIVE DAY
                 sec3Stack.Children.Add(CreateLabeledTextBox(
-                    BuilderI18n.T("F.1. Kryptonimy celów i punktów na mapie:", "F.1. Objective & Waypoint Code Names:"),
-                    model.TargetCodeNames, v => { model.TargetCodeNames = v; PersistModelToAppData(model); }));
+                    BuilderI18n.T("F.1. Kryptonimy celów i punktów na mapie (" + activeDay.DayTitle + "):", "F.1. Objective & Waypoint Code Names (" + activeDay.DayTitle + "):"),
+                    activeDay.TargetCodeNames, v => { activeDay.TargetCodeNames = v; PersistModelToAppData(model); }));
 
                 var sarnegCard = new Border
                 {
@@ -1023,8 +1004,8 @@ namespace FieldTakHub.Builder.Services
                 sarnegStack.Children.Add(new TextBlock
                 {
                     Text = BuilderI18n.T(
-                        "🔐 F.2. TABELA KRYPTO SARNEG (SZYFROWANIE WSPÓŁRZĘDNYCH 0–9) + LOSOWANIE Z LISTY SŁÓW 10-LITEROWYCH",
-                        "🔐 F.2. SARNEG CRYPTO TABLE (0–9 GRID ENCRYPTION) + 10-LETTER WORD GENERATOR"),
+                        "🔐 F.2. TABELA KRYPTO SARNEG DLA: " + activeDay.DayTitle.ToUpperInvariant() + " (NIEZALEŻNE SŁOWO-KLUCZ 0–9 NA TEN DZIEŃ)",
+                        "🔐 F.2. SARNEG CRYPTO TABLE FOR: " + activeDay.DayTitle.ToUpperInvariant() + " (INDEPENDENT 0–9 KEYWORD FOR THIS DAY)"),
                     Foreground = new SolidColorBrush(Color.FromRgb(250, 208, 44)),
                     FontWeight = FontWeights.Bold,
                     FontSize = 11,
@@ -1033,7 +1014,7 @@ namespace FieldTakHub.Builder.Services
 
                 var sarnegPreviewLabel = new TextBlock
                 {
-                    Text = FormatSarnegMatrixPreview(model.SarnegKeyWord10),
+                    Text = FormatSarnegMatrixPreview(activeDay.SarnegKeyWord10),
                     Foreground = Brushes.White,
                     FontFamily = new FontFamily("Consolas"),
                     FontWeight = FontWeights.Bold,
@@ -1047,12 +1028,12 @@ namespace FieldTakHub.Builder.Services
 
                 TextBox sarnegKeyTextBox = null;
                 var sarnegKeyBoxPanel = CreateLabeledTextBox(
-                    BuilderI18n.T("10-literowe słowo-klucz SARNEG (wpisz własne lub kliknij 'Generuj SARNEG'):", "10-letter SARNEG Key Word (type custom or click 'Generate SARNEG'):"),
-                    model.SarnegKeyWord10,
+                    BuilderI18n.T("10-literowe słowo-klucz SARNEG (" + activeDay.DayTitle + "):", "10-letter SARNEG Key Word (" + activeDay.DayTitle + "):"),
+                    activeDay.SarnegKeyWord10,
                     v =>
                     {
-                        model.SarnegKeyWord10 = v.ToUpperInvariant();
-                        sarnegPreviewLabel.Text = FormatSarnegMatrixPreview(model.SarnegKeyWord10);
+                        activeDay.SarnegKeyWord10 = v.ToUpperInvariant();
+                        sarnegPreviewLabel.Text = FormatSarnegMatrixPreview(activeDay.SarnegKeyWord10);
                         PersistModelToAppData(model);
                     });
                 sarnegKeyTextBox = FindFirstDescendant<TextBox>(sarnegKeyBoxPanel);
@@ -1061,7 +1042,7 @@ namespace FieldTakHub.Builder.Services
 
                 var btnGenerateSarneg = new Button
                 {
-                    Content = BuilderI18n.T("🎲 Generuj SARNEG", "🎲 Generate SARNEG"),
+                    Content = BuilderI18n.T("🎲 Generuj SARNEG (" + activeDay.DayTitle + ")", "🎲 Generate SARNEG (" + activeDay.DayTitle + ")"),
                     Height = 28,
                     VerticalAlignment = VerticalAlignment.Bottom,
                     Margin = new Thickness(6, 0, 0, 4),
@@ -1075,11 +1056,12 @@ namespace FieldTakHub.Builder.Services
                 };
                 btnGenerateSarneg.Click += (_, __) =>
                 {
-                    string drawn = SarnegDictionaryService.DrawRandomSarnegWord();
-                    model.SarnegKeyWord10 = drawn;
+                    string drawn = SarnegDictionaryService.DrawRandomSarnegWord(activeDay.SarnegKeyWord10);
+                    activeDay.SarnegKeyWord10 = drawn;
                     if (sarnegKeyTextBox != null) sarnegKeyTextBox.Text = drawn;
                     sarnegPreviewLabel.Text = FormatSarnegMatrixPreview(drawn);
                     PersistModelToAppData(model);
+                    RebuildOpordForm();
                 };
                 Grid.SetColumn(btnGenerateSarneg, 1);
                 sarnegInputRow.Children.Add(btnGenerateSarneg);
@@ -1090,42 +1072,44 @@ namespace FieldTakHub.Builder.Services
                 sec3Stack.Children.Add(sarnegCard);
 
                 sec3Stack.Children.Add(CreateLabeledMultilineBox(
-                    BuilderI18n.T("F.3. Hasła rozpoznawcze — a) werbalne (wywołanie - odpowiedź - potwierdzenie), b) niewerbalne (wywołanie - odzew):", "F.3. Challenge & Password — a) verbal (challenge - reply - confirmation), b) non-verbal:"),
-                    model.ChallengeAndPassword, 48, v => { model.ChallengeAndPassword = v; PersistModelToAppData(model); }));
+                    BuilderI18n.T("F.3. Hasła rozpoznawcze na " + activeDay.DayTitle + " — a) werbalne (wywołanie - odpowiedź - potwierdzenie), b) niewerbalne:", "F.3. Challenge & Password for " + activeDay.DayTitle + " — a) verbal (challenge - reply - confirm), b) non-verbal:"),
+                    activeDay.ChallengeAndPassword, 48, v => { activeDay.ChallengeAndPassword = v; PersistModelToAppData(model); }));
 
                 sec3Stack.Children.Add(CreateLabeledMultilineBox(
-                    BuilderI18n.T("G. Leczenie (sposób leczenia, ilość i działanie respów, zasady MEDEVAC / przycisk SOS MGRS):", "G. Medical & Respawn Rules (treatment method, respawn count & rules, SOS MGRS button):"),
-                    model.MedevacRules, 50, v => { model.MedevacRules = v; PersistModelToAppData(model); }));
+                    BuilderI18n.T("G. Leczenie i zasady Respawn (" + activeDay.DayTitle + "):", "G. Medical & Respawn Rules (" + activeDay.DayTitle + "):"),
+                    activeDay.MedevacRules, 50, v => { activeDay.MedevacRules = v; PersistModelToAppData(model); }));
 
                 mainStack.Children.Add(sec3);
 
                 // =================================================================
-                // IV. LOGISTYKA + OPCJONALNY, EDYTOWALNY ZAŁĄCZNIK 1 (PODZIAŁ RÓL)
+                // IV. LOGISTYKA ORAZ ZAŁĄCZNIKI 1 i 2 (NIEZALEŻNE DLA ACTIVE DAY)
                 // =================================================================
-                var sec4 = CreateSectionCard(BuilderI18n.T("IV. LOGISTYKA ORAZ ZAŁĄCZNIKI (STYL WYPOSAŻENIA, SZPEJLISTA, DOJAZD, OPCJONALNY ZAŁĄCZNIK 1 RÓL)", "IV. LOGISTICS & ANNEXES (LOADOUT, GEAR CHECKLIST, TRAVEL, OPTIONAL EDITABLE ROLES ANNEX 1)"));
+                var sec4 = CreateSectionCard(BuilderI18n.T(
+                    "IV. LOGISTYKA ORAZ ZAŁĄCZNIKI — " + activeDay.DayTitle.ToUpperInvariant() + " (WYPOSAŻENIE, SZPEJLISTA, DOJAZD, ZAŁĄCZNIK 1 i 2)",
+                    "IV. LOGISTICS & ANNEXES — " + activeDay.DayTitle.ToUpperInvariant() + " (LOADOUT, CHECKLIST, TRAVEL, ANNEX 1 & 2)"));
                 var sec4Stack = (StackPanel)sec4.Child;
 
                 sec4Stack.Children.Add(CreateLabeledTextBox(
-                    BuilderI18n.T("A. Styl wyposażenia (na lekko / na 12h w terenie / na nocleg w terenie / inne):", "A. Loadout Style (light / 12h field / overnight / other):"),
-                    model.RespawnAndSupply, v => { model.RespawnAndSupply = v; PersistModelToAppData(model); }));
+                    BuilderI18n.T("A. Styl wyposażenia (" + activeDay.DayTitle + "):", "A. Loadout Style (" + activeDay.DayTitle + "):"),
+                    activeDay.RespawnAndSupply, v => { activeDay.RespawnAndSupply = v; PersistModelToAppData(model); }));
 
                 sec4Stack.Children.Add(CreateLabeledMultilineBox(
-                    BuilderI18n.T("B. Wyposażenie oddziału (SZPEJLISTA obowiązkowa):", "B. Squad Equipment Checklist (SZPEJLISTA):"),
-                    model.SquadGearChecklist, 48, v => { model.SquadGearChecklist = v; PersistModelToAppData(model); }));
+                    BuilderI18n.T("B. Wyposażenie oddziału — SZPEJLISTA (" + activeDay.DayTitle + "):", "B. Squad Equipment Checklist (" + activeDay.DayTitle + "):"),
+                    activeDay.SquadGearChecklist, 48, v => { activeDay.SquadGearChecklist = v; PersistModelToAppData(model); }));
 
                 sec4Stack.Children.Add(CreateLabeledMultilineBox(
-                    BuilderI18n.T("C. Wyposażenie specjalne (np. RPG przydzielone ze sztabu, przedmioty fabularne do przygotowania):", "C. Special Equipment (e.g., HQ-assigned RPG, mission props):"),
-                    model.SpecialEquipment, 44, v => { model.SpecialEquipment = v; PersistModelToAppData(model); }));
+                    BuilderI18n.T("C. Wyposażenie specjalne (" + activeDay.DayTitle + "):", "C. Special Equipment (" + activeDay.DayTitle + "):"),
+                    activeDay.SpecialEquipment, 44, v => { activeDay.SpecialEquipment = v; PersistModelToAppData(model); }));
 
                 sec4Stack.Children.Add(CreateLabeledMultilineBox(
-                    BuilderI18n.T("D. Dojazd (1. Parking, 2. Odległość z parkingu na miejsce gry, 3. Transport: kto z kim):", "D. Travel & Parking (1. Parking location, 2. Distance to AO, 3. Vehicle allocation):"),
-                    model.TravelAndParking, 50, v => { model.TravelAndParking = v; PersistModelToAppData(model); }));
+                    BuilderI18n.T("D. Dojazd i parking (" + activeDay.DayTitle + "):", "D. Travel & Parking (" + activeDay.DayTitle + "):"),
+                    activeDay.TravelAndParking, 50, v => { activeDay.TravelAndParking = v; PersistModelToAppData(model); }));
 
                 sec4Stack.Children.Add(CreateLabeledTextBox(
                     BuilderI18n.T("E. Regulamin gry (link):", "E. Game Rules (URL link):"),
-                    model.GameRulesLink, v => { model.GameRulesLink = v; PersistModelToAppData(model); }));
+                    activeDay.GameRulesLink, v => { activeDay.GameRulesLink = v; PersistModelToAppData(model); }));
 
-                // OPCJONALNE ROZSZERZENIE: ZAŁĄCZNIK 1. PODZIAŁ RÓL DRUŻYNOWYCH (EDYTOWALNY + / -)
+                // ZAŁĄCZNIK 1. PODZIAŁ RÓL DRUŻYNOWYCH (NIEZALEŻNY DLA ACTIVE DAY)
                 var annex1Card = new Border
                 {
                     Background = new SolidColorBrush(Color.FromRgb(10, 24, 30)),
@@ -1140,10 +1124,10 @@ namespace FieldTakHub.Builder.Services
 
                 var annex1Check = new CheckBox
                 {
-                    IsChecked = model.EnableRolesAnnex,
+                    IsChecked = activeDay.EnableRolesAnnex,
                     Content = BuilderI18n.T(
-                        "  Załącznik 1 (Opcjonalne rozszerzenie): Dołącz i edytuj tabelę opisu ról drużynowych (Rola | Opis obowiązków | Zajęcie)",
-                        "  Annex 1 (Optional Extension): Include & edit Squad Role Definitions Table (Role | Duties Description | Mode)"),
+                        "  Załącznik 1 (" + activeDay.DayTitle + "): Dołącz i edytuj tabelę opisu ról drużynowych",
+                        "  Annex 1 (" + activeDay.DayTitle + "): Include & edit Squad Role Definitions Table"),
                     Foreground = TacticalConfigPanel.BrushAccent,
                     FontWeight = FontWeights.Bold,
                     FontSize = 11.5,
@@ -1157,8 +1141,8 @@ namespace FieldTakHub.Builder.Services
 
                 var btnAddRoleDefPlus = CreateTacticalPlusMinusButton(true, BuilderI18n.T("Dodaj nową definicję roli (+)", "Add new role definition (+)"), () =>
                 {
-                    model.EnableRolesAnnex = true;
-                    model.CustomRolesAnnex.Add(new OpordRoleDefinitionRow
+                    activeDay.EnableRolesAnnex = true;
+                    activeDay.CustomRolesAnnex.Add(new OpordRoleDefinitionRow
                     {
                         RoleName = BuilderI18n.T("Nowa Rola", "New Role"),
                         Description = BuilderI18n.T("Opis obowiązków w drużynie...", "Squad duties description..."),
@@ -1171,9 +1155,9 @@ namespace FieldTakHub.Builder.Services
 
                 var btnRemoveRoleDefMinus = CreateTacticalPlusMinusButton(false, BuilderI18n.T("Usuń ostatnią definicję roli (-)", "Remove last role definition (-)"), () =>
                 {
-                    if (model.CustomRolesAnnex.Count > 0)
+                    if (activeDay.CustomRolesAnnex.Count > 0)
                     {
-                        model.CustomRolesAnnex.RemoveAt(model.CustomRolesAnnex.Count - 1);
+                        activeDay.CustomRolesAnnex.RemoveAt(activeDay.CustomRolesAnnex.Count - 1);
                         PersistModelToAppData(model);
                         RebuildOpordForm();
                     }
@@ -1184,18 +1168,18 @@ namespace FieldTakHub.Builder.Services
 
                 var annex1TableContainer = new StackPanel
                 {
-                    Visibility = model.EnableRolesAnnex ? Visibility.Visible : Visibility.Collapsed
+                    Visibility = activeDay.EnableRolesAnnex ? Visibility.Visible : Visibility.Collapsed
                 };
 
                 annex1Check.Checked += (_, __) =>
                 {
-                    model.EnableRolesAnnex = true;
+                    activeDay.EnableRolesAnnex = true;
                     annex1TableContainer.Visibility = Visibility.Visible;
                     PersistModelToAppData(model);
                 };
                 annex1Check.Unchecked += (_, __) =>
                 {
-                    model.EnableRolesAnnex = false;
+                    activeDay.EnableRolesAnnex = false;
                     annex1TableContainer.Visibility = Visibility.Collapsed;
                     PersistModelToAppData(model);
                 };
@@ -1221,10 +1205,10 @@ namespace FieldTakHub.Builder.Services
                 }
                 annex1TableContainer.Children.Add(a1HdrGrid);
 
-                for (int i = 0; i < model.CustomRolesAnnex.Count; i++)
+                for (int i = 0; i < activeDay.CustomRolesAnnex.Count; i++)
                 {
                     int capIdx = i;
-                    var roleDef = model.CustomRolesAnnex[i];
+                    var roleDef = activeDay.CustomRolesAnnex[i];
 
                     var rGrid = new Grid { Margin = new Thickness(0, 0, 0, 4) };
                     rGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1.1, GridUnitType.Star) });
@@ -1246,7 +1230,7 @@ namespace FieldTakHub.Builder.Services
 
                     var btnDelRole = CreateTacticalPlusMinusButton(false, BuilderI18n.T("Usuń tę rolę (-)", "Remove this role (-)"), () =>
                     {
-                        model.CustomRolesAnnex.RemoveAt(capIdx);
+                        activeDay.CustomRolesAnnex.RemoveAt(capIdx);
                         PersistModelToAppData(model);
                         RebuildOpordForm();
                     });
@@ -1261,8 +1245,8 @@ namespace FieldTakHub.Builder.Services
                 sec4Stack.Children.Add(annex1Card);
 
                 sec4Stack.Children.Add(CreateLabeledMultilineBox(
-                    BuilderI18n.T("Załącznik 2. Szczegółowe opracowanie zadań dodatkowych:", "Annex 2. Detailed Mission Tasks Breakdown:"),
-                    model.Annex2TasksAnalysis, 50, v => { model.Annex2TasksAnalysis = v; PersistModelToAppData(model); }));
+                    BuilderI18n.T("Załącznik 2 (" + activeDay.DayTitle + "). Szczegółowe opracowanie zadań dodatkowych:", "Annex 2 (" + activeDay.DayTitle + "). Detailed Mission Tasks Breakdown:"),
+                    activeDay.Annex2TasksAnalysis, 50, v => { activeDay.Annex2TasksAnalysis = v; PersistModelToAppData(model); }));
 
                 mainStack.Children.Add(sec4);
             }
@@ -1273,8 +1257,9 @@ namespace FieldTakHub.Builder.Services
             return rootBorder;
         }
 
-        private static void SyncModelRadioChannelsFromFactionGenerator(Window win, string factionName, OpordParagraphModel model, bool forceOverwrite = false)
+        private static void SyncDayRadioChannelsFromFactionGenerator(Window win, string factionName, OpordDayPlanModel day, bool forceOverwrite = false)
         {
+            if (day == null) return;
             var facJson = TryGetFactionJsonObject(win, factionName);
             if (facJson == null) return;
 
@@ -1291,12 +1276,12 @@ namespace FieldTakHub.Builder.Services
                         string tone = vo["toneOrCode"]?.ToString() ?? vo["ToneOrCode"]?.ToString() ?? "";
                         string formatted = string.Format("{0} [{1}] ({2})", freq, band, tone);
 
-                        if (i == 0 && (forceOverwrite || model.PrimaryRadioFreq.Contains("446.00625")))
-                            model.PrimaryRadioFreq = role + ": " + formatted;
-                        else if (i == 1 && (forceOverwrite || model.BackupRadioFreq.Contains("446.03125")))
-                            model.BackupRadioFreq = role + ": " + formatted;
-                        else if (i == 2 && (forceOverwrite || model.HqRadioFreq.Contains("446.09375")))
-                            model.HqRadioFreq = role + ": " + formatted;
+                        if (i == 0 && (forceOverwrite || day.PrimaryRadioFreq.Contains("446.00625")))
+                            day.PrimaryRadioFreq = role + ": " + formatted;
+                        else if (i == 1 && (forceOverwrite || day.BackupRadioFreq.Contains("446.03125")))
+                            day.BackupRadioFreq = role + ": " + formatted;
+                        else if (i == 2 && (forceOverwrite || day.HqRadioFreq.Contains("446.09375")))
+                            day.HqRadioFreq = role + ": " + formatted;
                     }
                 }
             }

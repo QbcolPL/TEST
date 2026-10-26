@@ -164,7 +164,6 @@ namespace FieldTakHub.Builder.Services
         private static readonly Random Rng = new Random();
         private static int _lastWordIndex = -1;
 
-        // Dokładna lista 100 dziesięcioliterowych słów (PL + EN) z załączonego pliku sarneg_words_PL_EN.txt
         public static readonly string[] AttachedSarnegWordsList = new string[]
         {
             "absolutnie", "dostaniemy", "dwukrotnie", "faktycznie", "informacje",
@@ -206,18 +205,26 @@ namespace FieldTakHub.Builder.Services
             return clean.Distinct().Count() == 10 && clean.All(char.IsLetter);
         }
 
-        public static string DrawRandomSarnegWord()
+        public static string DrawRandomSarnegWord(string avoidWord = null)
         {
             string[] pool = AttachedSarnegWordsList;
             if (pool.Length == 0) return "PRZEDMIOTY";
 
-            int idx = Rng.Next(pool.Length);
-            if (pool.Length > 1 && idx == _lastWordIndex)
+            for (int attempt = 0; attempt < 12; attempt++)
             {
-                idx = (idx + 1) % pool.Length;
+                int idx = Rng.Next(pool.Length);
+                if (pool.Length > 1 && idx == _lastWordIndex)
+                {
+                    idx = (idx + 1) % pool.Length;
+                }
+                _lastWordIndex = idx;
+                string candidate = NormalizePolishChars(pool[idx]);
+                if (string.IsNullOrEmpty(avoidWord) || !string.Equals(candidate, NormalizePolishChars(avoidWord), StringComparison.OrdinalIgnoreCase))
+                {
+                    return candidate;
+                }
             }
-            _lastWordIndex = idx;
-            return NormalizePolishChars(pool[idx]);
+            return NormalizePolishChars(pool[Rng.Next(pool.Length)]);
         }
 
         public static string DrawRandomWord(bool english) => DrawRandomSarnegWord();
@@ -248,7 +255,7 @@ namespace FieldTakHub.Builder.Services
         private static HttpClient CreateHttpClient()
         {
             var c = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
-            c.DefaultRequestHeaders.TryAddWithoutValidation("User-Agent", "FieldTakHub-OPORD-METOC/3.2");
+            c.DefaultRequestHeaders.TryAddWithoutValidation("User-Agent", "FieldTakHub-OPORD-METOC/3.3");
             return c;
         }
 
@@ -612,7 +619,7 @@ namespace FieldTakHub.Builder.Services
     }
 
     // =========================================================================
-    // 4. MODELE DANYCH OPORD v3.2 (NIEZALEŻNE ZAKŁADKI DZIENNE + WYBÓR DNI DO GENEROWANIA)
+    // 4. MODELE DANYCH OPORD v3.3 — 100% NIEZALEŻNOŚCI KAŻDEGO DNIA OPERACJI
     // =========================================================================
     internal sealed class OpordRosterRow
     {
@@ -637,14 +644,27 @@ namespace FieldTakHub.Builder.Services
         public string DuressWord { get; set; } = "SPALONY";
     }
 
+    // Każdy dzień operacji posiada własny, w 100% niezależny zestaw wszystkich sekcji rozkazu OPORD!
     internal sealed class OpordDayPlanModel
     {
         public string DayTitle { get; set; } = "Dzień 1";
         public bool IncludeInExport { get; set; } = true;
         public string DateIso { get; set; } = DateTime.Today.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+
+        // 0. Nagłówek i klauzula dnia
+        public bool IsSecretClassification { get; set; } = false;
+        public string Classification { get; set; } = "JAWNE / UNCLASSIFIED — MILSIM DRUŻYNOWY OPORD";
+        public string OperationNumber { get; set; } = "OPORD 01-2026";
+        public string DtgIssued { get; set; } = DateTime.Now.ToString("ddHHmm'Z' MMM yyyy", CultureInfo.InvariantCulture).ToUpperInvariant();
+        public string IssuingHq { get; set; } = "TOC / SZTAB DRUŻYNY";
+        public string MapReferences { get; set; } = "Mapa Taktyczna MGRS 1:5000 (W załączeniu .FTAK / .KMZ / .GPX)";
+        public string DaySpecificTasks { get; set; } = "• 08:30 — Odprawa sztabowa i sprawdzenie łączności\n• 09:00 — Wejście w rejon działań\n• 14:00 — Rotacja i realizacja zadań głównych";
+
+        // I. Sytuacja i METOC dnia
         public string LocationName { get; set; } = "";
         public string LocationLat { get; set; } = "49.8494";
         public string LocationLon { get; set; } = "18.8127";
+        public string AreaOfInterestPoiDesc { get; set; } = "Punkty kluczowe (FOB, Respawn, OBJ ALPHA, LZ) zdefiniowane w załączonym pliku .KMZ (ATAK) oraz .GPX (Garmin/Suunto).";
         public string TerrainAndWeather { get; set; } = "Wielkość AO: ok. 2x2 km. Rodzaj: las mieszany, polany, zabudowania leśne. Ukształtowanie: pagórkowate ze skarpami.";
         public string MetocCondition { get; set; } = "Brak pobranego raportu (kliknij przycisk METOC dla tego dnia)";
         public string MetocTemperature { get; set; } = "-";
@@ -652,38 +672,10 @@ namespace FieldTakHub.Builder.Services
         public string MetocHumidityPrecip { get; set; } = "-";
         public string MetocSunTimes { get; set; } = "-";
         public string MetocMoonPhase { get; set; } = "-";
-        public string DaySpecificTasks { get; set; } = "• 08:30 — Odprawa sztabowa i sprawdzenie łączności\n• 09:00 — Wejście w rejon działań\n• 14:00 — Rotacja i realizacja zadań głównych";
-    }
-
-    internal sealed class OpordParagraphModel
-    {
-        public string TargetFaction { get; set; } = "BLUFOR";
-        public bool IsSecretClassification { get; set; } = false;
-        public string Classification { get; set; } = "JAWNE / UNCLASSIFIED — MILSIM DRUŻYNOWY OPORD";
-        public string OperationNumber { get; set; } = "OPORD 01-2026";
-        public string OperationDateIso { get; set; } = DateTime.Today.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
-        public string LocationName { get; set; } = "";
-        public string LocationLat { get; set; } = "49.8494";
-        public string LocationLon { get; set; } = "18.8127";
-        public string DtgIssued { get; set; } = DateTime.Now.ToString("ddHHmm'Z' MMM yyyy", CultureInfo.InvariantCulture).ToUpperInvariant();
-        public string IssuingHq { get; set; } = "TOC / SZTAB DRUŻYNY";
-        public string MapReferences { get; set; } = "Mapa Taktyczna MGRS 1:5000 (W załączeniu .FTAK / .KMZ / .GPX)";
-
-        public List<OpordDayPlanModel> Days { get; set; } = new List<OpordDayPlanModel>();
-        public int ActiveDayIndex { get; set; } = 0;
-
-        public string MetocCondition { get; set; } = "-";
-        public string MetocTemperature { get; set; } = "-";
-        public string MetocWind { get; set; } = "-";
-        public string MetocHumidityPrecip { get; set; } = "-";
-        public string MetocSunTimes { get; set; } = "-";
-        public string MetocMoonPhase { get; set; } = "-";
-
-        public string AreaOfInterestPoiDesc { get; set; } = "Punkty kluczowe (FOB, Respawn, OBJ ALPHA, LZ) zdefiniowane w załączonym pliku .KMZ (ATAK) oraz .GPX (Garmin/Suunto).";
-        public string TerrainAndWeather { get; set; } = "Wielkość AO: ok. 2x2 km. Rodzaj: las mieszany, polany, zabudowania leśne. Ukształtowanie: pagórkowate ze skarpami.";
         public string EnemyForces { get; set; } = "1. Skład, dyspozycja i siła: Pluton lekki przeciwnika podzielony na patrole 4-6 osobowe.\n2. Lokalizacje i możliwości: Posterunki na skrzyżowaniach dróg.\n3. Kursy działań wroga (COA): Obrona rejonu centralnego i zasadzki.";
         public string FriendlyForces { get; set; } = "1. Misja i zamiar wyższego dowództwa (HQ): Opanowanie i kontrola sektora przed zmrokiem.\n2. Misja sąsiednich jednostek: Wsparcie na skrzydłach.";
 
+        // II. Misja (5W) dnia
         public string MissionLoreDesc { get; set; } = "Opis fabularny (opcjonalnie): Działania rozpoznawczo-dywersyjne na zapleczu ugrupowania przeciwnika.";
         public string MissionWho { get; set; } = "Drużyna zadaniowa BLUFOR";
         public string MissionWhat { get; set; } = "zlokalizuje i zabezpieczy kody sektorowe oraz utrzyma obiekt OBJ ALPHA";
@@ -693,6 +685,7 @@ namespace FieldTakHub.Builder.Services
         public string MissionFullStatement { get; set; } = "";
         public string AdditionalTasksSummary { get; set; } = "• Zadanie poboczne 1: Rozpoznanie stanowisk dowodzenia wroga (Foto).\n• Zadanie poboczne 2: Przejęcie pojemnika fabularnego (szczegóły w Załączniku 2).";
 
+        // III. Wykonanie, Skład, Łączność, SARNEG i Hasła dnia
         public string CommandersIntent { get; set; } = "Jedziemy działać zespołowo, przećwiczyć nawigację MGRS/ATAK i zrealizować 100% zadań głównych bez zbędnych strat.";
         public string ConceptOfOperations { get; set; } = "Priorytety i styl działania: Skryte przemieszczanie czujką z przodu. Unikamy niepotrzebnego kontaktu ogniowego podczas marszu do celu.";
         public string TasksToSubordinateUnits { get; set; } = "• Sekcja Szturmowa: Wejście na obiekt i czyszczenie przedpola.\n• Wsparcie / DMR: Osłona skrzydeł.";
@@ -710,8 +703,9 @@ namespace FieldTakHub.Builder.Services
         public string SarnegKeyWord10 { get; set; } = "PRZEDMIOTY";
         public List<OpordCodewordRow> CodewordsTable { get; set; } = new List<OpordCodewordRow>();
         public string ChallengeAndPassword { get; set; } = "a) Werbalne (Wywołanie - Odpowiedź - Potwierdzenie): GROM - BŁYSK - TARCZA (Suma cyfr: 7)\nb) Niewerbalne (Wywołanie - Odzew): 2 błyski czerwonym światłem - 1 błysk + podniesienie lewej ręki";
-
         public string MedevacRules { get; set; } = "Pierwsze trafienie: opatrunek przez medyka lub członka drużyny (czas 2 min). Drugie trafienie: odejście na Respawn. W razie wypadku: przycisk 🚨 SOS MGRS w Field TAK Hub.";
+
+        // IV. Logistyka i Załączniki dnia
         public string RespawnAndSupply { get; set; } = "Styl wyposażenia: Na 12h w terenie (woda min. 2L, racja żywnościowa, zapasowe baterie do radia i powerbank do ATAK).";
         public string SquadGearChecklist { get; set; } = "SZPEJLISTA: Okulary ochronne, czerwona szmatka (dead-rag), latarka czerwona, radio PMR/VHF, telefon z Field TAK Hub & ATAK-CIV, kompas.";
         public string SpecialEquipment { get; set; } = "Wyposażenie specjalne: Rekwizyty misyjne ze sztabu, znaczniki chemiczne (lightstick), aparat/telefon dla Fotografa.";
@@ -723,8 +717,59 @@ namespace FieldTakHub.Builder.Services
         public string Annex2TasksAnalysis { get; set; } = "ZAŁĄCZNIK 2 — OPRACOWANIE ZADAŃ:\n• Analiza priorytetów punktowych, okna czasowe na wykonanie misji specjalnych oraz podział zespołów na zadania równoległe.";
     }
 
+    internal sealed class OpordParagraphModel
+    {
+        public string TargetFaction { get; set; } = "BLUFOR";
+        public List<OpordDayPlanModel> Days { get; set; } = new List<OpordDayPlanModel>();
+        public int ActiveDayIndex { get; set; } = 0;
+
+        // Pola zachowane dla kompatybilności wstecznej przy odczycie starszych plików JSON
+        public bool IsSecretClassification { get; set; } = false;
+        public string Classification { get; set; } = "JAWNE / UNCLASSIFIED — MILSIM DRUŻYNOWY OPORD";
+        public string OperationNumber { get; set; } = "OPORD 01-2026";
+        public string OperationDateIso { get; set; } = DateTime.Today.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+        public string LocationName { get; set; } = "";
+        public string LocationLat { get; set; } = "49.8494";
+        public string LocationLon { get; set; } = "18.8127";
+        public string DtgIssued { get; set; } = DateTime.Now.ToString("ddHHmm'Z' MMM yyyy", CultureInfo.InvariantCulture).ToUpperInvariant();
+        public string IssuingHq { get; set; } = "TOC / SZTAB DRUŻYNY";
+        public string MapReferences { get; set; } = "Mapa Taktyczna MGRS 1:5000 (W załączeniu .FTAK / .KMZ / .GPX)";
+        public string AreaOfInterestPoiDesc { get; set; } = "";
+        public string TerrainAndWeather { get; set; } = "";
+        public string EnemyForces { get; set; } = "";
+        public string FriendlyForces { get; set; } = "";
+        public string MissionLoreDesc { get; set; } = "";
+        public string MissionWho { get; set; } = "Drużyna zadaniowa BLUFOR";
+        public string MissionWhat { get; set; } = "zlokalizuje i zabezpieczy kody sektorowe oraz utrzyma obiekt OBJ ALPHA";
+        public string MissionWhen { get; set; } = "w godzinach operacyjnych 09:00 - 17:00";
+        public string MissionWhere { get; set; } = "w wyznaczonym obszarze AO (siatka MGRS)";
+        public string MissionWhy { get; set; } = "w celu uzyskania przewagi punktowej i odcięcia zaopatrzenia przeciwnika.";
+        public string MissionFullStatement { get; set; } = "";
+        public string AdditionalTasksSummary { get; set; } = "";
+        public string CommandersIntent { get; set; } = "";
+        public string ConceptOfOperations { get; set; } = "";
+        public string SuccessionOfCommand { get; set; } = "";
+        public bool EnableSquadRosterTable { get; set; } = true;
+        public List<OpordRosterRow> SquadRoster { get; set; } = new List<OpordRosterRow>();
+        public string PrimaryRadioFreq { get; set; } = "446.00625 MHz (PMR CH 1)";
+        public string BackupRadioFreq { get; set; } = "446.03125 MHz (PMR CH 3)";
+        public string HqRadioFreq { get; set; } = "446.09375 MHz (PMR CH 8)";
+        public string TargetCodeNames { get; set; } = "";
+        public string SarnegKeyWord10 { get; set; } = "PRZEDMIOTY";
+        public string ChallengeAndPassword { get; set; } = "";
+        public string MedevacRules { get; set; } = "";
+        public string RespawnAndSupply { get; set; } = "";
+        public string SquadGearChecklist { get; set; } = "";
+        public string SpecialEquipment { get; set; } = "";
+        public string TravelAndParking { get; set; } = "";
+        public string GameRulesLink { get; set; } = "https://";
+        public bool EnableRolesAnnex { get; set; } = false;
+        public List<OpordRoleDefinitionRow> CustomRolesAnnex { get; set; } = new List<OpordRoleDefinitionRow>();
+        public string Annex2TasksAnalysis { get; set; } = "";
+    }
+
     // =========================================================================
-    // 5. ZARZĄDCA OPORD v3.2 — CZĘŚĆ 1 (LOGIKA, DYSK, LAN SERVER, HTML A4, DISCORD)
+    // 5. ZARZĄDCA OPORD v3.3 — CZĘŚĆ 1 (LOGIKA NIEZALEŻNYCH DNI, KLONOWANIE DNIA, HTML A4, DISCORD)
     // =========================================================================
     internal static partial class OpordBuilderManager
     {
@@ -751,7 +796,6 @@ namespace FieldTakHub.Builder.Services
             ("Czujka", "Przechodnie", "Przewodzi podczas marszu, koryguje trasę, szuka przejścia, wypatruje zagrożenia z przodu.")
         };
 
-        
         public static void ResetAllOpordsToZeroState(Window win)
         {
             try
@@ -793,7 +837,7 @@ namespace FieldTakHub.Builder.Services
             catch { }
         }
 
-public static OpordParagraphModel GetOrCreateModel(string factionName)
+        public static OpordParagraphModel GetOrCreateModel(string factionName)
         {
             string key = string.IsNullOrWhiteSpace(factionName) ? "BLUFOR" : factionName.Trim();
             if (!ModelsByFaction.TryGetValue(key, out var model))
@@ -815,43 +859,47 @@ public static OpordParagraphModel GetOrCreateModel(string factionName)
 
         private static void EnsureDefaultCollectionsInitialized(OpordParagraphModel m)
         {
-            if (string.IsNullOrWhiteSpace(m.MissionFullStatement))
-                m.MissionFullStatement = Compose5WMissionText(m);
-
             if (m.Days == null || m.Days.Count == 0)
             {
-                m.Days = new List<OpordDayPlanModel>
+                var firstDay = new OpordDayPlanModel
                 {
-                    new OpordDayPlanModel
-                    {
-                        DayTitle = "Dzień 1",
-                        IncludeInExport = true,
-                        DateIso = string.IsNullOrWhiteSpace(m.OperationDateIso)
-                            ? DateTime.Today.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)
-                            : m.OperationDateIso,
-                        LocationName = m.LocationName ?? "",
-                        LocationLat = string.IsNullOrWhiteSpace(m.LocationLat) ? "49.8494" : m.LocationLat,
-                        LocationLon = string.IsNullOrWhiteSpace(m.LocationLon) ? "18.8127" : m.LocationLon,
-                        TerrainAndWeather = string.IsNullOrWhiteSpace(m.TerrainAndWeather)
-                            ? "Wielkość AO: ok. 2x2 km. Rodzaj: las mieszany, polany, zabudowania leśne. Ukształtowanie: pagórkowate ze skarpami."
-                            : m.TerrainAndWeather
-                    }
+                    DayTitle = "Dzień 1",
+                    IncludeInExport = true,
+                    DateIso = string.IsNullOrWhiteSpace(m.OperationDateIso)
+                        ? DateTime.Today.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)
+                        : m.OperationDateIso,
+                    MissionWho = string.IsNullOrWhiteSpace(m.MissionWho) ? ("Drużyna " + m.TargetFaction) : m.MissionWho,
+                    SarnegKeyWord10 = string.IsNullOrWhiteSpace(m.SarnegKeyWord10) ? SarnegDictionaryService.DrawRandomSarnegWord() : m.SarnegKeyWord10
                 };
+                EnsureDayDefaultsInitialized(firstDay, m.TargetFaction);
+                m.Days = new List<OpordDayPlanModel> { firstDay };
                 m.ActiveDayIndex = 0;
             }
             else
             {
                 foreach (var d in m.Days)
                 {
-                    if (string.IsNullOrWhiteSpace(d.LocationLat)) d.LocationLat = string.IsNullOrWhiteSpace(m.LocationLat) ? "49.8494" : m.LocationLat;
-                    if (string.IsNullOrWhiteSpace(d.LocationLon)) d.LocationLon = string.IsNullOrWhiteSpace(m.LocationLon) ? "18.8127" : m.LocationLon;
-                    if (string.IsNullOrWhiteSpace(d.TerrainAndWeather)) d.TerrainAndWeather = m.TerrainAndWeather ?? "";
+                    EnsureDayDefaultsInitialized(d, m.TargetFaction);
                 }
             }
+        }
 
-            if (m.SquadRoster == null || m.SquadRoster.Count == 0)
+        public static void EnsureDayDefaultsInitialized(OpordDayPlanModel d, string factionName)
+        {
+            if (d == null) return;
+
+            if (string.IsNullOrWhiteSpace(d.MissionWho))
+                d.MissionWho = "Drużyna " + (string.IsNullOrWhiteSpace(factionName) ? "BLUFOR" : factionName);
+
+            if (string.IsNullOrWhiteSpace(d.MissionFullStatement))
+                d.MissionFullStatement = Compose5WMissionTextForDay(d);
+
+            if (string.IsNullOrWhiteSpace(d.SarnegKeyWord10))
+                d.SarnegKeyWord10 = SarnegDictionaryService.DrawRandomSarnegWord();
+
+            if (d.SquadRoster == null || d.SquadRoster.Count == 0)
             {
-                m.SquadRoster = new List<OpordRosterRow>
+                d.SquadRoster = new List<OpordRosterRow>
                 {
                     new OpordRosterRow { OperatorOrTeam = "ALFA-1", PrimaryRole = "Lider (Dowódca polowy)", SecondaryRole = "Adiutant", WeaponAndGear = "Karabinek szturmowy + ATAK" },
                     new OpordRosterRow { OperatorOrTeam = "ALFA-2", PrimaryRole = "Navi (Nawigator)", SecondaryRole = "Czujka", WeaponAndGear = "Karabinek szturmowy + Garmin/ATAK" },
@@ -860,9 +908,9 @@ public static OpordParagraphModel GetOrCreateModel(string factionName)
                 };
             }
 
-            if (m.CustomRolesAnnex == null || m.CustomRolesAnnex.Count == 0)
+            if (d.CustomRolesAnnex == null || d.CustomRolesAnnex.Count == 0)
             {
-                m.CustomRolesAnnex = DefaultMilsimRolesCatalog.Select(r => new OpordRoleDefinitionRow
+                d.CustomRolesAnnex = DefaultMilsimRolesCatalog.Select(r => new OpordRoleDefinitionRow
                 {
                     RoleName = r.RoleName,
                     DutyMode = r.Mode,
@@ -870,9 +918,9 @@ public static OpordParagraphModel GetOrCreateModel(string factionName)
                 }).ToList();
             }
 
-            if (m.CodewordsTable == null || m.CodewordsTable.Count == 0)
+            if (d.CodewordsTable == null || d.CodewordsTable.Count == 0)
             {
-                m.CodewordsTable = new List<OpordCodewordRow>
+                d.CodewordsTable = new List<OpordCodewordRow>
                 {
                     new OpordCodewordRow { CodeWord = "KONTAKT / WRÓG", CodeLetter = "K", CodeDigit = "1", DuressWord = "CZERWONY" },
                     new OpordCodewordRow { CodeWord = "ODWRÓT / ZERWANIE", CodeLetter = "Z", CodeDigit = "2", DuressWord = "MGŁA" },
@@ -881,13 +929,113 @@ public static OpordParagraphModel GetOrCreateModel(string factionName)
             }
         }
 
-        public static string Compose5WMissionText(OpordParagraphModel m)
+        // Tworzy całkowicie niezależną instancję kolejnego dnia (z nowym słowem SARNEG i głęboką kopią tabel)
+        public static OpordDayPlanModel CreateIndependentNextDay(OpordDayPlanModel sourceDay, int nextDayNumber, string factionName)
         {
+            DateTime nextDate = DateTime.Today.AddDays(nextDayNumber - 1);
+            if (sourceDay != null && DateTime.TryParseExact(sourceDay.DateIso, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out DateTime parsed))
+            {
+                nextDate = parsed.AddDays(1);
+            }
+
+            string newSarneg = SarnegDictionaryService.DrawRandomSarnegWord(sourceDay?.SarnegKeyWord10);
+
+            var nextDay = new OpordDayPlanModel
+            {
+                DayTitle = BuilderI18n.T("Dzień " + nextDayNumber, "Day " + nextDayNumber),
+                IncludeInExport = true,
+                DateIso = nextDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
+                IsSecretClassification = sourceDay?.IsSecretClassification ?? false,
+                Classification = sourceDay?.Classification ?? "JAWNE / UNCLASSIFIED — MILSIM DRUŻYNOWY OPORD",
+                OperationNumber = sourceDay?.OperationNumber ?? ("OPORD 0" + nextDayNumber + "-2026"),
+                DtgIssued = DateTime.Now.ToString("ddHHmm'Z' MMM yyyy", CultureInfo.InvariantCulture).ToUpperInvariant(),
+                IssuingHq = sourceDay?.IssuingHq ?? "TOC / SZTAB DRUŻYNY",
+                MapReferences = sourceDay?.MapReferences ?? "Mapa Taktyczna MGRS 1:5000 (W załączeniu .FTAK / .KMZ / .GPX)",
+                DaySpecificTasks = BuilderI18n.T(
+                    "• 08:30 — Odprawa sztabowa na Dzień " + nextDayNumber + "\n• 09:00 — Wyjście w rejon działań (Dzień " + nextDayNumber + ")\n• 14:00 — Realizacja zadań głównych Dnia " + nextDayNumber,
+                    "• 08:30 — HQ Briefing for Day " + nextDayNumber + "\n• 09:00 — Deploy to AO (Day " + nextDayNumber + ")\n• 14:00 — Primary tasks for Day " + nextDayNumber),
+                LocationName = sourceDay?.LocationName ?? "",
+                LocationLat = sourceDay?.LocationLat ?? "49.8494",
+                LocationLon = sourceDay?.LocationLon ?? "18.8127",
+                AreaOfInterestPoiDesc = sourceDay?.AreaOfInterestPoiDesc ?? "Punkty kluczowe (FOB, Respawn, OBJ ALPHA, LZ) zdefiniowane w załączonym pliku .KMZ (ATAK) oraz .GPX (Garmin/Suunto).",
+                TerrainAndWeather = BuilderI18n.T(
+                    "Analiza terenu i pogody dla Dnia " + nextDayNumber + " (kliknij przycisk METOC, aby pobrać prognozę na ten dzień).",
+                    "Terrain & weather analysis for Day " + nextDayNumber + " (click METOC button to fetch forecast for this day)."),
+                MetocCondition = BuilderI18n.T("Brak pobranego raportu dla Dnia " + nextDayNumber, "No METOC report fetched for Day " + nextDayNumber),
+                EnemyForces = sourceDay?.EnemyForces ?? "1. Skład, dyspozycja i siła: Patrole przeciwnika w sektorze.\n2. Kursy działań wroga (COA): Kontratak i zasadzki.",
+                FriendlyForces = sourceDay?.FriendlyForces ?? "1. Misja wyższego dowództwa (HQ): Kontrola sektora w Dniu " + nextDayNumber + ".",
+                MissionLoreDesc = sourceDay?.MissionLoreDesc ?? "",
+                MissionWho = sourceDay?.MissionWho ?? ("Drużyna " + factionName),
+                MissionWhat = BuilderI18n.T("zrealizuje zadania operacyjne wyznaczone na Dzień " + nextDayNumber, "will execute operational tasks assigned for Day " + nextDayNumber),
+                MissionWhen = BuilderI18n.T("w godzinach operacyjnych Dnia " + nextDayNumber, "during operational hours of Day " + nextDayNumber),
+                MissionWhere = sourceDay?.MissionWhere ?? "w wyznaczonym obszarze AO (siatka MGRS)",
+                MissionWhy = sourceDay?.MissionWhy ?? "w celu utrzymania inicjatywy taktycznej.",
+                AdditionalTasksSummary = BuilderI18n.T(
+                    "• Zadania dodatkowe wyznaczone na Dzień " + nextDayNumber + "...",
+                    "• Additional tasks assigned for Day " + nextDayNumber + "..."),
+                CommandersIntent = sourceDay?.CommandersIntent ?? "Skuteczna realizacja zadań Dnia " + nextDayNumber + " z zachowaniem pełnej łączności.",
+                ConceptOfOperations = sourceDay?.ConceptOfOperations ?? "Priorytety i styl działania na Dzień " + nextDayNumber + ".",
+                SuccessionOfCommand = sourceDay?.SuccessionOfCommand ?? "Dowódca (Lider)  ->  1. Zastępca (Navi / RTO)  ->  2. Zastępca (Dowódca sekcji)",
+                EnableSquadRosterTable = sourceDay?.EnableSquadRosterTable ?? true,
+                SquadRoster = sourceDay?.SquadRoster != null
+                    ? sourceDay.SquadRoster.Select(r => new OpordRosterRow
+                    {
+                        OperatorOrTeam = r.OperatorOrTeam,
+                        PrimaryRole = r.PrimaryRole,
+                        SecondaryRole = r.SecondaryRole,
+                        WeaponAndGear = r.WeaponAndGear
+                    }).ToList()
+                    : new List<OpordRosterRow>(),
+                PrimaryRadioFreq = sourceDay?.PrimaryRadioFreq ?? "446.00625 MHz (PMR CH 1)",
+                BackupRadioFreq = sourceDay?.BackupRadioFreq ?? "446.03125 MHz (PMR CH 3)",
+                HqRadioFreq = sourceDay?.HqRadioFreq ?? "446.09375 MHz (PMR CH 8)",
+                TargetCodeNames = BuilderI18n.T(
+                    "• Kryptonimy celów na Dzień " + nextDayNumber + ": OBJ ALPHA = 'ZAMEK-" + nextDayNumber + "' | FOB = 'BAZA-" + nextDayNumber + "'",
+                    "• Target Code Names for Day " + nextDayNumber + ": OBJ ALPHA = 'CASTLE-" + nextDayNumber + "' | FOB = 'BASE-" + nextDayNumber + "'"),
+                SarnegKeyWord10 = newSarneg,
+                ChallengeAndPassword = BuilderI18n.T(
+                    "a) Werbalne (Dzień " + nextDayNumber + " — Wywołanie - Odpowiedź - Potwierdzenie): WILK - KIEŁ - WATAHA\nb) Niewerbalne: 2 błyski czerwonym światłem - 1 błysk",
+                    "a) Verbal (Day " + nextDayNumber + " — Challenge - Reply - Confirm): WOLF - FANG - PACK\nb) Non-verbal: 2 red flashes - 1 flash"),
+                MedevacRules = sourceDay?.MedevacRules ?? "Pierwsze trafienie: opatrunek (2 min). Drugie trafienie: odejście na Respawn.",
+                RespawnAndSupply = sourceDay?.RespawnAndSupply ?? "Styl wyposażenia: Na 12h w terenie.",
+                SquadGearChecklist = sourceDay?.SquadGearChecklist ?? "SZPEJLISTA: Okulary ochronne, czerwona szmatka (dead-rag), latarka czerwona, radio PMR/VHF, telefon z Field TAK Hub & ATAK-CIV.",
+                SpecialEquipment = sourceDay?.SpecialEquipment ?? "Wyposażenie specjalne na Dzień " + nextDayNumber + ".",
+                TravelAndParking = sourceDay?.TravelAndParking ?? "1. Parking: Zgodnie z pinezką zbiórki w paczce .GPX / .KMZ.",
+                GameRulesLink = sourceDay?.GameRulesLink ?? "https://",
+                EnableRolesAnnex = sourceDay?.EnableRolesAnnex ?? false,
+                CustomRolesAnnex = sourceDay?.CustomRolesAnnex != null
+                    ? sourceDay.CustomRolesAnnex.Select(rd => new OpordRoleDefinitionRow
+                    {
+                        RoleName = rd.RoleName,
+                        Description = rd.Description,
+                        DutyMode = rd.DutyMode
+                    }).ToList()
+                    : new List<OpordRoleDefinitionRow>(),
+                Annex2TasksAnalysis = BuilderI18n.T(
+                    "ZAŁĄCZNIK 2 — OPRACOWANIE ZADAŃ (" + "DZIEŃ " + nextDayNumber + "):\n• Analiza priorytetów i podział zespołów na zadania w Dniu " + nextDayNumber + ".",
+                    "ANNEX 2 — TASKS BREAKDOWN (DAY " + nextDayNumber + "):\n• Priority analysis and team assignments for Day " + nextDayNumber + ".")
+            };
+
+            nextDay.MissionFullStatement = Compose5WMissionTextForDay(nextDay);
+            EnsureDayDefaultsInitialized(nextDay, factionName);
+            return nextDay;
+        }
+
+        public static string Compose5WMissionTextForDay(OpordDayPlanModel d)
+        {
+            if (d == null) return "";
             if (BuilderI18n.CurrentLang == "EN")
             {
-                return (m.MissionWho + " will " + m.MissionWhat + " " + m.MissionWhen + " at " + m.MissionWhere + " in order to " + m.MissionWhy).Trim();
+                return (d.MissionWho + " will " + d.MissionWhat + " " + d.MissionWhen + " at " + d.MissionWhere + " in order to " + d.MissionWhy).Trim();
             }
-            return (m.MissionWho + " " + m.MissionWhat + " " + m.MissionWhen + " w rejonie " + m.MissionWhere + ", " + m.MissionWhy).Trim();
+            return (d.MissionWho + " " + d.MissionWhat + " " + d.MissionWhen + " w rejonie " + d.MissionWhere + ", " + d.MissionWhy).Trim();
+        }
+
+        public static string Compose5WMissionText(OpordParagraphModel m)
+        {
+            EnsureDefaultCollectionsInitialized(m);
+            var activeDay = m.Days[Math.Clamp(m.ActiveDayIndex, 0, m.Days.Count - 1)];
+            return Compose5WMissionTextForDay(activeDay);
         }
 
         public static void SaveAllOpordsToDisk(Window win)
@@ -1123,11 +1271,11 @@ public static OpordParagraphModel GetOrCreateModel(string factionName)
             return selected;
         }
 
+        // Generuje kompletny wydruk A4 HTML, w którym każdy zaznaczony dzień ma własną Sytuację, Misję, Skład, SARNEG, Hasła i Logistykę!
         public static string GeneratePrintableOpordHtml(Window win, string factionName, OpordParagraphModel m)
         {
             EnsureDefaultCollectionsInitialized(m);
             var exportedDays = GetSelectedDaysForExport(m);
-            var primaryDay = exportedDays.FirstOrDefault() ?? m.Days[0];
 
             string eventName = win != null ? TacticalConfigPanel.GetEventNameFromWindow(win) : "OPERACJA";
             var facJson = TryGetFactionJsonObject(win, factionName);
@@ -1140,44 +1288,12 @@ public static OpordParagraphModel GetOrCreateModel(string factionName)
 
             string E(string s) => WebUtility.HtmlEncode(s ?? "").Replace("\n", "<br/>");
 
-            var radioRowsHtml = new StringBuilder();
-            radioRowsHtml.AppendLine("<tr><td><b>" + BuilderI18n.T("Kanał główny", "Primary Channel") + "</b></td><td>PMR/VHF</td><td colspan='2'><b>" + E(m.PrimaryRadioFreq) + "</b></td></tr>");
-            radioRowsHtml.AppendLine("<tr><td><b>" + BuilderI18n.T("Kanał zapasowy", "Backup Channel") + "</b></td><td>PMR/VHF</td><td colspan='2'><b>" + E(m.BackupRadioFreq) + "</b></td></tr>");
-            radioRowsHtml.AppendLine("<tr><td><b>" + BuilderI18n.T("Kanał HQ (Sztab)", "HQ Channel") + "</b></td><td>PMR/VHF</td><td colspan='2'><b>" + E(m.HqRadioFreq) + "</b></td></tr>");
-
-            var vArr = (facJson?["VoiceChannels"] ?? facJson?["voiceChannels"]) as JsonArray;
-            if (vArr != null && vArr.Count > 0)
-            {
-                foreach (var vo in vArr.OfType<JsonObject>())
-                {
-                    radioRowsHtml.AppendLine(
-                        "<tr><td><b>" + E(vo["roleName"]?.ToString() ?? vo["RoleName"]?.ToString()) + "</b></td>" +
-                        "<td>" + E(vo["bandType"]?.ToString() ?? vo["BandType"]?.ToString()) + "</td>" +
-                        "<td><b>" + E(vo["freqMhz"]?.ToString() ?? vo["FreqMhz"]?.ToString()) + "</b></td>" +
-                        "<td>" + E(vo["toneOrCode"]?.ToString() ?? vo["ToneOrCode"]?.ToString()) + "</td></tr>");
-                }
-            }
-
-            string sarnegClean = SarnegDictionaryService.NormalizePolishChars(m.SarnegKeyWord10 ?? "PRZEDMIOTY").Trim().PadRight(10, 'X').Substring(0, 10);
-            var sarnegLettersRow = new StringBuilder();
-            var sarnegDigitsRow = new StringBuilder();
-            for (int i = 0; i < 10; i++)
-            {
-                sarnegLettersRow.Append("<th style='text-align:center;font-size:13px;'>").Append(sarnegClean[i]).Append("</th>");
-                sarnegDigitsRow.Append("<td style='text-align:center;font-weight:bold;'>").Append(i).Append("</td>");
-            }
-
-            string classBannerBg = m.IsSecretClassification ? "#ffebee" : "#f4f6f8";
-            string classBannerBorder = m.IsSecretClassification ? "#d32f2f" : "#111";
-            string classBannerColor = m.IsSecretClassification ? "#b71c1c" : "#111";
-
             var html = new StringBuilder();
             html.AppendLine("<!DOCTYPE html><html lang='pl'><head><meta charset='utf-8'/>");
             html.AppendLine("<title>OPORD " + E(eventName) + " (" + E(factionName) + ")</title>");
             html.AppendLine("<style>");
             html.AppendLine("@page { size: A4 portrait; margin: 10mm; }");
             html.AppendLine("body { font-family: 'Segoe UI', Arial, sans-serif; color: #111; background: #fff; margin: 0; padding: 14px; font-size: 11.5px; line-height: 1.4; }");
-            html.AppendLine(".classification { text-align: center; font-weight: bold; font-size: 12px; letter-spacing: 1.2px; border-top: 2px solid " + classBannerBorder + "; border-bottom: 2px solid " + classBannerBorder + "; color: " + classBannerColor + "; padding: 4px; margin-bottom: 10px; background: " + classBannerBg + "; }");
             html.AppendLine(".header-box { border: 2px solid #111; padding: 10px 14px; margin-bottom: 12px; display: flex; justify-content: space-between; align-items: center; }");
             html.AppendLine(".faction-badge { background: " + colorHex + "; color: #fff; font-weight: bold; padding: 6px 14px; border-radius: 4px; font-size: 15px; }");
             html.AppendLine("h1 { margin: 0 0 4px 0; font-size: 17px; text-transform: uppercase; }");
@@ -1187,86 +1303,126 @@ public static OpordParagraphModel GetOrCreateModel(string factionName)
             html.AppendLine("table { width: 100%; border-collapse: collapse; margin-top: 5px; margin-bottom: 8px; font-size: 11px; }");
             html.AppendLine("th, td { border: 1px solid #333; padding: 4px 6px; text-align: left; }");
             html.AppendLine("th { background: #e6ecef; }");
+            html.AppendLine(".day-page-break { page-break-before: always; margin-top: 24px; border-top: 3px dashed #666; padding-top: 16px; }");
             html.AppendLine(".no-print { margin-bottom: 12px; text-align: right; }");
             html.AppendLine(".btn-print { background: #102229; color: #1FE0C5; border: 2px solid #1FE0C5; padding: 8px 16px; font-weight: bold; cursor: pointer; border-radius: 6px; }");
-            html.AppendLine("@media print { .no-print { display: none; } }");
+            html.AppendLine("@media print { .no-print { display: none; } .day-page-break { border-top: none; margin-top: 0; padding-top: 0; } }");
             html.AppendLine("</style></head><body>");
             html.AppendLine("<div class='no-print'><button class='btn-print' onclick='window.print()'>" + BuilderI18n.T("🖨️ Drukuj OPORD / Zapisz jako PDF (A4)", "🖨️ Print OPORD / Save as PDF (A4)") + "</button></div>");
-            html.AppendLine("<div class='classification'>" + E(m.Classification) + "</div>");
-            html.AppendLine("<div class='header-box'><div>");
-            html.AppendLine("<h1>OPORD " + E(eventName) + " — " + E(m.OperationNumber) + "</h1>");
-            html.AppendLine("<div><b>" + BuilderI18n.T("Sztab (HQ):", "Issuing HQ:") + "</b> " + E(m.IssuingHq) + " &nbsp;|&nbsp; <b>DTG:</b> " + E(m.DtgIssued) + "</div>");
-            html.AppendLine("<div><b>" + BuilderI18n.T("Rejon AO:", "AO Region:") + "</b> " + E(primaryDay.LocationName) + " (" + E(primaryDay.LocationLat) + "°N, " + E(primaryDay.LocationLon) + "°E) &nbsp;|&nbsp; <b>" + BuilderI18n.T("Mapy:", "Maps:") + "</b> " + E(m.MapReferences) + "</div>");
-            html.AppendLine("</div><div class='faction-badge'>" + E(factionName) + "</div></div>");
 
-            if (exportedDays.Count > 0)
+            for (int dayIdx = 0; dayIdx < exportedDays.Count; dayIdx++)
             {
-                html.AppendLine("<table><thead><tr><th style='width:18%'>" + BuilderI18n.T("📅 Dzień i Rejon", "📅 Day & AO") + "</th><th style='width:38%'>" + BuilderI18n.T("Pogoda METOC / Słońce / Księżyc", "METOC Weather / Sun / Moon") + "</th><th>" + BuilderI18n.T("Harmonogram, teren i zadania dnia", "Schedule, Terrain & Day Tasks") + "</th></tr></thead><tbody>");
-                foreach (var d in exportedDays)
+                var d = exportedDays[dayIdx];
+                EnsureDayDefaultsInitialized(d, factionName);
+
+                if (dayIdx > 0)
                 {
-                    html.AppendLine("<tr><td><b>" + E(d.DayTitle) + "</b><br/>" + E(d.DateIso) + "<br/><small>" + E(d.LocationName) + "</small></td>" +
-                                    "<td>" + E(d.MetocCondition) + "<br/>Temp: " + E(d.MetocTemperature) + "<br/>" + E(d.MetocSunTimes) + "<br/>" + E(d.MetocMoonPhase) + "</td>" +
-                                    "<td>" + E(d.DaySpecificTasks) + "<hr style='border:0;border-top:1px dashed #aaa;margin:4px 0;'/><b>" + BuilderI18n.T("Teren i METOC:", "Terrain & METOC:") + "</b><br/>" + E(d.TerrainAndWeather) + "</td></tr>");
+                    html.AppendLine("<div class='day-page-break'></div>");
                 }
+
+                string classBannerBg = d.IsSecretClassification ? "#ffebee" : "#f4f6f8";
+                string classBannerBorder = d.IsSecretClassification ? "#d32f2f" : "#111";
+                string classBannerColor = d.IsSecretClassification ? "#b71c1c" : "#111";
+                string classStyle = "text-align:center;font-weight:bold;font-size:12px;letter-spacing:1.2px;border-top:2px solid " + classBannerBorder + ";border-bottom:2px solid " + classBannerBorder + ";color:" + classBannerColor + ";padding:4px;margin-bottom:10px;background:" + classBannerBg + ";";
+
+                var radioRowsHtml = new StringBuilder();
+                radioRowsHtml.AppendLine("<tr><td><b>" + BuilderI18n.T("Kanał główny (" + d.DayTitle + ")", "Primary Channel (" + d.DayTitle + ")") + "</b></td><td>PMR/VHF</td><td colspan='2'><b>" + E(d.PrimaryRadioFreq) + "</b></td></tr>");
+                radioRowsHtml.AppendLine("<tr><td><b>" + BuilderI18n.T("Kanał zapasowy (" + d.DayTitle + ")", "Backup Channel (" + d.DayTitle + ")") + "</b></td><td>PMR/VHF</td><td colspan='2'><b>" + E(d.BackupRadioFreq) + "</b></td></tr>");
+                radioRowsHtml.AppendLine("<tr><td><b>" + BuilderI18n.T("Kanał HQ (" + d.DayTitle + ")", "HQ Channel (" + d.DayTitle + ")") + "</b></td><td>PMR/VHF</td><td colspan='2'><b>" + E(d.HqRadioFreq) + "</b></td></tr>");
+
+                var vArr = (facJson?["VoiceChannels"] ?? facJson?["voiceChannels"]) as JsonArray;
+                if (vArr != null && vArr.Count > 0)
+                {
+                    foreach (var vo in vArr.OfType<JsonObject>())
+                    {
+                        radioRowsHtml.AppendLine(
+                            "<tr><td><b>" + E(vo["roleName"]?.ToString() ?? vo["RoleName"]?.ToString()) + "</b></td>" +
+                            "<td>" + E(vo["bandType"]?.ToString() ?? vo["BandType"]?.ToString()) + "</td>" +
+                            "<td><b>" + E(vo["freqMhz"]?.ToString() ?? vo["FreqMhz"]?.ToString()) + "</b></td>" +
+                            "<td>" + E(vo["toneOrCode"]?.ToString() ?? vo["ToneOrCode"]?.ToString()) + "</td></tr>");
+                    }
+                }
+
+                string sarnegClean = SarnegDictionaryService.NormalizePolishChars(d.SarnegKeyWord10 ?? "PRZEDMIOTY").Trim().PadRight(10, 'X').Substring(0, 10);
+                var sarnegLettersRow = new StringBuilder();
+                var sarnegDigitsRow = new StringBuilder();
+                for (int i = 0; i < 10; i++)
+                {
+                    sarnegLettersRow.Append("<th style='text-align:center;font-size:13px;'>").Append(sarnegClean[i]).Append("</th>");
+                    sarnegDigitsRow.Append("<td style='text-align:center;font-weight:bold;'>").Append(i).Append("</td>");
+                }
+
+                html.AppendLine("<div style='" + classStyle + "'>" + E(d.Classification) + " — " + E(d.DayTitle.ToUpperInvariant()) + " (" + E(d.DateIso) + ")</div>");
+                html.AppendLine("<div class='header-box'><div>");
+                html.AppendLine("<h1>OPORD " + E(eventName) + " — " + E(d.OperationNumber) + " [" + E(d.DayTitle) + " / " + E(d.DateIso) + "]</h1>");
+                html.AppendLine("<div><b>" + BuilderI18n.T("Sztab (HQ):", "Issuing HQ:") + "</b> " + E(d.IssuingHq) + " &nbsp;|&nbsp; <b>DTG:</b> " + E(d.DtgIssued) + "</div>");
+                html.AppendLine("<div><b>" + BuilderI18n.T("Rejon AO:", "AO Region:") + "</b> " + E(d.LocationName) + " (" + E(d.LocationLat) + "°N, " + E(d.LocationLon) + "°E) &nbsp;|&nbsp; <b>" + BuilderI18n.T("Mapy:", "Maps:") + "</b> " + E(d.MapReferences) + "</div>");
+                html.AppendLine("</div><div class='faction-badge'>" + E(factionName) + "<br/><span style='font-size:11px;'>" + E(d.DayTitle) + "</span></div></div>");
+
+                html.AppendLine("<table><thead><tr><th style='width:22%'>" + BuilderI18n.T("📅 Dzień i Data", "📅 Day & Date") + "</th><th style='width:38%'>" + BuilderI18n.T("Pogoda METOC / Słońce / Księżyc", "METOC Weather / Sun / Moon") + "</th><th>" + BuilderI18n.T("Harmonogram dnia", "Day Schedule") + "</th></tr></thead><tbody>");
+                html.AppendLine("<tr><td><b>" + E(d.DayTitle) + "</b><br/>" + E(d.DateIso) + "</td>" +
+                                "<td>" + E(d.MetocCondition) + "<br/>Temp: " + E(d.MetocTemperature) + "<br/>" + E(d.MetocSunTimes) + "<br/>" + E(d.MetocMoonPhase) + "</td>" +
+                                "<td>" + E(d.DaySpecificTasks) + "</td></tr>");
                 html.AppendLine("</tbody></table>");
+
+                html.AppendLine("<h2>" + BuilderI18n.T("1. SYTUACJA (" + d.DayTitle.ToUpperInvariant() + ")", "1. SITUATION (" + d.DayTitle.ToUpperInvariant() + ")") + "</h2>");
+                html.AppendLine("<div class='sub-p'><b>" + BuilderI18n.T("A. Obszar zainteresowania (Mapa, POI, KML/GPX):", "A. Area of Interest (Map, POI, KML/GPX):") + "</b><br/>" + E(d.AreaOfInterestPoiDesc) + "</div>");
+                html.AppendLine("<div class='sub-p'><b>" + BuilderI18n.T("B. Obszar działań (Teren i Pogoda METOC):", "B. Area of Operations (Terrain & METOC):") + "</b><br/>" + E(d.TerrainAndWeather) + "</div>");
+                html.AppendLine("<div class='sub-p'><b>" + BuilderI18n.T("C. Siły wroga (Skład, lokalizacje, COA):", "C. Enemy Forces (Composition, locations, COA):") + "</b><br/>" + E(d.EnemyForces) + "</div>");
+                html.AppendLine("<div class='sub-p'><b>" + BuilderI18n.T("D. Siły przyjazne (Misja HQ i sąsiadów):", "D. Friendly Forces (HQ & adjacent units):") + "</b><br/>" + E(d.FriendlyForces) + "</div>");
+
+                html.AppendLine("<h2>" + BuilderI18n.T("II. MISJA (" + d.DayTitle.ToUpperInvariant() + ")", "II. MISSION (" + d.DayTitle.ToUpperInvariant() + ")") + "</h2>");
+                html.AppendLine("<div class='sub-p'><b>" + BuilderI18n.T("A. Opis fabularny:", "A. Story / Lore:") + "</b> " + E(d.MissionLoreDesc) + "</div>");
+                html.AppendLine("<div class='mission-box'>" + BuilderI18n.T("B. Główne zadanie (" + d.DayTitle + "): ", "B. Primary Mission (" + d.DayTitle + "): ") + E(string.IsNullOrWhiteSpace(d.MissionFullStatement) ? Compose5WMissionTextForDay(d) : d.MissionFullStatement) + "</div>");
+                html.AppendLine("<div class='sub-p'><b>" + BuilderI18n.T("C. Dodatkowe zadania (" + d.DayTitle + "):", "C. Additional Tasks (" + d.DayTitle + "):") + "</b><br/>" + E(d.AdditionalTasksSummary) + "</div>");
+
+                html.AppendLine("<h2>" + BuilderI18n.T("III. WYKONANIE (" + d.DayTitle.ToUpperInvariant() + ")", "III. EXECUTION (" + d.DayTitle.ToUpperInvariant() + ")") + "</h2>");
+                html.AppendLine("<div class='sub-p'><b>" + BuilderI18n.T("A. Zamiar dowódcy:", "A. Commander's Intent:") + "</b><br/>" + E(d.CommandersIntent) + "</div>");
+                html.AppendLine("<div class='sub-p'><b>" + BuilderI18n.T("B. Priorytety i styl działania:", "B. Priorities & Style of Action:") + "</b><br/>" + E(d.ConceptOfOperations) + "</div>");
+                html.AppendLine("<div class='sub-p'><b>" + BuilderI18n.T("C. Łańcuch dowodzenia:", "C. Chain of Command:") + "</b> <b>" + E(d.SuccessionOfCommand) + "</b></div>");
+
+                if (d.EnableSquadRosterTable && d.SquadRoster.Count > 0)
+                {
+                    html.AppendLine("<div class='sub-p'><b>" + BuilderI18n.T("D. Skład oddziału i podział ról (" + d.DayTitle + "):", "D. Squad Roster & Roles (" + d.DayTitle + "):") + "</b></div>");
+                    html.AppendLine("<table><thead><tr><th>" + BuilderI18n.T("Ksywa (Operator / Zespół)", "Callsign (Operator / Team)") + "</th><th>" + BuilderI18n.T("Rola 1", "Primary Role") + "</th><th>" + BuilderI18n.T("Rola 2 (opcjonalnie)", "Secondary Role") + "</th><th>" + BuilderI18n.T("Typ broni / Sprzęt", "Weapon / Equipment") + "</th></tr></thead><tbody>");
+                    foreach (var r in d.SquadRoster)
+                    {
+                        html.AppendLine("<tr><td><b>" + E(r.OperatorOrTeam) + "</b></td><td>" + E(r.PrimaryRole) + "</td><td>" + E(r.SecondaryRole) + "</td><td>" + E(r.WeaponAndGear) + "</td></tr>");
+                    }
+                    html.AppendLine("</tbody></table>");
+                }
+
+                html.AppendLine("<div class='sub-p'><b>" + BuilderI18n.T("E. Tabela łączności (" + d.DayTitle + ")", "E. Communications Table (" + d.DayTitle + ")") + " (LoRa Meshtastic: " + E(chName) + " [" + E(region) + "/" + E(preset) + "] | OTS: " + E(ots) + " | SOS ORGA: " + E(phone) + "):</b></div>");
+                html.AppendLine("<table><thead><tr><th>" + BuilderI18n.T("Rola / Kanał", "Role / Channel") + "</th><th>" + BuilderI18n.T("Pasmo", "Band") + "</th><th>" + BuilderI18n.T("Częstotliwość / Kanał", "Frequency / Channel") + "</th><th>" + BuilderI18n.T("Ton CTCSS / Kod DMR", "CTCSS Tone / DMR Code") + "</th></tr></thead><tbody>" + radioRowsHtml + "</tbody></table>");
+
+                html.AppendLine("<div class='sub-p'><b>" + BuilderI18n.T("F. Sygnały, słowa kodowe i rozpoznawcze (" + d.DayTitle + "):", "F. Signals, Codewords & Challenge (" + d.DayTitle + "):") + "</b><br/><b>" + BuilderI18n.T("1. Kryptonimy celów:", "1. Objective Code Names:") + "</b> " + E(d.TargetCodeNames) + "</div>");
+                html.AppendLine("<table><thead><tr><th colspan='10' style='text-align:center;'>" + BuilderI18n.T("2. Tabela krypto SARNEG (" + d.DayTitle + " — Słowo-klucz: ", "2. SARNEG Crypto Table (" + d.DayTitle + " — Keyword: ") + E(sarnegClean) + ")</th></tr><tr>" + sarnegLettersRow + "</tr></thead><tbody><tr>" + sarnegDigitsRow + "</tr></tbody></table>");
+                html.AppendLine("<div class='sub-p'><b>" + BuilderI18n.T("3. Hasła rozpoznawcze (" + d.DayTitle + " — werbalne i niewerbalne):", "3. Challenge & Password (" + d.DayTitle + " — verbal & non-verbal):") + "</b><br/>" + E(d.ChallengeAndPassword) + "</div>");
+                html.AppendLine("<div class='sub-p'><b>" + BuilderI18n.T("G. Leczenie i zasady Respawn:", "G. Medical & Respawn Rules:") + "</b><br/>" + E(d.MedevacRules) + "</div>");
+
+                html.AppendLine("<h2>" + BuilderI18n.T("IV. LOGISTYKA (" + d.DayTitle.ToUpperInvariant() + ")", "IV. LOGISTICS (" + d.DayTitle.ToUpperInvariant() + ")") + "</h2>");
+                html.AppendLine("<div class='sub-p'><b>" + BuilderI18n.T("A. Styl wyposażenia:", "A. Loadout Style:") + "</b> " + E(d.RespawnAndSupply) + "</div>");
+                html.AppendLine("<div class='sub-p'><b>" + BuilderI18n.T("B. Wyposażenie oddziału (SZPEJLISTA):", "B. Squad Equipment Checklist:") + "</b><br/>" + E(d.SquadGearChecklist) + "</div>");
+                html.AppendLine("<div class='sub-p'><b>" + BuilderI18n.T("C. Wyposażenie specjalne:", "C. Special Equipment:") + "</b><br/>" + E(d.SpecialEquipment) + "</div>");
+                html.AppendLine("<div class='sub-p'><b>" + BuilderI18n.T("D. Dojazd (Parking, odległość, transport):", "D. Travel & Parking:") + "</b><br/>" + E(d.TravelAndParking) + "</div>");
+                html.AppendLine("<div class='sub-p'><b>" + BuilderI18n.T("E. Regulamin gry:", "E. Game Rules:") + "</b> " + E(d.GameRulesLink) + "</div>");
+
+                if (d.EnableRolesAnnex && d.CustomRolesAnnex.Count > 0)
+                {
+                    html.AppendLine("<h2>" + BuilderI18n.T("ZAŁĄCZNIK 1. PODZIAŁ RÓL DRUŻYNOWYCH (" + d.DayTitle.ToUpperInvariant() + ")", "ANNEX 1. SQUAD ROLE DEFINITIONS (" + d.DayTitle.ToUpperInvariant() + ")") + "</h2>");
+                    html.AppendLine("<table><thead><tr><th style='width:22%'>" + BuilderI18n.T("Rola", "Role") + "</th><th>" + BuilderI18n.T("Opis obowiązków", "Duties Description") + "</th><th style='width:15%'>" + BuilderI18n.T("Zajęcie", "Duty Mode") + "</th></tr></thead><tbody>");
+                    foreach (var roleDef in d.CustomRolesAnnex)
+                    {
+                        html.AppendLine("<tr><td><b>" + E(roleDef.RoleName) + "</b></td><td>" + E(roleDef.Description) + "</td><td>" + E(roleDef.DutyMode) + "</td></tr>");
+                    }
+                    html.AppendLine("</tbody></table>");
+                }
+
+                html.AppendLine("<h2>" + BuilderI18n.T("ZAŁĄCZNIK 2. OPRACOWANIE ZADAŃ (" + d.DayTitle.ToUpperInvariant() + ")", "ANNEX 2. TASKS BREAKDOWN (" + d.DayTitle.ToUpperInvariant() + ")") + "</h2>");
+                html.AppendLine("<div class='sub-p'>" + E(d.Annex2TasksAnalysis) + "</div>");
+                html.AppendLine("<div style='" + classStyle + "margin-top:12px;'>" + E(d.Classification) + " — " + E(d.DayTitle) + " — Field TAK Hub v3.3</div>");
             }
 
-            html.AppendLine("<h2>" + BuilderI18n.T("1. SYTUACJA", "1. SITUATION") + "</h2>");
-            html.AppendLine("<div class='sub-p'><b>" + BuilderI18n.T("A. Obszar zainteresowania (Mapa, POI, KML/GPX):", "A. Area of Interest (Map, POI, KML/GPX):") + "</b><br/>" + E(m.AreaOfInterestPoiDesc) + "</div>");
-            html.AppendLine("<div class='sub-p'><b>" + BuilderI18n.T("B. Obszar działań (Teren i Pogoda METOC):", "B. Area of Operations (Terrain & METOC):") + "</b><br/>" + E(primaryDay.TerrainAndWeather) + "</div>");
-            html.AppendLine("<div class='sub-p'><b>" + BuilderI18n.T("C. Siły wroga (Skład, lokalizacje, COA):", "C. Enemy Forces (Composition, locations, COA):") + "</b><br/>" + E(m.EnemyForces) + "</div>");
-            html.AppendLine("<div class='sub-p'><b>" + BuilderI18n.T("D. Siły przyjazne (Misja HQ i sąsiadów):", "D. Friendly Forces (HQ & adjacent units):") + "</b><br/>" + E(m.FriendlyForces) + "</div>");
-
-            html.AppendLine("<h2>" + BuilderI18n.T("II. MISJA", "II. MISSION") + "</h2>");
-            html.AppendLine("<div class='sub-p'><b>" + BuilderI18n.T("A. Opis fabularny:", "A. Story / Lore:") + "</b> " + E(m.MissionLoreDesc) + "</div>");
-            html.AppendLine("<div class='mission-box'>" + BuilderI18n.T("B. Główne zadanie: ", "B. Primary Mission: ") + E(string.IsNullOrWhiteSpace(m.MissionFullStatement) ? Compose5WMissionText(m) : m.MissionFullStatement) + "</div>");
-            html.AppendLine("<div class='sub-p'><b>" + BuilderI18n.T("C. Dodatkowe zadania:", "C. Additional Tasks:") + "</b><br/>" + E(m.AdditionalTasksSummary) + "</div>");
-
-            html.AppendLine("<h2>" + BuilderI18n.T("III. WYKONANIE", "III. EXECUTION") + "</h2>");
-            html.AppendLine("<div class='sub-p'><b>" + BuilderI18n.T("A. Zamiar dowódcy:", "A. Commander's Intent:") + "</b><br/>" + E(m.CommandersIntent) + "</div>");
-            html.AppendLine("<div class='sub-p'><b>" + BuilderI18n.T("B. Priorytety i styl działania:", "B. Priorities & Style of Action:") + "</b><br/>" + E(m.ConceptOfOperations) + "</div>");
-            html.AppendLine("<div class='sub-p'><b>" + BuilderI18n.T("C. Łańcuch dowodzenia:", "C. Chain of Command:") + "</b> <b>" + E(m.SuccessionOfCommand) + "</b></div>");
-
-            if (m.EnableSquadRosterTable && m.SquadRoster.Count > 0)
-            {
-                html.AppendLine("<div class='sub-p'><b>" + BuilderI18n.T("D. Skład oddziału i podział ról:", "D. Squad Roster & Roles:") + "</b></div>");
-                html.AppendLine("<table><thead><tr><th>" + BuilderI18n.T("Ksywa (Operator / Zespół)", "Callsign (Operator / Team)") + "</th><th>" + BuilderI18n.T("Rola 1", "Primary Role") + "</th><th>" + BuilderI18n.T("Rola 2 (opcjonalnie)", "Secondary Role") + "</th><th>" + BuilderI18n.T("Typ broni / Sprzęt", "Weapon / Equipment") + "</th></tr></thead><tbody>");
-                foreach (var r in m.SquadRoster)
-                {
-                    html.AppendLine("<tr><td><b>" + E(r.OperatorOrTeam) + "</b></td><td>" + E(r.PrimaryRole) + "</td><td>" + E(r.SecondaryRole) + "</td><td>" + E(r.WeaponAndGear) + "</td></tr>");
-                }
-                html.AppendLine("</tbody></table>");
-            }
-
-            html.AppendLine("<div class='sub-p'><b>" + BuilderI18n.T("E. Tabela łączności", "E. Communications Table") + " (LoRa Meshtastic: " + E(chName) + " [" + E(region) + "/" + E(preset) + "] | OTS: " + E(ots) + " | SOS ORGA: " + E(phone) + "):</b></div>");
-            html.AppendLine("<table><thead><tr><th>" + BuilderI18n.T("Rola / Kanał", "Role / Channel") + "</th><th>" + BuilderI18n.T("Pasmo", "Band") + "</th><th>" + BuilderI18n.T("Częstotliwość / Kanał", "Frequency / Channel") + "</th><th>" + BuilderI18n.T("Ton CTCSS / Kod DMR", "CTCSS Tone / DMR Code") + "</th></tr></thead><tbody>" + radioRowsHtml + "</tbody></table>");
-
-            html.AppendLine("<div class='sub-p'><b>" + BuilderI18n.T("F. Sygnały, słowa kodowe i rozpoznawcze:", "F. Signals, Codewords & Challenge:") + "</b><br/><b>" + BuilderI18n.T("1. Kryptonimy celów:", "1. Objective Code Names:") + "</b> " + E(m.TargetCodeNames) + "</div>");
-            html.AppendLine("<table><thead><tr><th colspan='10' style='text-align:center;'>" + BuilderI18n.T("2. Tabela krypto SARNEG główna (Słowo-klucz: ", "2. Main SARNEG Crypto Table (Keyword: ") + E(sarnegClean) + ")</th></tr><tr>" + sarnegLettersRow + "</tr></thead><tbody><tr>" + sarnegDigitsRow + "</tr></tbody></table>");
-            html.AppendLine("<div class='sub-p'><b>" + BuilderI18n.T("3. Hasła rozpoznawcze (werbalne i niewerbalne):", "3. Challenge & Password (verbal & non-verbal):") + "</b><br/>" + E(m.ChallengeAndPassword) + "</div>");
-            html.AppendLine("<div class='sub-p'><b>" + BuilderI18n.T("G. Leczenie i zasady Respawn:", "G. Medical & Respawn Rules:") + "</b><br/>" + E(m.MedevacRules) + "</div>");
-
-            html.AppendLine("<h2>" + BuilderI18n.T("IV. LOGISTYKA", "IV. LOGISTICS") + "</h2>");
-            html.AppendLine("<div class='sub-p'><b>" + BuilderI18n.T("A. Styl wyposażenia:", "A. Loadout Style:") + "</b> " + E(m.RespawnAndSupply) + "</div>");
-            html.AppendLine("<div class='sub-p'><b>" + BuilderI18n.T("B. Wyposażenie oddziału (SZPEJLISTA):", "B. Squad Equipment Checklist:") + "</b><br/>" + E(m.SquadGearChecklist) + "</div>");
-            html.AppendLine("<div class='sub-p'><b>" + BuilderI18n.T("C. Wyposażenie specjalne:", "C. Special Equipment:") + "</b><br/>" + E(m.SpecialEquipment) + "</div>");
-            html.AppendLine("<div class='sub-p'><b>" + BuilderI18n.T("D. Dojazd (Parking, odległość, transport):", "D. Travel & Parking:") + "</b><br/>" + E(m.TravelAndParking) + "</div>");
-            html.AppendLine("<div class='sub-p'><b>" + BuilderI18n.T("E. Regulamin gry:", "E. Game Rules:") + "</b> " + E(m.GameRulesLink) + "</div>");
-
-            if (m.EnableRolesAnnex && m.CustomRolesAnnex.Count > 0)
-            {
-                html.AppendLine("<h2>" + BuilderI18n.T("ZAŁĄCZNIK 1. PODZIAŁ RÓL DRUŻYNOWYCH", "ANNEX 1. SQUAD ROLE DEFINITIONS") + "</h2>");
-                html.AppendLine("<table><thead><tr><th style='width:22%'>" + BuilderI18n.T("Rola", "Role") + "</th><th>" + BuilderI18n.T("Opis obowiązków", "Duties Description") + "</th><th style='width:15%'>" + BuilderI18n.T("Zajęcie", "Duty Mode") + "</th></tr></thead><tbody>");
-                foreach (var roleDef in m.CustomRolesAnnex)
-                {
-                    html.AppendLine("<tr><td><b>" + E(roleDef.RoleName) + "</b></td><td>" + E(roleDef.Description) + "</td><td>" + E(roleDef.DutyMode) + "</td></tr>");
-                }
-                html.AppendLine("</tbody></table>");
-            }
-
-            html.AppendLine("<h2>" + BuilderI18n.T("ZAŁĄCZNIK 2. OPRACOWANIE ZADAŃ", "ANNEX 2. TASKS BREAKDOWN") + "</h2>");
-            html.AppendLine("<div class='sub-p'>" + E(m.Annex2TasksAnalysis) + "</div>");
-            html.AppendLine("<div class='classification' style='margin-top:12px;'>" + E(m.Classification) + " — Field TAK Hub v3.2</div>");
             html.AppendLine("</body></html>");
             return html.ToString();
         }
@@ -1277,70 +1433,79 @@ public static OpordParagraphModel GetOrCreateModel(string factionName)
             var exportedDays = GetSelectedDaysForExport(m);
             string eventName = win != null ? TacticalConfigPanel.GetEventNameFromWindow(win) : "OPERACJA";
             var sb = new StringBuilder();
-            sb.AppendLine("# 📋 " + m.OperationNumber + " — " + eventName + " [" + factionName + "]");
-            sb.AppendLine("`" + m.Classification + "` | **DTG:** `" + m.DtgIssued + "` | **HQ:** `" + m.IssuingHq + "`");
-            sb.AppendLine("---");
 
-            foreach (var d in exportedDays)
+            for (int dayIdx = 0; dayIdx < exportedDays.Count; dayIdx++)
             {
-                sb.AppendLine("### 📅 " + d.DayTitle + " (" + d.DateIso + ") — " + d.LocationName);
-                sb.AppendLine(d.DaySpecificTasks);
-                sb.AppendLine("**METOC / Teren:**\n" + d.TerrainAndWeather);
+                var d = exportedDays[dayIdx];
+                EnsureDayDefaultsInitialized(d, factionName);
+
+                if (dayIdx > 0)
+                {
+                    sb.AppendLine("\n========================================\n");
+                }
+
+                sb.AppendLine("# 📋 " + d.OperationNumber + " — " + eventName + " [" + factionName + " — " + d.DayTitle + " (" + d.DateIso + ")]");
+                sb.AppendLine("`" + d.Classification + "` | **DTG:** `" + d.DtgIssued + "` | **HQ:** `" + d.IssuingHq + "`");
+                sb.AppendLine("**Harmonogram dnia (" + d.DayTitle + "):**\n" + d.DaySpecificTasks);
+                sb.AppendLine("---");
+                sb.AppendLine("## 1️⃣ " + BuilderI18n.T("SYTUACJA (" + d.DayTitle + ")", "SITUATION (" + d.DayTitle + ")"));
+                sb.AppendLine("- **A. AOI / POI:** " + d.AreaOfInterestPoiDesc);
+                sb.AppendLine("- **B. Teren i METOC (" + d.DayTitle + "):**\n" + d.TerrainAndWeather);
+                sb.AppendLine("- **C. Siły wroga (COA):** " + d.EnemyForces);
+                sb.AppendLine("- **D. Siły przyjazne:** " + d.FriendlyForces);
                 sb.AppendLine();
-            }
-
-            sb.AppendLine("## 1️⃣ " + BuilderI18n.T("SYTUACJA (SITUATION & METOC)", "SITUATION & METOC"));
-            sb.AppendLine("- **A. AOI / POI:** " + m.AreaOfInterestPoiDesc);
-            sb.AppendLine("- **C. Enemy Forces (COA):** " + m.EnemyForces);
-            sb.AppendLine("- **D. Friendly Forces:** " + m.FriendlyForces);
-            sb.AppendLine();
-            sb.AppendLine("## 2️⃣ " + BuilderI18n.T("MISJA (MISSION)", "MISSION"));
-            sb.AppendLine("- **A. Lore:** " + m.MissionLoreDesc);
-            sb.AppendLine("> 🎯 **B. Primary Mission:** **" + Compose5WMissionText(m) + "**");
-            sb.AppendLine("- **C. Additional Tasks:**\n" + m.AdditionalTasksSummary);
-            sb.AppendLine();
-            sb.AppendLine("## 3️⃣ " + BuilderI18n.T("WYKONANIE (EXECUTION)", "EXECUTION"));
-            sb.AppendLine("- **A. Commander's Intent:** " + m.CommandersIntent);
-            sb.AppendLine("- **B. Style of Action:** " + m.ConceptOfOperations);
-            sb.AppendLine("- **C. Chain of Command:** `" + m.SuccessionOfCommand + "`");
-            if (m.EnableSquadRosterTable && m.SquadRoster.Count > 0)
-            {
-                sb.AppendLine("**D. Squad Roster:**");
+                sb.AppendLine("## 2️⃣ " + BuilderI18n.T("MISJA (" + d.DayTitle + ")", "MISSION (" + d.DayTitle + ")"));
+                sb.AppendLine("- **A. Opis fabularny:** " + d.MissionLoreDesc);
+                sb.AppendLine("> 🎯 **B. Główne zadanie (" + d.DayTitle + "):** **" + (string.IsNullOrWhiteSpace(d.MissionFullStatement) ? Compose5WMissionTextForDay(d) : d.MissionFullStatement) + "**");
+                sb.AppendLine("- **C. Dodatkowe zadania:**\n" + d.AdditionalTasksSummary);
+                sb.AppendLine();
+                sb.AppendLine("## 3️⃣ " + BuilderI18n.T("WYKONANIE (" + d.DayTitle + ")", "EXECUTION (" + d.DayTitle + ")"));
+                sb.AppendLine("- **A. Zamiar dowódcy:** " + d.CommandersIntent);
+                sb.AppendLine("- **B. Styl działania:** " + d.ConceptOfOperations);
+                sb.AppendLine("- **C. Łańcuch dowodzenia:** `" + d.SuccessionOfCommand + "`");
+                if (d.EnableSquadRosterTable && d.SquadRoster.Count > 0)
+                {
+                    sb.AppendLine("**D. Skład oddziału (" + d.DayTitle + "):**");
+                    sb.AppendLine("```text");
+                    foreach (var r in d.SquadRoster)
+                    {
+                        sb.AppendLine(string.Format("{0,-12} | {1,-24} | {2,-20} | {3}", r.OperatorOrTeam, r.PrimaryRole, r.SecondaryRole, r.WeaponAndGear));
+                    }
+                    sb.AppendLine("```");
+                }
+                sb.AppendLine("**E. Tabela łączności (" + d.DayTitle + "):**");
                 sb.AppendLine("```text");
-                foreach (var r in m.SquadRoster)
-                {
-                    sb.AppendLine(string.Format("{0,-12} | {1,-24} | {2,-20} | {3}", r.OperatorOrTeam, r.PrimaryRole, r.SecondaryRole, r.WeaponAndGear));
-                }
+                sb.AppendLine("• Kanał główny:   " + d.PrimaryRadioFreq);
+                sb.AppendLine("• Kanał zapasowy: " + d.BackupRadioFreq);
+                sb.AppendLine("• Kanał HQ:       " + d.HqRadioFreq);
+                sb.AppendLine(BuildLiveSignalSummaryText(win, factionName));
                 sb.AppendLine("```");
-            }
-            sb.AppendLine("**E. Comms Table:**");
-            sb.AppendLine("```text");
-            sb.AppendLine("• Primary: " + m.PrimaryRadioFreq);
-            sb.AppendLine("• Backup:  " + m.BackupRadioFreq);
-            sb.AppendLine("• HQ:      " + m.HqRadioFreq);
-            sb.AppendLine(BuildLiveSignalSummaryText(win, factionName));
-            sb.AppendLine("```");
-            sb.AppendLine("**F. Signals & SARNEG:**");
-            sb.AppendLine("- **Code Names:** " + m.TargetCodeNames);
-            sb.AppendLine("```text\n" + FormatSarnegMatrixPreview(m.SarnegKeyWord10) + "\n```");
-            sb.AppendLine("- **Challenge & Password:**\n" + m.ChallengeAndPassword);
-            sb.AppendLine("- **G. MEDEVAC / Respawn:** " + m.MedevacRules);
-            sb.AppendLine();
-            sb.AppendLine("## 4️⃣ " + BuilderI18n.T("LOGISTYKA (LOGISTICS)", "LOGISTICS"));
-            sb.AppendLine("- **A. Loadout:** " + m.RespawnAndSupply);
-            sb.AppendLine("- **B. Checklist:** " + m.SquadGearChecklist);
-            sb.AppendLine("- **C. Special Gear:** " + m.SpecialEquipment);
-            sb.AppendLine("- **D. Travel & Parking:** " + m.TravelAndParking);
-            sb.AppendLine("- **E. Rules:** " + m.GameRulesLink);
-            if (m.EnableRolesAnnex && m.CustomRolesAnnex.Count > 0)
-            {
+                sb.AppendLine("**F. Sygnały, SARNEG i Hasła (" + d.DayTitle + "):**");
+                sb.AppendLine("- **Kryptonimy celów:** " + d.TargetCodeNames);
+                sb.AppendLine("```text\n" + FormatSarnegMatrixPreview(d.SarnegKeyWord10) + "\n```");
+                sb.AppendLine("- **Hasła rozpoznawcze (" + d.DayTitle + "):**\n" + d.ChallengeAndPassword);
+                sb.AppendLine("- **G. MEDEVAC / Respawn:** " + d.MedevacRules);
                 sb.AppendLine();
-                sb.AppendLine("## 📎 " + BuilderI18n.T("ZAŁĄCZNIK 1. PODZIAŁ RÓL DRUŻYNOWYCH", "ANNEX 1. SQUAD ROLE DEFINITIONS"));
-                foreach (var rd in m.CustomRolesAnnex)
+                sb.AppendLine("## 4️⃣ " + BuilderI18n.T("LOGISTYKA (" + d.DayTitle + ")", "LOGISTICS (" + d.DayTitle + ")"));
+                sb.AppendLine("- **A. Styl wyposażenia:** " + d.RespawnAndSupply);
+                sb.AppendLine("- **B. SZPEJLISTA:** " + d.SquadGearChecklist);
+                sb.AppendLine("- **C. Wyposażenie specjalne:** " + d.SpecialEquipment);
+                sb.AppendLine("- **D. Dojazd i parking:** " + d.TravelAndParking);
+                sb.AppendLine("- **E. Regulamin gry:** " + d.GameRulesLink);
+                if (d.EnableRolesAnnex && d.CustomRolesAnnex.Count > 0)
                 {
-                    sb.AppendLine("- **" + rd.RoleName + "** (`" + rd.DutyMode + "`): " + rd.Description);
+                    sb.AppendLine();
+                    sb.AppendLine("## 📎 " + BuilderI18n.T("ZAŁĄCZNIK 1. PODZIAŁ RÓL DRUŻYNOWYCH (" + d.DayTitle + ")", "ANNEX 1. SQUAD ROLE DEFINITIONS (" + d.DayTitle + ")"));
+                    foreach (var rd in d.CustomRolesAnnex)
+                    {
+                        sb.AppendLine("- **" + rd.RoleName + "** (`" + rd.DutyMode + "`): " + rd.Description);
+                    }
                 }
+                sb.AppendLine();
+                sb.AppendLine("## 📎 " + BuilderI18n.T("ZAŁĄCZNIK 2. OPRACOWANIE ZADAŃ (" + d.DayTitle + ")", "ANNEX 2. TASKS BREAKDOWN (" + d.DayTitle + ")"));
+                sb.AppendLine(d.Annex2TasksAnalysis);
             }
+
             return sb.ToString();
         }
     }
