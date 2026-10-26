@@ -722,6 +722,15 @@ namespace FieldTakHub.Builder.Services
         public string TargetFaction { get; set; } = "BLUFOR";
         public List<OpordDayPlanModel> Days { get; set; } = new List<OpordDayPlanModel>();
         public int ActiveDayIndex { get; set; } = 0;
+        public string MetocCondition { get; set; } = "-";
+        public string MetocTemperature { get; set; } = "-";
+        public string MetocWind { get; set; } = "-";
+        public string MetocHumidityPrecip { get; set; } = "-";
+        public string MetocSunTimes { get; set; } = "-";
+        public string MetocMoonPhase { get; set; } = "-";
+        public string TasksToSubordinateUnits { get; set; } = "";
+        public string CoordinatingAndRoe { get; set; } = "";
+        public List<OpordCodewordRow> CodewordsTable { get; set; } = new List<OpordCodewordRow>();
 
         // Pola zachowane dla kompatybilności wstecznej przy odczycie starszych plików JSON
         public bool IsSecretClassification { get; set; } = false;
