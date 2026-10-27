@@ -688,24 +688,24 @@ class FthTacticalDashboardController(private val activity: Activity) {
         }
 
         val btnPresetBlufor = createActionButton(
-            "🔵 BLUFOR (GGZS-TAK)",
+            "🔵 BLUFOR (BLUFOR-MESH)",
             FthTheme.AccentBlue,
             Color.WHITE
         ) {
             val bluProfile = buildBuiltInFactionPreset(isOpfor = false)
-            appendLog(FthSessionManager.t("🔵 Wybrano profil BLUFOR (GGZS-TAK). Podaj Callsign...", "🔵 Selected BLUFOR (GGZS-TAK). Enter Callsign..."))
+            appendLog(FthSessionManager.t("🔵 Wybrano profil BLUFOR (BLUFOR-MESH). Podaj Callsign...", "🔵 Selected BLUFOR (BLUFOR-MESH). Enter Callsign..."))
             showDynamicCallsignInjectionModal(bluProfile, isNewScan = true)
         }.apply {
             layoutParams = LinearLayout.LayoutParams(0, FthTheme.dp(activity, 40f), 1f).apply { marginEnd = 6 }
         }
 
         val btnPresetOpfor = createActionButton(
-            "🔴 OPFOR (OPFOR-TAK)",
+            "🔴 OPFOR (OPFOR-MESH)",
             FthTheme.AccentRed,
             Color.WHITE
         ) {
             val opProfile = buildBuiltInFactionPreset(isOpfor = true)
-            appendLog(FthSessionManager.t("🔴 Wybrano profil OPFOR (OPFOR-TAK). Podaj Callsign...", "🔴 Selected OPFOR (OPFOR-TAK). Enter Callsign..."))
+            appendLog(FthSessionManager.t("🔴 Wybrano profil OPFOR (OPFOR-MESH). Podaj Callsign...", "🔴 Selected OPFOR (OPFOR-MESH). Enter Callsign..."))
             showDynamicCallsignInjectionModal(opProfile, isNewScan = true)
         }.apply {
             layoutParams = LinearLayout.LayoutParams(0, FthTheme.dp(activity, 40f), 1f).apply { marginStart = 6 }
@@ -1247,12 +1247,12 @@ class FthTacticalDashboardController(private val activity: Activity) {
                 colorHex = "#2684FF",
                 operatorCallsign = FthSessionManager.activeProfile.operatorCallsign.ifBlank { "Wilk-1" },
                 meshtasticShortName = FthSessionManager.activeProfile.meshtasticShortName.ifBlank { "Wlk1" },
-                channelName = "GGZS-TAK",
+                channelName = "BLUFOR-MESH",
                 pskBase64 = "YCVv8+pxmmV26ff2U0M4mami64OL7A9Z0Nyv6VgsdmE=",
                 loraRegion = "EU_868",
                 loraModemPreset = "SHORT_FAST",
                 hopLimit = 3,
-                otsHost = "ggzstak.duckdns.org",
+                otsHost = "",
                 emergencyPhone = "+48 600 000 000",
                 voiceChannels = mutableListOf(
                     FthVoiceChannel("Dowodzenie HQ", "PMR", "CH 1 (446.00625)", "CTCSS 67.0 Hz"),
@@ -1267,12 +1267,12 @@ class FthTacticalDashboardController(private val activity: Activity) {
                 colorHex = "#EB4034",
                 operatorCallsign = FthSessionManager.activeProfile.operatorCallsign.ifBlank { "Kruk-1" },
                 meshtasticShortName = "Krk1",
-                channelName = "OPFOR-TAK",
+                channelName = "OPFOR-MESH",
                 pskBase64 = "r0wqyK/h1QvcAkHvtiWwGmCVfw7hesRuXLqMBmsbCvI=",
                 loraRegion = "EU_868",
                 loraModemPreset = "SHORT_FAST",
                 hopLimit = 3,
-                otsHost = "ggzstak.duckdns.org",
+                otsHost = "",
                 emergencyPhone = "+48 600 000 000",
                 voiceChannels = mutableListOf(
                     FthVoiceChannel("Dowodzenie HQ", "PMR", "CH 4 (446.04375)", "CTCSS 100.0 Hz"),
@@ -1367,67 +1367,3 @@ class FthTacticalDashboardController(private val activity: Activity) {
     }
 }
 //===PAYLOAD_ANDROID_UI_KT===
-
-//===PAYLOAD_ANDROID_MAIN_ACTIVITY_KT===
-import android.app.Activity
-import android.content.Intent
-import android.os.Bundle
-import android.view.Window
-
-class MainActivity : Activity() {
-
-    companion object {
-        const val REQ_QR_SCAN = 9001
-        const val REQ_PICK_FILE = 9002
-    }
-
-    private var dashboardController: FthTacticalDashboardController? = null
-
-    override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
-        requestWindowFeature(Window.FEATURE_NO_TITLE)
-
-        val controller = FthTacticalDashboardController(this)
-        dashboardController = controller
-        setContentView(controller.createRootView())
-
-        handleIncomingIntent(intent)
-    }
-
-    override fun onNewIntent(intent: Intent?) {
-        super.onNewIntent(intent)
-        handleIncomingIntent(intent)
-    }
-
-    private fun handleIncomingIntent(intent: Intent?) {
-        val dataUri = intent?.data ?: return
-        val scheme = dataUri.scheme?.lowercase() ?: ""
-        if (scheme == "http" || scheme == "https" || scheme == "meshtastic") {
-            dashboardController?.handleIncomingQrOrFilePayload(dataUri.toString())
-        } else {
-            dashboardController?.handlePickedFileUri(dataUri)
-        }
-    }
-
-    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
-        super.onActivityResult(requestCode, resultCode, data)
-        if (resultCode != RESULT_OK || data == null) return
-
-        when (requestCode) {
-            REQ_QR_SCAN -> {
-                val contents = data.getStringExtra("SCAN_RESULT") ?: return
-                dashboardController?.handleIncomingQrOrFilePayload(contents)
-            }
-            REQ_PICK_FILE -> {
-                val uri = data.data ?: return
-                dashboardController?.handlePickedFileUri(uri)
-            }
-        }
-    }
-
-    override fun onDestroy() {
-        super.onDestroy()
-        FthHotspotP2pServer.stopServer()
-    }
-}
-//===PAYLOAD_ANDROID_MAIN_ACTIVITY_KT===

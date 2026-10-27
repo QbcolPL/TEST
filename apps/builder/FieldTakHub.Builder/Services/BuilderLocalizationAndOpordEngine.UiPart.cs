@@ -358,7 +358,7 @@ namespace FieldTakHub.Builder.Services
                     var dayTabBtn = new Button
                     {
                         Tag = "DYNAMIC_NO_I18N",
-                        Content = "📆 " + dayObj.DayTitle + " (" + dayObj.DateIso + ") [SARNEG: " + dayObj.SarnegKeyWord10 + "]",
+                    Content = "📆 " + dayObj.DayTitle + " (" + dayObj.DateIso + ") [SARNEG: " + dayObj.SarnegKeyWord10 + "]",
                         Height = 26,
                         Padding = new Thickness(8, 1, 8, 1),
                         Background = isSel ? TacticalConfigPanel.BrushButtonAccent : Brushes.Transparent,
@@ -581,7 +581,6 @@ namespace FieldTakHub.Builder.Services
                 TextBox terrainWeatherTextBox = null;
                 var metocStatusText = new TextBlock
                 {
-                    Tag = "DYNAMIC_NO_I18N",
                     Tag = "DYNAMIC_NO_I18N",
                     Text = BuilderI18n.T(
                         "☀️ Słońce (" + activeDay.DayTitle + "): " + activeDay.MetocSunTimes + "   |   🌙 Księżyc: " + activeDay.MetocMoonPhase + "\n🌡️ Pogoda: " + activeDay.MetocCondition + "   |   💨 Wiatr: " + activeDay.MetocWind,
@@ -1020,7 +1019,6 @@ namespace FieldTakHub.Builder.Services
 
                 var sarnegPreviewLabel = new TextBlock
                 {
-                    Tag = "DYNAMIC_NO_I18N",
                     Tag = "DYNAMIC_NO_I18N",
                     Text = FormatSarnegMatrixPreview(activeDay.SarnegKeyWord10),
                     Foreground = Brushes.White,

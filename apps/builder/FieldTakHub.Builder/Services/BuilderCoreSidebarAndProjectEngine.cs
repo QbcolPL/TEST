@@ -438,6 +438,7 @@ namespace FieldTakHub.Builder.Services
             var allElements = GetAllVisualDescendants(win).ToList();
             CaptureAndCollapseTopMenuBar(allElements);
                 CollapseObsoleteBuilderModeSelector(allElements);
+                BuilderPackageAndUiPatcher.ApplyEnhancements(win, allElements);
 
             SetPendingSidebarProjectPath(zeroPath);
             try
@@ -484,6 +485,7 @@ namespace FieldTakHub.Builder.Services
             var allElements = GetAllVisualDescendants(win).ToList();
             CaptureAndCollapseTopMenuBar(allElements);
                 CollapseObsoleteBuilderModeSelector(allElements);
+                BuilderPackageAndUiPatcher.ApplyEnhancements(win, allElements);
 
             SetPendingSidebarProjectPath(dlg.FileName);
             try
@@ -517,6 +519,7 @@ namespace FieldTakHub.Builder.Services
 
             var updatedDescendants = GetAllVisualDescendants(win).ToList();
             CollapseObsoleteBuilderModeSelector(updatedDescendants);
+            BuilderPackageAndUiPatcher.ApplyEnhancements(win, updatedDescendants);
             RemoveDuplicateInnerSidebars(win, updatedDescendants);
             BuilderI18n.ApplyLanguageToVisualTree(win);
         }
@@ -539,6 +542,7 @@ namespace FieldTakHub.Builder.Services
             var allElements = GetAllVisualDescendants(win).ToList();
             CaptureAndCollapseTopMenuBar(allElements);
                 CollapseObsoleteBuilderModeSelector(allElements);
+                BuilderPackageAndUiPatcher.ApplyEnhancements(win, allElements);
 
             if (_originalSupportCreatorButton != null)
             {
@@ -858,6 +862,7 @@ namespace FieldTakHub.Builder.Services
 
                 CaptureAndCollapseTopMenuBar(allElements);
                 CollapseObsoleteBuilderModeSelector(allElements);
+                BuilderPackageAndUiPatcher.ApplyEnhancements(win, allElements);
                 CollapseLegacyLeftSidebarColumn(win, allElements);
 
                 if (win.Content is Grid currentTopGrid && string.Equals(currentTopGrid.Tag?.ToString(), "FTH_ROOT_LAYOUT_GRID", StringComparison.Ordinal))
@@ -919,6 +924,7 @@ namespace FieldTakHub.Builder.Services
 
                 var updatedDescendants = GetAllVisualDescendants(win).ToList();
             CollapseObsoleteBuilderModeSelector(updatedDescendants);
+            BuilderPackageAndUiPatcher.ApplyEnhancements(win, updatedDescendants);
             RemoveDuplicateInnerSidebars(win, updatedDescendants);
             BuilderI18n.ApplyLanguageToVisualTree(win);
                 ApplySidebarCollapseState();
@@ -995,6 +1001,7 @@ namespace FieldTakHub.Builder.Services
                     _lastAutoI18nTick = nowTick;
                     var currentDescendants = GetAllVisualDescendants(win).ToList();
                     CollapseObsoleteBuilderModeSelector(currentDescendants);
+                    BuilderPackageAndUiPatcher.ApplyEnhancements(win, currentDescendants);
                     // I18n runs only on language toggle or module switch
                 }
                 if (_injectedSidebarContainer.Visibility != Visibility.Visible)
@@ -1526,6 +1533,7 @@ private static void CaptureAndCollapseTopMenuBar(List<DependencyObject> allEleme
             var allElements = GetAllVisualDescendants(win).ToList();
             CaptureAndCollapseTopMenuBar(allElements);
                 CollapseObsoleteBuilderModeSelector(allElements);
+                BuilderPackageAndUiPatcher.ApplyEnhancements(win, allElements);
             CollapseLegacyLeftSidebarColumn(win, allElements);
             RemoveDuplicateInnerSidebars(win, allElements);
 
@@ -1608,6 +1616,7 @@ private static void CaptureAndCollapseTopMenuBar(List<DependencyObject> allEleme
 
             var updatedDescendants = GetAllVisualDescendants(win).ToList();
             CollapseObsoleteBuilderModeSelector(updatedDescendants);
+            BuilderPackageAndUiPatcher.ApplyEnhancements(win, updatedDescendants);
             RemoveDuplicateInnerSidebars(win, updatedDescendants);
             BuilderI18n.ApplyLanguageToVisualTree(win);
             if (_injectedSidebarContainer != null)

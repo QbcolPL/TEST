@@ -111,7 +111,7 @@ object CallsignFormatter {
         if (ascii.isEmpty()) return "OPR1"
 
         val digitsMatch = Regex("(\\d+)$").find(ascii)
-        val trailingDigits = digitsMatch?.Groups?.get(1)?.value ?: ""
+        val trailingDigits = digitsMatch?.groupValues?.getOrNull(1) ?: ""
         val prefixPart = if (trailingDigits.isNotEmpty()) {
             ascii.substring(0, ascii.length - trailingDigits.length)
         } else {
@@ -233,13 +233,13 @@ data class FthFactionProfile(
     var colorHex: String = "#2684FF",
     var operatorCallsign: String = "Wilk-1",
     var meshtasticShortName: String = "Wlk1",
-    var channelName: String = "GGZS-TAK",
+    var channelName: String = "BLUFOR-MESH",
     var pskBase64: String = "YCVv8+pxmmV26ff2U0M4mami64OL7A9Z0Nyv6VgsdmE=",
     var channelUrl: String = "",
     var loraRegion: String = "EU_868",
     var loraModemPreset: String = "SHORT_FAST",
     var hopLimit: Int = 3,
-    var otsHost: String = "ggzstak.duckdns.org",
+    var otsHost: String = "",
     var enrollmentUri: String = "",
     var emergencyPhone: String = "+48 600 000 000",
     var voiceChannels: MutableList<FthVoiceChannel> = mutableListOf(
