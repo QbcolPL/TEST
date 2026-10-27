@@ -67,6 +67,7 @@ namespace FieldTakHub.Builder.Services
                 if (!File.Exists(readme))
                 {
                     File.WriteAllText(readme,
+                        "=== WSPÓLNY FOLDER ZASOBÓW FIELD TAK HUB ===\r\n" +
                         "1. apk\\     -> Instalatory .apk aplikacji ATAK-CIV oraz Meshtastic.\r\n" +
                         "2. plugins\\ -> Wtyczki .apk do aplikacji ATAK.\r\n" +
                         "3. maps\\    -> Wspólne mapy (.kmz, .gpx, .mbtiles, .sqlitedb).\r\n", Encoding.UTF8);
@@ -85,10 +86,10 @@ namespace FieldTakHub.Builder.Services
             return string.IsNullOrEmpty(r) ? "BLUFOR" : r;
         }
 
-        public static string EnsureActiveFactionOutputFolder(Window win)
+        public static string EnsureActiveFactionOutputFolder(Window win, string specificFaction = null)
         {
             EnsureSharedFolderStructure();
-            var snap = FactionLiveSyncBridge.CaptureCurrentFactionSnapshot(win, null);
+            var snap = FactionLiveSyncBridge.CaptureCurrentFactionSnapshot(win, specificFaction);
             string outDir = Path.Combine(GetWorkspaceRootDir(), "out", SanitizeFolderName(snap.FactionName));
             Directory.CreateDirectory(outDir);
             return outDir;
@@ -102,7 +103,8 @@ namespace FieldTakHub.Builder.Services
             {
                 if (win.MinWidth > 900) win.MinWidth = 900;
                 if (win.MinHeight > 580) win.MinHeight = 580;
-                CollapseEmptyLegacyTopBars(allElements);
+
+                RemoveUnsightlyTopGapAndLegacyBars(win, allElements);
                 PatchZeroExpirationInputs(allElements);
                 PatchFactionFilesAndPosterButtons(win, allElements);
                 PatchFtakGeneratorCardToThreeButtons(win, allElements);
@@ -110,36 +112,126 @@ namespace FieldTakHub.Builder.Services
             catch { }
         }
 
-        private static void CollapseEmptyLegacyTopBars(List<DependencyObject> allElements)
+        private static void RemoveUnsightlyTopGapAndLegacyBars(Window win, List<DependencyObject> allElements)
         {
-            foreach (var border in allElements.OfType<Border>())
+            // 1. Znajdź nagłówek "BUILDER v..." lub "Twórz i zarządzaj paczkami .ftak" i usuń pustą przestrzeń nad nim
+            foreach (var tb in allElements.OfType<TextBlock>())
             {
-                if (border.Visibility != Visibility.Visible) continue;
-                if (border.BorderThickness.Top > 0 || border.BorderThickness.Bottom > 0)
+                string txt = (tb.Text ?? "").Trim();
+                if (txt.StartsWith("BUILDER v", StringComparison.OrdinalIgnoreCase) ||
+                    txt.Contains("Twórz i zarządzaj paczkami .ftak", StringComparison.OrdinalIgnoreCase) ||
+                    txt.Contains("Paczka .FTAK", StringComparison.OrdinalIgnoreCase))
                 {
-                    if (border.Child == null && border.ActualHeight > 0 && border.ActualHeight < 65 && border.ActualWidth > 300)
+                    if (txt.StartsWith("BUILDER v2.", StringComparison.OrdinalIgnoreCase))
                     {
-                        border.Visibility = Visibility.Collapsed;
-                        border.Height = 0;
-                        border.BorderThickness = new Thickness(0);
+                        tb.Text = "BUILDER v3.5";
                     }
-                    else if (border.Child is Panel p)
+
+                    DependencyObject cur = tb;
+                    while (cur != null && cur != win)
                     {
-                        bool anyVisible = p.Children.Cast<UIElement>().Any(ch =>
-                            ch.Visibility == Visibility.Visible &&
-                            !(ch is Panel sp && sp.Children.Cast<UIElement>().All(x => x.Visibility != Visibility.Visible)) &&
-                            !(ch is TextBlock tb && string.IsNullOrWhiteSpace(tb.Text)));
-                        if (!anyVisible)
+                        if (cur is FrameworkElement fe)
                         {
-                            border.Visibility = Visibility.Collapsed;
-                            border.Height = 0;
-                            border.Margin = new Thickness(0);
-                            border.Padding = new Thickness(0);
-                            border.BorderThickness = new Thickness(0);
+                            // Zredukuj nadmierny górny Margin lub Padding, który tworzył pustą przerwę
+                            if (fe.Margin.Top > 14)
+                            {
+                                fe.Margin = new Thickness(fe.Margin.Left, 2, fe.Margin.Right, fe.Margin.Bottom);
+                            }
+                            if (fe is Border b && b.Padding.Top > 14)
+                            {
+                                b.Padding = new Thickness(b.Padding.Left, 6, b.Padding.Right, b.Padding.Bottom);
+                            }
+                            if (fe is Control ctrl && ctrl.Padding.Top > 14)
+                            {
+                                ctrl.Padding = new Thickness(ctrl.Padding.Left, 6, ctrl.Padding.Right, ctrl.Padding.Bottom);
+                            }
                         }
+
+                        var parent = VisualTreeHelper.GetParent(cur);
+                        if (parent is Grid parentGrid)
+                        {
+                            int myRow = Grid.GetRow((UIElement)cur);
+                            // Jeśli element jest w wierszu > 0, sprawdź czy wiersze powyżej (np. Row 0 po starym pasku) są puste i wyzeruj ich wysokość!
+                            for (int r = 0; r < myRow && r < parentGrid.RowDefinitions.Count; r++)
+                            {
+                                bool rowHasVisibleContent = false;
+                                foreach (UIElement child in parentGrid.Children)
+                                {
+                                    if (Grid.GetRow(child) == r && child.Visibility == Visibility.Visible)
+                                    {
+                                        if (HasMeaningfulVisibleContent(child))
+                                        {
+                                            rowHasVisibleContent = true;
+                                            break;
+                                        }
+                                        else
+                                        {
+                                            child.Visibility = Visibility.Collapsed;
+                                        }
+                                    }
+                                }
+
+                                if (!rowHasVisibleContent)
+                                {
+                                    parentGrid.RowDefinitions[r].Height = new GridLength(0);
+                                    parentGrid.RowDefinitions[r].MinHeight = 0;
+                                }
+                            }
+                        }
+                        else if (parent is StackPanel sp)
+                        {
+                            // Ukryj wszystkie puste kontenery znajdujące się nad bieżącym elementem w StackPanelu
+                            foreach (UIElement sibling in sp.Children)
+                            {
+                                if (sibling == cur) break;
+                                if (sibling.Visibility == Visibility.Visible && !HasMeaningfulVisibleContent(sibling))
+                                {
+                                    sibling.Visibility = Visibility.Collapsed;
+                                }
+                            }
+                        }
+
+                        cur = parent;
                     }
                 }
             }
+
+            // 2. Ukryj wszystkie puste ramki (Border) o małej wysokości i dużej szerokości (pozostałości po starym pasku)
+            foreach (var border in allElements.OfType<Border>())
+            {
+                if (border.Visibility != Visibility.Visible) continue;
+                if (!HasMeaningfulVisibleContent(border))
+                {
+                    if (border.ActualWidth > 250 && border.ActualHeight < 120)
+                    {
+                        border.Visibility = Visibility.Collapsed;
+                        border.Height = 0;
+                        border.MinHeight = 0;
+                        border.Margin = new Thickness(0);
+                        border.Padding = new Thickness(0);
+                        border.BorderThickness = new Thickness(0);
+                    }
+                }
+            }
+        }
+
+        private static bool HasMeaningfulVisibleContent(DependencyObject root)
+        {
+            if (root == null) return false;
+            if (root is UIElement uie && uie.Visibility != Visibility.Visible) return false;
+
+            var descendants = GetVisualTreeElements(root);
+            foreach (var d in descendants)
+            {
+                if (d is UIElement el && el.Visibility != Visibility.Visible) continue;
+                if (d is TextBlock tb && !string.IsNullOrWhiteSpace(tb.Text)) return true;
+                if (d is TextBox tbx && tbx.Visibility == Visibility.Visible) return true;
+                if (d is Button btn && btn.Visibility == Visibility.Visible) return true;
+                if (d is ComboBox cb && cb.Visibility == Visibility.Visible) return true;
+                if (d is CheckBox chk && chk.Visibility == Visibility.Visible) return true;
+                if (d is Image img && img.Visibility == Visibility.Visible && img.Source != null) return true;
+            }
+            return false;
         }
 
         private static void PatchZeroExpirationInputs(List<DependencyObject> allElements)
@@ -160,25 +252,59 @@ namespace FieldTakHub.Builder.Services
             foreach (var btn in allElements.OfType<Button>())
             {
                 string txt = ExtractButtonText(btn);
-                if (string.IsNullOrWhiteSpace(txt)) continue;
+                string name = btn.Name ?? "";
+                string tip = (btn.ToolTip ?? "").ToString();
 
-                if (txt.Contains("Pliki strony", StringComparison.OrdinalIgnoreCase) || txt.Contains("Faction files", StringComparison.OrdinalIgnoreCase))
+                bool isFactionFilesBtn =
+                    txt.Contains("Pliki str", StringComparison.OrdinalIgnoreCase) ||
+                    txt.Contains("Faction files", StringComparison.OrdinalIgnoreCase) ||
+                    txt.Contains("Folder strony", StringComparison.OrdinalIgnoreCase) ||
+                    name.Contains("FactionFiles", StringComparison.OrdinalIgnoreCase) ||
+                    name.Contains("PlikiStrony", StringComparison.OrdinalIgnoreCase) ||
+                    tip.Contains("Pliki str", StringComparison.OrdinalIgnoreCase);
+
+                if (isFactionFilesBtn)
                 {
+                    // Zawsze wymuszaj aktywność przycisku Pliki strony!
                     btn.IsEnabled = true;
                     btn.Visibility = Visibility.Visible;
-                    if (btn.Tag?.ToString() != "FTH_FAC_FILES_OK")
+                    btn.Opacity = 1.0;
+
+                    if (txt.Contains("Pliki strny", StringComparison.OrdinalIgnoreCase) || string.IsNullOrWhiteSpace(txt))
                     {
-                        btn.Tag = "FTH_FAC_FILES_OK";
                         btn.Content = BuilderI18n.T("📂 Pliki strony", "📂 Faction Files");
+                    }
+
+                    if (btn.Tag?.ToString() != "FTH_FAC_FILES_ACTIVE")
+                    {
+                        btn.Tag = "FTH_FAC_FILES_ACTIVE";
+                        btn.Cursor = Cursors.Hand;
+                        btn.ToolTip = BuilderI18n.T(
+                            "Otwiera folder wyjściowy out\\<STRONA>\\ dla tej strony konfliktu",
+                            "Opens the out\\<FACTION>\\ output folder for this faction");
+
+                        // Jeśli coś w kodzie próbuje zablokować przycisk (IsEnabled = false), natychmiast go odblokuj
+                        btn.IsEnabledChanged += (sender, args) =>
+                        {
+                            if (sender is Button b && !b.IsEnabled)
+                            {
+                                b.IsEnabled = true;
+                            }
+                        };
+
                         btn.PreviewMouseLeftButtonDown += (s, e) =>
                         {
                             e.Handled = true;
                             try
                             {
-                                string dir = EnsureActiveFactionOutputFolder(win);
+                                string facName = TryExtractFactionNameFromDataContext(btn);
+                                string dir = EnsureActiveFactionOutputFolder(win, facName);
                                 Process.Start(new ProcessStartInfo("explorer.exe", "\"" + dir + "\"") { UseShellExecute = true });
                             }
-                            catch { }
+                            catch (Exception ex)
+                            {
+                                MessageBox.Show("Nie udało się otworzyć folderu strony: " + ex.Message, "Field TAK Hub", MessageBoxButton.OK, MessageBoxImage.Warning);
+                            }
                         };
                     }
                 }
@@ -197,6 +323,22 @@ namespace FieldTakHub.Builder.Services
                     }
                 }
             }
+        }
+
+        private static string TryExtractFactionNameFromDataContext(FrameworkElement el)
+        {
+            try
+            {
+                object dc = el?.DataContext;
+                if (dc != null && !(dc is Window))
+                {
+                    var p = dc.GetType().GetProperty("Name") ?? dc.GetType().GetProperty("FactionName");
+                    string v = p?.GetValue(dc)?.ToString();
+                    if (!string.IsNullOrWhiteSpace(v)) return v.Trim();
+                }
+            }
+            catch { }
+            return null;
         }
 
         private static void PatchFtakGeneratorCardToThreeButtons(Window win, List<DependencyObject> allElements)
@@ -429,13 +571,22 @@ namespace FieldTakHub.Builder.Services
             if (win == null) return new List<string> { "BLUFOR", "OPFOR" };
             try
             {
+                // 1. Zczytaj z kolekcji Factions w pamięci okna MainWindow (przez refleksję)
+                foreach (var facObj in EnumerateFactionObjectsFromWindow(win))
+                {
+                    string n = GetPropStr(facObj, "Name", "FactionName", "SideName");
+                    if (!string.IsNullOrWhiteSpace(n) && !res.Contains(n, StringComparer.OrdinalIgnoreCase))
+                        res.Add(n.Trim());
+                }
+
+                // 2. Zczytaj z kontrolek UI
                 var all = BuilderPackageAndUiPatcher.GetVisualTreeElements(win);
                 foreach (var lb in all.OfType<ListBox>())
                 {
                     foreach (var it in lb.Items)
                     {
-                        string n = it?.GetType().GetProperty("Name")?.GetValue(it)?.ToString() ?? it?.ToString() ?? "";
-                        if (!string.IsNullOrWhiteSpace(n) && !res.Contains(n, StringComparer.OrdinalIgnoreCase)) res.Add(n);
+                        string n = GetPropStr(it, "Name", "FactionName") ?? it?.ToString() ?? "";
+                        if (!string.IsNullOrWhiteSpace(n) && !res.Contains(n, StringComparer.OrdinalIgnoreCase)) res.Add(n.Trim());
                     }
                 }
                 foreach (var tb in all.OfType<TextBox>())
@@ -453,6 +604,64 @@ namespace FieldTakHub.Builder.Services
             return res;
         }
 
+        private static List<object> EnumerateFactionObjectsFromWindow(Window win)
+        {
+            var list = new List<object>();
+            if (win == null) return list;
+            var roots = new List<object> { win };
+            if (win.DataContext != null) roots.Add(win.DataContext);
+
+            var flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static;
+            foreach (var r in roots)
+            {
+                var t = r.GetType();
+                foreach (var f in t.GetFields(flags))
+                {
+                    try { CollectFactions(f.GetValue(r), list); } catch { }
+                }
+                foreach (var p in t.GetProperties(flags))
+                {
+                    if (p.GetIndexParameters().Length > 0) continue;
+                    try { CollectFactions(p.GetValue(r), list); } catch { }
+                }
+            }
+            return list;
+        }
+
+        private static void CollectFactions(object val, List<object> list)
+        {
+            if (val == null || val is string || val is DependencyObject) return;
+            if (val is IEnumerable en)
+            {
+                foreach (var item in en)
+                {
+                    if (item == null || item is string) continue;
+                    var it = item.GetType();
+                    if ((it.GetProperty("ChannelName") != null || it.GetProperty("VoiceChannels") != null || it.GetProperty("Psk") != null) &&
+                        (it.GetProperty("Name") != null || it.GetProperty("FactionName") != null))
+                    {
+                        if (!list.Contains(item)) list.Add(item);
+                    }
+                }
+            }
+        }
+
+        private static string GetPropStr(object obj, params string[] names)
+        {
+            if (obj == null) return null;
+            var t = obj.GetType();
+            foreach (string n in names)
+            {
+                var p = t.GetProperty(n, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.IgnoreCase);
+                if (p != null)
+                {
+                    string v = p.GetValue(obj)?.ToString();
+                    if (!string.IsNullOrWhiteSpace(v)) return v;
+                }
+            }
+            return null;
+        }
+
         public static FactionSnapshotData CaptureCurrentFactionSnapshot(Window win, string preferredFactionName)
         {
             var snap = new FactionSnapshotData();
@@ -461,6 +670,42 @@ namespace FieldTakHub.Builder.Services
 
             try
             {
+                var memFactions = EnumerateFactionObjectsFromWindow(win);
+                object matched = null;
+                if (!string.IsNullOrWhiteSpace(preferredFactionName))
+                {
+                    matched = memFactions.FirstOrDefault(x =>
+                        string.Equals(GetPropStr(x, "Name", "FactionName"), preferredFactionName.Trim(), StringComparison.OrdinalIgnoreCase));
+                }
+                if (matched == null && memFactions.Count > 0) matched = memFactions[0];
+
+                if (matched != null)
+                {
+                    snap.FactionName = GetPropStr(matched, "Name", "FactionName") ?? snap.FactionName;
+                    snap.ColorHex = GetPropStr(matched, "ColorHex", "Color") ?? snap.ColorHex;
+                    snap.ChannelName = GetPropStr(matched, "ChannelName", "MeshChannel") ?? snap.ChannelName;
+                    snap.Psk = GetPropStr(matched, "Psk", "PskBase64") ?? snap.Psk;
+                    snap.Region = GetPropStr(matched, "LoraRegion", "Region") ?? snap.Region;
+                    snap.ModemPreset = GetPropStr(matched, "LoraModemPreset", "ModemPreset") ?? snap.ModemPreset;
+                    snap.OtsHost = GetPropStr(matched, "OtsHost", "ServerHost") ?? snap.OtsHost;
+                    snap.EmergencyPhone = GetPropStr(matched, "EmergencyPhone", "SosPhone") ?? snap.EmergencyPhone;
+
+                    var vcProp = matched.GetType().GetProperty("VoiceChannels", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.IgnoreCase);
+                    if (vcProp?.GetValue(matched) is IEnumerable vcList)
+                    {
+                        foreach (var vi in vcList)
+                        {
+                            if (vi == null) continue;
+                            string r = GetPropStr(vi, "RoleName", "Role", "Name") ?? "Kanał";
+                            string b = GetPropStr(vi, "BandType", "Band") ?? "PMR";
+                            string f = GetPropStr(vi, "FreqMhz", "Frequency", "Freq", "Channel") ?? "";
+                            string tn = GetPropStr(vi, "ToneOrCode", "Tone", "Ctcss") ?? "-";
+                            if (!string.IsNullOrWhiteSpace(f) || !string.IsNullOrWhiteSpace(r))
+                                snap.VoiceChannels.Add(new FactionVoiceRowData { Role = r, Band = b, Freq = f, Tone = tn });
+                        }
+                    }
+                }
+
                 var all = BuilderPackageAndUiPatcher.GetVisualTreeElements(win);
                 foreach (var tb in all.OfType<TextBox>())
                 {
@@ -478,18 +723,20 @@ namespace FieldTakHub.Builder.Services
                         snap.ExpirationHours = h <= 0 ? 0 : h;
                 }
 
-                foreach (var dg in all.OfType<DataGrid>())
+                if (snap.VoiceChannels.Count == 0)
                 {
-                    foreach (var row in dg.Items)
+                    foreach (var dg in all.OfType<DataGrid>())
                     {
-                        if (row == null) continue;
-                        var t = row.GetType();
-                        string r = (t.GetProperty("Role") ?? t.GetProperty("RoleName") ?? t.GetProperty("Name"))?.GetValue(row)?.ToString() ?? "";
-                        string b = (t.GetProperty("Band") ?? t.GetProperty("BandType"))?.GetValue(row)?.ToString() ?? "PMR";
-                        string f = (t.GetProperty("Frequency") ?? t.GetProperty("FreqMhz") ?? t.GetProperty("Freq"))?.GetValue(row)?.ToString() ?? "";
-                        string tn = (t.GetProperty("Tone") ?? t.GetProperty("ToneOrCode"))?.GetValue(row)?.ToString() ?? "-";
-                        if (!string.IsNullOrWhiteSpace(r) || !string.IsNullOrWhiteSpace(f))
-                            snap.VoiceChannels.Add(new FactionVoiceRowData { Role = r, Band = b, Freq = f, Tone = tn });
+                        foreach (var row in dg.Items)
+                        {
+                            if (row == null) continue;
+                            string r = GetPropStr(row, "Role", "RoleName", "Name") ?? "";
+                            string b = GetPropStr(row, "Band", "BandType") ?? "PMR";
+                            string f = GetPropStr(row, "Frequency", "FreqMhz", "Freq") ?? "";
+                            string tn = GetPropStr(row, "Tone", "ToneOrCode") ?? "-";
+                            if (!string.IsNullOrWhiteSpace(r) || !string.IsNullOrWhiteSpace(f))
+                                snap.VoiceChannels.Add(new FactionVoiceRowData { Role = r, Band = b, Freq = f, Tone = tn });
+                        }
                     }
                 }
             }
