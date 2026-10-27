@@ -1829,7 +1829,7 @@ private static void CaptureAndCollapseTopMenuBar(List<DependencyObject> allEleme
             return false;
         }
 
-        private static IEnumerable<DependencyObject> GetAllVisualDescendants(DependencyObject root)
+        internal static IEnumerable<DependencyObject> GetAllVisualDescendants(DependencyObject root)
         {
             if (root == null) yield break;
             var queue = new Queue<DependencyObject>();

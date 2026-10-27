@@ -944,6 +944,15 @@ namespace FieldTakHub.Builder.Services
     // Każdy dzień operacji posiada własny, w 100% niezależny zestaw wszystkich sekcji rozkazu OPORD!
     internal sealed class OpordDayPlanModel
     {
+        public string PrimaryChannel { get; set; } = "Dowodzenie HQ: CH 1 (446.00625 MHz) [PMR] (CTCSS 67.0 Hz)";
+        public string AlternateChannel { get; set; } = "Taktyczny: CH 3 (446.03125 MHz) [PMR] (CTCSS 88.5 Hz)";
+        public string HqChannel { get; set; } = "Ratunkowy ORGA: CH 8 (446.09375 MHz) [PMR] (Brak tonu)";
+        public string SyncedCommsMatrixSummary { get; set; } = "";
+        public bool IncludeCustomChannelsTable { get; set; } = false;
+        public string CustomChannelsTableText { get; set; } = "• Kanał Sekcji Alfa: PMR CH 2 (446.01875 MHz) | CTCSS 77.0 Hz\n• Kanał Zwiadu / Snajper: PMR CH 5 (446.05625 MHz) | CTCSS 110.9 Hz";
+        public bool IncludeAnnex3Map { get; set; } = false;
+        public string Annex3MapImagePath { get; set; } = "";
+        public string Annex3MapNotes { get; set; } = "Mapa taktyczna z siatką współrzędnych, granicą AO oraz punktami kluczowymi.";
         public string DayTitle { get; set; } = "Dzień 1";
         public bool IncludeInExport { get; set; } = true;
         public string DateIso { get; set; } = DateTime.Today.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
@@ -1016,6 +1025,7 @@ namespace FieldTakHub.Builder.Services
 
     internal sealed class OpordParagraphModel
     {
+        public string EventName { get; set; } = "MILSIM 2026";
         public string TargetFaction { get; set; } = "BLUFOR";
         public List<OpordDayPlanModel> Days { get; set; } = new List<OpordDayPlanModel>();
         public int ActiveDayIndex { get; set; } = 0;
