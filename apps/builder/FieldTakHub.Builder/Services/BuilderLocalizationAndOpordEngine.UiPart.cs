@@ -582,6 +582,7 @@ namespace FieldTakHub.Builder.Services
                 var metocStatusText = new TextBlock
                 {
                     Tag = "DYNAMIC_NO_I18N",
+                    Tag = "DYNAMIC_NO_I18N",
                     Text = BuilderI18n.T(
                         "☀️ Słońce (" + activeDay.DayTitle + "): " + activeDay.MetocSunTimes + "   |   🌙 Księżyc: " + activeDay.MetocMoonPhase + "\n🌡️ Pogoda: " + activeDay.MetocCondition + "   |   💨 Wiatr: " + activeDay.MetocWind,
                         "☀️ Sun (" + activeDay.DayTitle + "): " + activeDay.MetocSunTimes + "   |   🌙 Moon: " + activeDay.MetocMoonPhase + "\n🌡️ Weather: " + activeDay.MetocCondition + "   |   💨 Wind: " + activeDay.MetocWind),
@@ -1020,6 +1021,7 @@ namespace FieldTakHub.Builder.Services
                 var sarnegPreviewLabel = new TextBlock
                 {
                     Tag = "DYNAMIC_NO_I18N",
+                    Tag = "DYNAMIC_NO_I18N",
                     Text = FormatSarnegMatrixPreview(activeDay.SarnegKeyWord10),
                     Foreground = Brushes.White,
                     FontFamily = new FontFamily("Consolas"),
@@ -1345,7 +1347,9 @@ namespace FieldTakHub.Builder.Services
                 ? BuilderI18n.T("✓ [10 UNIKALNYCH LITER — KLUCZ PRAWIDŁOWY]", "✓ [10 UNIQUE LETTERS — VALID KEY]")
                 : (normalized.Length < 10
                     ? BuilderI18n.T($"⏳ [WPISANO {normalized.Length}/10 LITER — WPISZ 10 UNIKALNYCH LITER]", $"⏳ [TYPED {normalized.Length}/10 LETTERS — ENTER 10 UNIQUE LETTERS]")
-                    : BuilderI18n.T("⚠️ [UWAGA: POWTÓRZONE LITERY W SŁOWIE!]", "⚠️ [WARNING: DUPLICATE LETTERS IN WORD!]")));
+                    : (normalized.Length < 10
+                    ? BuilderI18n.T($"⏳ [WPISANO {normalized.Length}/10 LITER — WPISZ 10 UNIKALNYCH LITER]", $"⏳ [TYPED {normalized.Length}/10 LETTERS — ENTER 10 UNIQUE LETTERS]")
+                    : BuilderI18n.T("⚠️ [UWAGA: POWTÓRZONE LITERY W SŁOWIE!]", "⚠️ [WARNING: DUPLICATE LETTERS IN WORD!]"))));
             sbBot.Append('|');
             return sbTop + "\n" + sbBot;
         }
