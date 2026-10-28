@@ -1160,13 +1160,7 @@ namespace FieldTakHub.Builder.Services
 
             win.Loaded += (_, __) => EnforceSimplification(win);
             win.ContentRendered += (_, __) => EnforceSimplification(win);
-            win.LayoutUpdated += (_, __) =>
-            {
-                if (!_isApplyingSimplification)
-                {
-                    EnforceSimplification(win);
-                }
-            };
+            // [OPT] Usunieto win.LayoutUpdated (eliminacja mikroprzyciec przy przelaczaniu kart)
             win.Closed += (_, __) => CleanFactionPackageEngine.StopPcFtakHttpServer();
 
             BuilderI18n.LanguageChanged += _ =>

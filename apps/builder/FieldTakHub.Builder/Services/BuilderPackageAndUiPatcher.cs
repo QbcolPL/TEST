@@ -9,6 +9,7 @@ using System.Net;
 using System.Net.Sockets;
 using System.Reflection;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
@@ -21,120 +22,112 @@ namespace FieldTakHub.Builder.Services
     internal static class BuilderPackageAndUiPatcher
     {
         private static bool _sharedFoldersInitialized;
-        private static bool _isApplying;
-        private static int _pendingLayoutPasses = 3;
-        private static DateTime _lastApplyUtc = DateTime.MinValue;
+        private static bool _initialPassDone;
         private static HttpListener _hotspotListener;
         private static int _hotspotPort = 8769;
         public static string LatestHotspotJsonPayload = "{}";
+        private static Window _mainWindowRef;
 
-        private static readonly string[] DistinctTacticalPalette = new[]
+        private static readonly string[] TacticalColorPalette = new[]
         {
-            "#2684FF", // Niebieski (BLUFOR)
-            "#EB4034", // Czerwony (OPFOR)
-            "#2ECC71", // Zielony (GREENFOR)
-            "#FAD02C", // Złoty / Żółty
-            "#9B59B6", // Fioletowy (ORGA / SPEC)
-            "#FF9F43", // Pomarańczowy
-            "#1FE0C5", // Cyjan Taktyczny
-            "#E84393", // Karmazynowy / Magenta
-            "#A3CB38", // Oliwkowy / Limonkowy
-            "#00CEC9", // Turkusowy
-            "#F368E0", // Jasny Fiolet
-            "#FF6B6B"  // Koralowy
+            "#2684FF", "#EB4034", "#2ECC71", "#FAD02C",
+            "#9B59B6", "#FF9F43", "#1FE0C5", "#E84393",
+            "#A3CB38", "#00CEC9", "#FF6B6B", "#54A0FF",
+            "#5F27CD", "#10AC84", "#F368E0", "#FF9FF3"
         };
 
-        // Odtworzenie oryginalnych ikon modułów na wypadek, gdyby poprzedni skrypt nadpisał je znakiem '<'
-        private static readonly Dictionary<string, Tuple<string, string>> KnownSidebarModules = new Dictionary<string, Tuple<string, string>>(StringComparer.OrdinalIgnoreCase)
+        private static readonly HashSet<string> _assignedColorsSession = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
-            { "Paczek", Tuple.Create("🛡️", "Generator Paczek (.ftak)") },
-            { "Map", Tuple.Create("🗺️", "Generator Map 1:1") },
-            { "OPORD", Tuple.Create("📋", "Generator OPORD") },
-            { "Płytek", Tuple.Create("📟", "Programator Płytek USB") },
-            { "Nowy projekt", Tuple.Create("➕", "Nowy projekt (Stan zerowy)") },
-            { "Otwórz projekt", Tuple.Create("📂", "Otwórz projekt (.fthproj)") },
-            { "Zapisz projekt", Tuple.Create("💾", "Zapisz projekt (.fthproj)") },
-            { "Folder Source", Tuple.Create("📁", "Folder Source (APK / Mapy)") },
-            { "Wesprzyj", Tuple.Create("☕", "Wesprzyj twórcę") },
-            { "Język", Tuple.Create("🌐", "Język UI: PL / ENG") }
+            "#2684FF"
         };
 
-        public static void RequestSingleLayoutPass()
-        {
-            _pendingLayoutPasses = 2;
-        }
-
-        public static bool AllowSingleLayoutPass()
-        {
-            if (_isApplying) return false;
-            if (_pendingLayoutPasses <= 0) return false;
-            var now = DateTime.UtcNow;
-            if ((now - _lastApplyUtc).TotalMilliseconds < 180) return false;
-            _pendingLayoutPasses--;
-            _lastApplyUtc = now;
-            return true;
-        }
-
-        public static void ApplyEnhancementsThrottled(Window win)
-        {
-            if (win == null || _isApplying) return;
-            if (!AllowSingleLayoutPass()) return;
-            ApplyEnhancements(win, null);
-        }
-
-        public static List<DependencyObject> GetVisualTreeElements(DependencyObject root, bool includeCollapsed = false)
+        /// <summary>
+        /// Błyskawiczne przejście po Drzewie Logicznym (Panel.Children, Decorator.Child, ScrollViewer.Content).
+        /// Nie wchodzi w szablony ControlTemplate i działa również na zakładkach w tle.
+        /// </summary>
+        public static List<DependencyObject> GetLogicalElements(DependencyObject root)
         {
             var result = new List<DependencyObject>(128);
             if (root == null) return result;
 
+            var visited = new HashSet<DependencyObject>();
             var q = new Queue<DependencyObject>(64);
             q.Enqueue(root);
+            visited.Add(root);
+
             while (q.Count > 0)
             {
                 var cur = q.Dequeue();
-                if (!includeCollapsed && cur != root && cur is UIElement uie && uie.Visibility == Visibility.Collapsed)
-                {
-                    continue;
-                }
-
                 result.Add(cur);
 
-                if (cur != root && (cur is TextBoxBase || cur is ComboBox || cur is Slider || cur is ButtonBase || cur is DataGrid || cur is PasswordBox || cur is ScrollBar))
+                if (cur is Panel panel)
                 {
-                    continue;
+                    foreach (UIElement ch in panel.Children)
+                    {
+                        if (ch != null && visited.Add(ch)) q.Enqueue(ch);
+                    }
                 }
-
-                string typeName = cur.GetType().Name;
-                if (typeName.Contains("WebView", StringComparison.OrdinalIgnoreCase))
+                else if (cur is Decorator dec)
                 {
-                    continue;
+                    if (dec.Child != null && visited.Add(dec.Child)) q.Enqueue(dec.Child);
                 }
-
-                int cnt = 0;
-                try { cnt = VisualTreeHelper.GetChildrenCount(cur); } catch { }
-                for (int i = 0; i < cnt; i++)
+                else if (cur is ScrollViewer sv)
                 {
-                    DependencyObject ch = null;
-                    try { ch = VisualTreeHelper.GetChild(cur, i); } catch { }
-                    if (ch != null) q.Enqueue(ch);
+                    if (sv.Content is DependencyObject svContent && visited.Add(svContent)) q.Enqueue(svContent);
+                }
+                else if (cur is ContentControl cc && !(cur is ButtonBase) && !(cur is ListBoxItem) && !(cur is ComboBoxItem))
+                {
+                    if (cc.Content is DependencyObject ccContent && visited.Add(ccContent)) q.Enqueue(ccContent);
                 }
             }
             return result;
         }
 
-        public static bool IsInsideControlTemplate(DependencyObject element)
+        public static List<DependencyObject> GetVisualTreeElements(DependencyObject root, bool includeCollapsed = false)
         {
-            DependencyObject cur = element != null ? VisualTreeHelper.GetParent(element) : null;
-            while (cur != null)
-            {
-                if (cur is TextBoxBase || cur is ComboBox || cur is Slider || cur is ButtonBase || cur is ListBoxItem || cur is ComboBoxItem || cur is DataGrid || cur is ScrollBar)
-                    return true;
-                if (cur is Window)
-                    break;
-                cur = VisualTreeHelper.GetParent(cur);
-            }
-            return false;
+            return GetLogicalElements(root);
         }
+
+        public static string GetNextUniqueFactionColorHex(Window win = null)
+        {
+            var w = win ?? _mainWindowRef ?? Application.Current?.MainWindow;
+            var usedOnScreen = new HashSet<string>(_assignedColorsSession, StringComparer.OrdinalIgnoreCase);
+
+            try
+            {
+                if (w != null)
+                {
+                    foreach (var snap in FactionLiveSyncBridge.ReadAllFactionsFromScreenAndMemory(w))
+                    {
+                        if (!string.IsNullOrWhiteSpace(snap.ColorHex))
+                            usedOnScreen.Add(snap.ColorHex.Trim());
+                    }
+                }
+            }
+            catch { }
+
+            var rng = new Random(Guid.NewGuid().GetHashCode());
+            var available = TacticalColorPalette.Where(c => !usedOnScreen.Contains(c)).OrderBy(_ => rng.Next()).ToList();
+            string chosen;
+            if (available.Count > 0)
+            {
+                chosen = available[0];
+            }
+            else
+            {
+                do
+                {
+                    chosen = string.Format("#{0:X2}{1:X2}{2:X2}", rng.Next(50, 240), rng.Next(60, 240), rng.Next(50, 240));
+                } while (usedOnScreen.Contains(chosen));
+            }
+
+            _assignedColorsSession.Add(chosen);
+            return chosen;
+        }
+
+        public static void RequestSingleLayoutPass() { }
+        public static bool AllowSingleLayoutPass() => false;
+        public static void ApplyEnhancementsThrottled(Window win) { }
 
         public static string GetWorkspaceRootDir()
         {
@@ -179,49 +172,45 @@ namespace FieldTakHub.Builder.Services
 
         public static void ApplyEnhancements(Window win, List<DependencyObject> ignoredElements)
         {
-            if (win == null || _isApplying) return;
-            _isApplying = true;
+            if (win == null) return;
+            _mainWindowRef = win;
+            EnsureSharedFolderStructure();
+
             try
             {
-                EnsureSharedFolderStructure();
                 if (win.MinWidth > 900) win.MinWidth = 900;
                 if (win.MinHeight > 580) win.MinHeight = 580;
 
-                var visibleElements = GetVisualTreeElements(win, includeCollapsed: false);
-                CollapseLegacyTopModeBarPrecisely(visibleElements);
-                FixSidebarCollapseButtonAndIcons(win, visibleElements);
-                PatchZeroExpirationInputs(visibleElements);
-                PatchFactionFilesPosterAndAddFactionColor(win, visibleElements);
-                PatchFtakGeneratorCardToThreeButtons(win, visibleElements);
+                var elements = GetLogicalElements(win);
+                if (!_initialPassDone)
+                {
+                    _initialPassDone = true;
+                    CollapseLegacyTopModeBarPrecisely(elements);
+                    PatchZeroExpirationInputs(elements);
+                }
+
+                HookSidebarCollapseAndIcons(win, elements);
+                HookFactionCardsAndAddButtons(win, elements);
+                PatchFtakGeneratorCardToThreeButtons(win, elements);
             }
             catch { }
-            finally
-            {
-                _isApplying = false;
-            }
         }
 
-        /// <summary>
-        /// Naprawia pasek boczny (Sidebar):
-        /// - Przycisk zwijania rozpoznawany jest wyłącznie po tym, że leży w górnym boksie obok napisu "FIELD TAK HUB" (nigdy nie nadpisuje przycisków modułów!).
-        /// - Przyciski modułów po zwinięciu paska mają Padding = 0 i wyśrodkowaną ikonę, dzięki czemu żadna ikona nie jest ucięta ani zamieniona na '<'.
-        /// </summary>
-        private static void FixSidebarCollapseButtonAndIcons(Window win, List<DependencyObject> visibleElements)
+        private static void HookSidebarCollapseAndIcons(Window win, List<DependencyObject> elements)
         {
             try
             {
-                foreach (var border in visibleElements.OfType<Border>())
+                foreach (var border in elements.OfType<Border>())
                 {
-                    if (IsInsideControlTemplate(border)) continue;
-                    if (Grid.GetColumn(border) == 0 && border.ActualWidth >= 44 && border.ActualWidth <= 290)
+                    if (Grid.GetColumn(border) == 0 && (border.Width >= 44 && border.Width <= 290 || border.ActualWidth >= 44 && border.ActualWidth <= 290))
                     {
-                        bool isCollapsed = border.ActualWidth < 95;
-                        var sideButtons = GetVisualTreeElements(border, includeCollapsed: true).OfType<Button>().ToList();
+                        double w = border.ActualWidth > 0 ? border.ActualWidth : border.Width;
+                        bool isCollapsed = w > 0 && w < 95;
+                        var sideButtons = GetLogicalElements(border).OfType<Button>().ToList();
 
                         for (int idx = 0; idx < sideButtons.Count; idx++)
                         {
                             var btn = sideButtons[idx];
-                            // Tylko PIERWSZY przycisk na pasku bocznym (w nagłówku obok logo FIELD TAK HUB) jest przyciskiem zwijania!
                             if (idx == 0 && !(btn.Content is Panel))
                             {
                                 btn.Padding = new Thickness(0);
@@ -239,15 +228,13 @@ namespace FieldTakHub.Builder.Services
                                     {
                                         win.Dispatcher.BeginInvoke(new Action(() =>
                                         {
-                                            RequestSingleLayoutPass();
-                                            ApplyEnhancements(win, null);
+                                            HookSidebarCollapseAndIcons(win, GetLogicalElements(win));
                                         }), DispatcherPriority.Loaded);
                                     };
                                 }
                                 continue;
                             }
 
-                            // Wszystkie pozostałe przyciski to przyciski modułów operacyjnych i projektu!
                             if (btn.Content is Panel p)
                             {
                                 var tbs = p.Children.OfType<TextBlock>().ToList();
@@ -255,10 +242,8 @@ namespace FieldTakHub.Builder.Services
                                 {
                                     btn.Padding = new Thickness(0);
                                     btn.HorizontalContentAlignment = HorizontalAlignment.Center;
-                                    btn.VerticalContentAlignment = VerticalAlignment.Center;
                                     p.HorizontalAlignment = HorizontalAlignment.Center;
                                     p.Margin = new Thickness(0);
-
                                     if (tbs.Count >= 1)
                                     {
                                         tbs[0].Margin = new Thickness(0);
@@ -269,57 +254,20 @@ namespace FieldTakHub.Builder.Services
                                         tbs[0].HorizontalAlignment = HorizontalAlignment.Center;
                                         tbs[0].Visibility = Visibility.Visible;
                                     }
-                                    for (int i = 1; i < tbs.Count; i++)
-                                    {
-                                        tbs[i].Visibility = Visibility.Collapsed;
-                                    }
+                                    for (int i = 1; i < tbs.Count; i++) tbs[i].Visibility = Visibility.Collapsed;
                                 }
                                 else
                                 {
                                     btn.Padding = new Thickness(10, 6, 10, 6);
                                     btn.HorizontalContentAlignment = HorizontalAlignment.Left;
-                                    btn.VerticalContentAlignment = VerticalAlignment.Center;
                                     p.HorizontalAlignment = HorizontalAlignment.Left;
-
                                     if (tbs.Count >= 1)
                                     {
                                         tbs[0].Margin = new Thickness(0, 0, 8, 0);
                                         tbs[0].FontSize = 14;
                                         tbs[0].Visibility = Visibility.Visible;
                                     }
-                                    for (int i = 1; i < tbs.Count; i++)
-                                    {
-                                        tbs[i].Visibility = Visibility.Visible;
-                                    }
-                                }
-                            }
-                            else if (btn.Content is string sContent)
-                            {
-                                // Jeśli przycisk ma tekst (np. "🛡️ Generator Paczek (.ftak)"), w trybie zwiniętym pokaż samą ikonę!
-                                string fullLabel = btn.ToolTip as string;
-                                if (string.IsNullOrWhiteSpace(fullLabel) && sContent.Length > 3)
-                                {
-                                    fullLabel = sContent;
-                                    btn.ToolTip = fullLabel;
-                                }
-
-                                if (!string.IsNullOrWhiteSpace(fullLabel))
-                                {
-                                    string iconOnly = ExtractLeadingIcon(fullLabel);
-                                    if (isCollapsed)
-                                    {
-                                        btn.Padding = new Thickness(0);
-                                        btn.HorizontalContentAlignment = HorizontalAlignment.Center;
-                                        btn.FontSize = 16;
-                                        btn.Content = iconOnly;
-                                    }
-                                    else
-                                    {
-                                        btn.Padding = new Thickness(10, 6, 10, 6);
-                                        btn.HorizontalContentAlignment = HorizontalAlignment.Left;
-                                        btn.FontSize = 12;
-                                        btn.Content = fullLabel;
-                                    }
+                                    for (int i = 1; i < tbs.Count; i++) tbs[i].Visibility = Visibility.Visible;
                                 }
                             }
                         }
@@ -330,115 +278,179 @@ namespace FieldTakHub.Builder.Services
             catch { }
         }
 
-        private static string ExtractLeadingIcon(string label)
+        public static void HookFactionCardsAndAddButtons(Window win, List<DependencyObject> elements)
         {
-            foreach (var kv in KnownSidebarModules)
+            if (elements == null) return;
+            EnsureDistinctFactionCardColorsOnScreen(win, elements);
+
+            foreach (var btn in elements.OfType<Button>())
             {
-                if (label.Contains(kv.Key, StringComparison.OrdinalIgnoreCase))
-                    return kv.Value.Item1;
+                string txt = ExtractButtonText(btn).Trim();
+
+                if (txt == "+" && btn.Tag?.ToString() != "FTH_PLUS_FACTION_HOOKED")
+                {
+                    btn.Tag = "FTH_PLUS_FACTION_HOOKED";
+                    btn.Click += (_, __) =>
+                    {
+                        win.Dispatcher.BeginInvoke(new Action(() =>
+                        {
+                            var currentElems = FactionLiveSyncBridge.GetAllRootVisualsAcrossTabs(win);
+                            EnsureDistinctFactionCardColorsOnScreen(win, currentElems);
+                            HookFactionCardsAndAddButtons(win, currentElems);
+                        }), DispatcherPriority.Loaded);
+                    };
+                }
+
+                if ((txt.Contains("Pliki str", StringComparison.OrdinalIgnoreCase) || txt.StartsWith("factions/", StringComparison.OrdinalIgnoreCase)) &&
+                    btn.Tag?.ToString() != "FTH_FAC_FILES_ACTIVE")
+                {
+                    btn.Tag = "FTH_FAC_FILES_ACTIVE";
+                    btn.IsEnabled = true;
+                    btn.Cursor = Cursors.Hand;
+                    btn.PreviewMouseLeftButtonDown += (s, e) =>
+                    {
+                        e.Handled = true;
+                        try
+                        {
+                            string facName = null;
+                            if (txt.Contains("/")) facName = txt.Split('/').Last().Trim().ToUpperInvariant();
+                            string dir = EnsureActiveFactionOutputFolder(win, facName);
+                            Process.Start(new ProcessStartInfo("explorer.exe", "\"" + dir + "\"") { UseShellExecute = true });
+                        }
+                        catch { }
+                    };
+                }
             }
-            int spaceIdx = label.IndexOf(' ');
-            if (spaceIdx > 0 && spaceIdx <= 4) return label.Substring(0, spaceIdx);
-            return "🔹";
+        }
+
+        private static void EnsureDistinctFactionCardColorsOnScreen(Window win, List<DependencyObject> elements)
+        {
+            try
+            {
+                var seenColors = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                var seenNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+                var headerBlocks = elements.OfType<TextBlock>()
+                    .Where(t => (t.Text ?? "").Contains("Generator Stron —", StringComparison.OrdinalIgnoreCase))
+                    .ToList();
+
+                for (int idx = 0; idx < headerBlocks.Count; idx++)
+                {
+                    var hdrTb = headerBlocks[idx];
+                    DependencyObject cardRoot = LogicalTreeHelper.GetParent(hdrTb) ?? VisualTreeHelper.GetParent(hdrTb);
+                    while (cardRoot != null && !(cardRoot is Border b && b.BorderThickness.Top >= 1))
+                    {
+                        cardRoot = LogicalTreeHelper.GetParent(cardRoot) ?? VisualTreeHelper.GetParent(cardRoot);
+                    }
+                    if (cardRoot == null) continue;
+
+                    var cardElems = GetLogicalElements(cardRoot);
+                    TextBox nameBox = cardElems.OfType<TextBox>().FirstOrDefault();
+                    Button colorBtn = cardElems.OfType<Button>().FirstOrDefault(b =>
+                        Regex.IsMatch(ExtractButtonText(b), @"#[0-9A-Fa-f]{6}"));
+
+                    if (nameBox != null)
+                    {
+                        string curName = (nameBox.Text ?? "").Trim();
+                        if (seenNames.Contains(curName) && curName.StartsWith("STRONA-", StringComparison.OrdinalIgnoreCase))
+                        {
+                            int nextNum = idx + 1;
+                            while (seenNames.Contains("STRONA-" + nextNum)) nextNum++;
+                            string newName = "STRONA-" + nextNum;
+                            nameBox.Text = newName;
+                            hdrTb.Text = "Generator Stron — " + newName;
+                            curName = newName;
+                        }
+                        if (!string.IsNullOrWhiteSpace(curName))
+                            seenNames.Add(curName);
+                    }
+
+                    if (colorBtn != null)
+                    {
+                        string btnText = ExtractButtonText(colorBtn);
+                        Match hexMatch = Regex.Match(btnText, @"#[0-9A-Fa-f]{6}");
+                        if (hexMatch.Success)
+                        {
+                            string curHex = hexMatch.Value.ToUpperInvariant();
+                            if (seenColors.Contains(curHex))
+                            {
+                                string uniqueHex = GetNextUniqueFactionColorHex(win);
+                                ApplyNewHexColorToCard(cardRoot as Border, colorBtn, uniqueHex);
+                                curHex = uniqueHex;
+                            }
+                            seenColors.Add(curHex);
+                            _assignedColorsSession.Add(curHex);
+                        }
+                    }
+                }
+            }
+            catch { }
+        }
+
+        private static void ApplyNewHexColorToCard(Border cardBorder, Button colorBtn, string newHex)
+        {
+            try
+            {
+                var color = (Color)ColorConverter.ConvertFromString(newHex);
+                var brush = new SolidColorBrush(color);
+
+                if (colorBtn.Content is string)
+                {
+                    colorBtn.Content = "■ " + newHex;
+                }
+                else if (colorBtn.Content is Panel p)
+                {
+                    foreach (var b in p.Children.OfType<Border>()) b.Background = brush;
+                    foreach (var r in p.Children.OfType<System.Windows.Shapes.Shape>()) r.Fill = brush;
+                    foreach (var tb in p.Children.OfType<TextBlock>())
+                    {
+                        if (tb.Text != null && tb.Text.Contains("#")) tb.Text = newHex;
+                    }
+                }
+                colorBtn.BorderBrush = brush;
+
+                object dc = colorBtn.DataContext ?? cardBorder?.DataContext ?? colorBtn.Tag;
+                if (dc != null && !(dc is string))
+                {
+                    var prop = dc.GetType().GetProperty("ColorHex", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.IgnoreCase)
+                            ?? dc.GetType().GetProperty("Color", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.IgnoreCase);
+                    if (prop != null && prop.CanWrite) prop.SetValue(dc, newHex);
+                }
+            }
+            catch { }
         }
 
         public static void CollapseLegacyTopModeBarPrecisely(List<DependencyObject> elements)
         {
             if (elements == null) return;
-
             foreach (var el in elements)
             {
-                if (IsInsideControlTemplate(el)) continue;
-
                 if (el is TextBlock tb)
                 {
                     string txt = (tb.Text ?? "").Trim();
                     if (txt.Contains("TRYB PRACY BUILDERA", StringComparison.OrdinalIgnoreCase) ||
-                        txt.Contains("BUILDER MODE", StringComparison.OrdinalIgnoreCase) ||
-                        txt.Contains("Wybierz moduł operacyjny", StringComparison.OrdinalIgnoreCase))
+                        txt.Contains("BUILDER MODE", StringComparison.OrdinalIgnoreCase))
                     {
-                        if (tb.Visibility != Visibility.Collapsed)
-                            tb.Visibility = Visibility.Collapsed;
-                        CollapseParentBarBorder(tb);
+                        tb.Visibility = Visibility.Collapsed;
+                        DependencyObject cur = tb;
+                        while (cur != null && !(cur is Window))
+                        {
+                            if (cur is Border b)
+                            {
+                                b.Visibility = Visibility.Collapsed;
+                                b.Height = 0;
+                                b.Margin = new Thickness(0);
+                                b.Padding = new Thickness(0);
+                                b.BorderThickness = new Thickness(0);
+                                break;
+                            }
+                            cur = LogicalTreeHelper.GetParent(cur) ?? VisualTreeHelper.GetParent(cur);
+                        }
                     }
                     else if (txt.StartsWith("BUILDER v2.", StringComparison.OrdinalIgnoreCase))
                     {
                         tb.Text = "BUILDER v3.5";
                     }
-                }
-
-                if (el is Border b && b.Visibility == Visibility.Visible)
-                {
-                    if (IsInsideScrollViewer(b)) continue;
-                    if (Grid.GetColumn(b) == 0 && b.ActualWidth > 0 && b.ActualWidth <= 290) continue;
-
-                    if (b.Child == null && b.ActualHeight > 0 && b.ActualHeight < 90)
-                    {
-                        CollapseSingleBorderAndRow(b);
-                    }
-                    else if (b.Child is UIElement childEl)
-                    {
-                        if (childEl.Visibility == Visibility.Collapsed)
-                        {
-                            CollapseSingleBorderAndRow(b);
-                        }
-                        else if (childEl is Panel p && p.Children.Count > 0)
-                        {
-                            bool allHidden = p.Children.Cast<UIElement>().All(c =>
-                                c.Visibility == Visibility.Collapsed ||
-                                (c is Panel sp && sp.Children.Count > 0 && sp.Children.Cast<UIElement>().All(x => x.Visibility == Visibility.Collapsed)));
-
-                            if (allHidden) CollapseSingleBorderAndRow(b);
-                        }
-                    }
-                }
-            }
-        }
-
-        private static bool IsInsideScrollViewer(DependencyObject el)
-        {
-            DependencyObject cur = el != null ? VisualTreeHelper.GetParent(el) : null;
-            while (cur != null)
-            {
-                if (cur is ScrollViewer) return true;
-                if (cur is Window) break;
-                cur = VisualTreeHelper.GetParent(cur);
-            }
-            return false;
-        }
-
-        private static void CollapseParentBarBorder(DependencyObject child)
-        {
-            DependencyObject cur = child;
-            while (cur != null && !(cur is Window))
-            {
-                if (cur is Border b && !IsInsideScrollViewer(b))
-                {
-                    CollapseSingleBorderAndRow(b);
-                    break;
-                }
-                cur = VisualTreeHelper.GetParent(cur);
-            }
-        }
-
-        private static void CollapseSingleBorderAndRow(Border b)
-        {
-            if (b.Visibility == Visibility.Collapsed) return;
-            b.Visibility = Visibility.Collapsed;
-            b.Height = 0;
-            b.MinHeight = 0;
-            b.Margin = new Thickness(0);
-            b.Padding = new Thickness(0);
-            b.BorderThickness = new Thickness(0);
-
-            var parent = VisualTreeHelper.GetParent(b);
-            if (parent is Grid g)
-            {
-                int r = Grid.GetRow(b);
-                if (r >= 0 && r < g.RowDefinitions.Count)
-                {
-                    g.RowDefinitions[r].Height = new GridLength(0);
-                    g.RowDefinitions[r].MinHeight = 0;
                 }
             }
         }
@@ -447,7 +459,6 @@ namespace FieldTakHub.Builder.Services
         {
             foreach (var tb in safeElements.OfType<TextBlock>())
             {
-                if (IsInsideControlTemplate(tb)) continue;
                 string txt = (tb.Text ?? "").Trim();
                 if ((txt.Contains("Ważność", StringComparison.OrdinalIgnoreCase) || txt.Contains("Expiration", StringComparison.OrdinalIgnoreCase)) &&
                     !txt.Contains("0 = bezterminowo", StringComparison.OrdinalIgnoreCase))
@@ -457,174 +468,17 @@ namespace FieldTakHub.Builder.Services
             }
         }
 
-        /// <summary>
-        /// Obsługuje:
-        /// - Przycisk "📂 Pliki strony",
-        /// - Przycisk "Plakat stron + QR",
-        /// - Przycisk "➕ Dodaj stronę" -> automatycznie losuje unikalny kolor RGB (inny niż pozostałe strony) z możliwością zmiany!
-        /// </summary>
-        private static void PatchFactionFilesPosterAndAddFactionColor(Window win, List<DependencyObject> safeElements)
-        {
-            foreach (var btn in safeElements.OfType<Button>())
-            {
-                string txt = ExtractButtonText(btn);
-                string name = btn.Name ?? "";
-
-                // 1. Automatyczne losowanie unikalnego koloru RGB dla nowej strony konfliktu przy kliknięciu "Dodaj stronę"
-                if ((txt.Contains("Dodaj stronę", StringComparison.OrdinalIgnoreCase) ||
-                     txt.Contains("Add Faction", StringComparison.OrdinalIgnoreCase) ||
-                     txt.Contains("Nowa strona", StringComparison.OrdinalIgnoreCase)) &&
-                    btn.Tag?.ToString() != "FTH_ADD_FACTION_COLOR_HOOKED")
-                {
-                    btn.Tag = "FTH_ADD_FACTION_COLOR_HOOKED";
-                    btn.Click += (_, __) =>
-                    {
-                        win.Dispatcher.BeginInvoke(new Action(() =>
-                        {
-                            AssignDistinctColorToNewestFaction(win);
-                        }), DispatcherPriority.Loaded);
-                    };
-                }
-
-                // 2. Odblokowanie przycisku "Pliki strony"
-                bool isFactionFilesBtn =
-                    txt.Contains("Pliki str", StringComparison.OrdinalIgnoreCase) ||
-                    txt.Contains("Faction files", StringComparison.OrdinalIgnoreCase) ||
-                    name.Contains("FactionFiles", StringComparison.OrdinalIgnoreCase) ||
-                    name.Contains("PlikiStrony", StringComparison.OrdinalIgnoreCase);
-
-                if (isFactionFilesBtn && btn.Tag?.ToString() != "FTH_FAC_FILES_ACTIVE")
-                {
-                    btn.Tag = "FTH_FAC_FILES_ACTIVE";
-                    btn.IsEnabled = true;
-                    btn.Visibility = Visibility.Visible;
-                    btn.Opacity = 1.0;
-                    btn.Cursor = Cursors.Hand;
-                    btn.Content = BuilderI18n.T("📂 Pliki strony", "📂 Faction Files");
-
-                    btn.IsEnabledChanged += (sender, args) =>
-                    {
-                        if (sender is Button b && !b.IsEnabled) b.IsEnabled = true;
-                    };
-                    btn.PreviewMouseLeftButtonDown += (s, e) =>
-                    {
-                        e.Handled = true;
-                        try
-                        {
-                            string facName = TryExtractFactionNameFromDataContext(btn);
-                            string dir = EnsureActiveFactionOutputFolder(win, facName);
-                            Process.Start(new ProcessStartInfo("explorer.exe", "\"" + dir + "\"") { UseShellExecute = true });
-                        }
-                        catch (Exception ex)
-                        {
-                            MessageBox.Show("Nie udało się otworzyć folderu strony: " + ex.Message, "Field TAK Hub", MessageBoxButton.OK, MessageBoxImage.Warning);
-                        }
-                    };
-                }
-                else if ((txt.Contains("Plakat", StringComparison.OrdinalIgnoreCase) || txt.Contains("Safezone", StringComparison.OrdinalIgnoreCase)) &&
-                         btn.Tag?.ToString() != "FTH_POSTER_OK")
-                {
-                    btn.Tag = "FTH_POSTER_OK";
-                    btn.IsEnabled = true;
-                    btn.PreviewMouseLeftButtonDown += (s, e) =>
-                    {
-                        e.Handled = true;
-                        GenerateAndOpenSafezonePosterHtml(win);
-                    };
-                }
-            }
-        }
-
-        private static void AssignDistinctColorToNewestFaction(Window win)
-        {
-            try
-            {
-                var factions = FactionLiveSyncBridge.EnumerateAllInMemoryFactions(win);
-                if (factions.Count == 0) return;
-
-                var usedColors = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-                for (int i = 0; i < factions.Count - 1; i++)
-                {
-                    string c = FactionLiveSyncBridge.GetPropStr(factions[i], "ColorHex", "Color", "HexColor");
-                    if (!string.IsNullOrWhiteSpace(c)) usedColors.Add(c.Trim());
-                }
-
-                // Wybierz pierwszy wolny kolor z palety taktycznej lub wylosuj nowy kontrastowy kolor RGB
-                string chosenHex = null;
-                var rng = new Random(Guid.NewGuid().GetHashCode());
-                var shuffledPalette = DistinctTacticalPalette.Skip(2).OrderBy(_ => rng.Next()).Concat(DistinctTacticalPalette.Take(2));
-                foreach (string candidate in shuffledPalette)
-                {
-                    if (!usedColors.Contains(candidate))
-                    {
-                        chosenHex = candidate;
-                        break;
-                    }
-                }
-
-                if (string.IsNullOrWhiteSpace(chosenHex))
-                {
-                    chosenHex = string.Format("#{0:X2}{1:X2}{2:X2}", rng.Next(40, 245), rng.Next(60, 245), rng.Next(50, 245));
-                }
-
-                object newestFaction = factions[factions.Count - 1];
-                var t = newestFaction.GetType();
-                var pColor = t.GetProperty("ColorHex", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.IgnoreCase)
-                          ?? t.GetProperty("Color", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.IgnoreCase);
-                if (pColor != null && pColor.CanWrite)
-                {
-                    pColor.SetValue(newestFaction, chosenHex);
-                }
-
-                // Zaktualizuj również pole tekstowe koloru HEX w aktywnym widoku Generatora Stron (aby użytkownik widział kolor i mógł go zmienić)
-                var all = GetVisualTreeElements(win, includeCollapsed: false);
-                foreach (var tb in all.OfType<TextBox>())
-                {
-                    string val = (tb.Text ?? "").Trim();
-                    if (val.StartsWith("#") && (val.Length == 7 || val.Length == 4))
-                    {
-                        var parent = VisualTreeHelper.GetParent(tb) as Panel;
-                        bool isFactionColorBox = parent != null && GetVisualTreeElements(parent, true).OfType<TextBlock>().Any(l =>
-                            (l.Text ?? "").Contains("Kolor", StringComparison.OrdinalIgnoreCase) ||
-                            (l.Text ?? "").Contains("HEX", StringComparison.OrdinalIgnoreCase) ||
-                            (l.Text ?? "").Contains("RGB", StringComparison.OrdinalIgnoreCase));
-
-                        if (isFactionColorBox)
-                        {
-                            tb.Text = chosenHex;
-                        }
-                    }
-                }
-            }
-            catch { }
-        }
-
-        private static string TryExtractFactionNameFromDataContext(FrameworkElement el)
-        {
-            try
-            {
-                object dc = el?.DataContext;
-                if (dc != null && !(dc is Window))
-                {
-                    var p = dc.GetType().GetProperty("Name") ?? dc.GetType().GetProperty("FactionName");
-                    string v = p?.GetValue(dc)?.ToString();
-                    if (!string.IsNullOrWhiteSpace(v)) return v.Trim();
-                }
-            }
-            catch { }
-            return null;
-        }
-
         private static void PatchFtakGeneratorCardToThreeButtons(Window win, List<DependencyObject> safeElements)
         {
             foreach (var tb in safeElements.OfType<TextBlock>())
             {
-                if (IsInsideControlTemplate(tb)) continue;
                 string t = (tb.Text ?? "").Trim();
                 if (t.Contains("GENERATOR PACZEK .FTAK", StringComparison.OrdinalIgnoreCase) || t.Contains("PACKAGE BUILDER .FTAK", StringComparison.OrdinalIgnoreCase))
                 {
-                    DependencyObject p = VisualTreeHelper.GetParent(tb);
-                    while (p != null && !(p is StackPanel || p is Grid)) p = VisualTreeHelper.GetParent(p);
+                    DependencyObject p = LogicalTreeHelper.GetParent(tb) ?? VisualTreeHelper.GetParent(tb);
+                    while (p != null && !(p is StackPanel || p is Grid))
+                        p = LogicalTreeHelper.GetParent(p) ?? VisualTreeHelper.GetParent(p);
+
                     if (p is Panel cardPanel && cardPanel.Tag?.ToString() != "FTH_3BTN_OK")
                     {
                         cardPanel.Tag = "FTH_3BTN_OK";
@@ -632,7 +486,7 @@ namespace FieldTakHub.Builder.Services
                             "🎯 GENERATOR PACZEK .FTAK (FOLDER out\\<STRONA>\\ + WSPÓLNY FOLDER APK / PLUGINY / MAPY)",
                             "🎯 .FTAK PACKAGE GENERATOR (out\\<FACTION>\\ + SHARED APK / PLUGINS / MAPS)");
 
-                        var desc = GetVisualTreeElements(cardPanel, includeCollapsed: true);
+                        var desc = GetLogicalElements(cardPanel);
                         foreach (var cb in desc.OfType<ComboBox>()) { cb.Visibility = Visibility.Collapsed; cb.Width = 0; cb.Height = 0; }
 
                         Button origBuildAll = null;
@@ -697,10 +551,14 @@ namespace FieldTakHub.Builder.Services
 
         private static void BuildAllFactionsFallback(Window win)
         {
-            var snap = FactionLiveSyncBridge.CaptureCurrentFactionSnapshot(win, null);
-            string facDir = EnsureActiveFactionOutputFolder(win);
-            File.WriteAllText(Path.Combine(facDir, SanitizeFolderName(snap.FactionName) + "_ftak.json"), snap.ToQrJson(), Encoding.UTF8);
-            MessageBox.Show($"Zbudowano paczkę w katalogu:\n{facDir}\nWażność: {snap.ExpirationLabel}", "Field TAK Hub", MessageBoxButton.OK, MessageBoxImage.Information);
+            var allFactions = FactionLiveSyncBridge.ReadAllFactionsFromScreenAndMemory(win);
+            foreach (var snap in allFactions)
+            {
+                string facDir = Path.Combine(GetWorkspaceRootDir(), "out", SanitizeFolderName(snap.FactionName));
+                Directory.CreateDirectory(facDir);
+                File.WriteAllText(Path.Combine(facDir, SanitizeFolderName(snap.FactionName) + "_ftak.json"), snap.ToQrJson(), Encoding.UTF8);
+            }
+            MessageBox.Show($"Zbudowano paczki dla wszystkich aktywnych stron ({allFactions.Count}) w katalogu:\n{Path.Combine(GetWorkspaceRootDir(), "out")}", "Field TAK Hub", MessageBoxButton.OK, MessageBoxImage.Information);
         }
 
         public static void GenerateAndOpenSafezonePosterHtml(Window win)
@@ -793,9 +651,14 @@ namespace FieldTakHub.Builder.Services
 
         public static string ExtractButtonText(Button btn)
         {
+            if (btn == null) return "";
             if (btn.Content is string s) return s;
             if (btn.Content is TextBlock tb) return tb.Text ?? "";
-            if (btn.Content is Panel p) return string.Join(" ", p.Children.OfType<TextBlock>().Select(x => x.Text));
+            if (btn.Content is Panel p)
+            {
+                var allTbs = GetLogicalElements(p).OfType<TextBlock>().Select(x => x.Text);
+                return string.Join(" ", allTbs);
+            }
             return btn.Content?.ToString() ?? "";
         }
     }
@@ -811,7 +674,7 @@ namespace FieldTakHub.Builder.Services
     internal sealed class FactionSnapshotData
     {
         public string EventName { get; set; } = "MILSIM 2026";
-        public string FactionName { get; set; } = "BLUFOR";
+        public string FactionName { get; set; } = "ORGA";
         public string ColorHex { get; set; } = "#2684FF";
         public string ChannelName { get; set; } = "BLUFOR-MESH";
         public string Psk { get; set; } = "";
@@ -841,53 +704,223 @@ namespace FieldTakHub.Builder.Services
     internal static class FactionLiveSyncBridge
     {
         private static List<FieldInfo> _cachedStaticCollectionFields;
+        private static List<FieldInfo> _cachedStaticDependencyFields;
 
-        private static readonly HashSet<string> InvalidFactionTokens = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        public static List<DependencyObject> GetAllRootVisualsAcrossTabs(Window win)
         {
-            "PLI", "GeoChat", "TAK", "TAK_Tracker", "Router", "Client", "Auto",
-            "EU_868", "EU_433", "US", "SHORT_FAST", "SHORT_SLOW", "MEDIUM_FAST", "LONG_FAST",
-            "PMR", "VHF", "UHF", "DMR", "MGRS", "UTM", "WGS84", "DMS", "MILSIM", "ASG"
-        };
+            var combined = new List<DependencyObject>(256);
+            var visitedRoots = new HashSet<DependencyObject>();
 
-        private static bool IsValidFactionName(string candidate)
-        {
-            if (string.IsNullOrWhiteSpace(candidate)) return false;
-            string clean = candidate.Trim();
-            if (clean.Length < 2 || clean.Length > 32) return false;
-            if (InvalidFactionTokens.Contains(clean)) return false;
-            if (clean.StartsWith("System.", StringComparison.OrdinalIgnoreCase)) return false;
-            if (clean.Contains("1:") || clean.Contains("MHz") || clean.Contains("CTCSS")) return false;
-            return true;
+            void AddFromRoot(DependencyObject r)
+            {
+                if (r == null || !visitedRoots.Add(r)) return;
+                combined.AddRange(BuilderPackageAndUiPatcher.GetLogicalElements(r));
+            }
+
+            if (win != null)
+            {
+                AddFromRoot(win);
+                var instFlags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+                foreach (var f in win.GetType().GetFields(instFlags))
+                {
+                    try { if (f.GetValue(win) is DependencyObject dobj) AddFromRoot(dobj); } catch { }
+                }
+            }
+
+            if (_cachedStaticDependencyFields == null)
+            {
+                _cachedStaticDependencyFields = new List<FieldInfo>();
+                var staticFlags = BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic;
+                foreach (var t in typeof(BuilderPackageAndUiPatcher).Assembly.GetTypes())
+                {
+                    if (t.Namespace == null || !t.Namespace.StartsWith("FieldTakHub.Builder")) continue;
+                    foreach (var sf in t.GetFields(staticFlags))
+                    {
+                        if (typeof(DependencyObject).IsAssignableFrom(sf.FieldType))
+                            _cachedStaticDependencyFields.Add(sf);
+                    }
+                }
+            }
+
+            foreach (var sf in _cachedStaticDependencyFields)
+            {
+                try { if (sf.GetValue(null) is DependencyObject sd) AddFromRoot(sd); } catch { }
+            }
+
+            return combined;
         }
 
-        public static List<string> GetAllFactionNamesFromUi(Window win)
+        public static List<FactionSnapshotData> ReadAllFactionsFromScreenAndMemory(Window win)
         {
-            var res = new List<string>();
-            if (win == null) return new List<string> { "ORGA", "STRONA-2" };
+            var list = new List<FactionSnapshotData>();
+            if (win == null) win = Application.Current?.MainWindow;
 
             try
             {
-                foreach (var facObj in EnumerateAllInMemoryFactions(win))
+                var allElems = GetAllRootVisualsAcrossTabs(win);
+                var cardHeaders = allElems.OfType<TextBlock>()
+                    .Where(t => (t.Text ?? "").Contains("Generator Stron —", StringComparison.OrdinalIgnoreCase))
+                    .ToList();
+
+                foreach (var hdr in cardHeaders)
                 {
-                    string n = GetPropStr(facObj, "Name", "FactionName", "SideName");
-                    if (IsValidFactionName(n) && !res.Contains(n.Trim(), StringComparer.OrdinalIgnoreCase))
-                        res.Add(n.Trim());
+                    DependencyObject cardRoot = LogicalTreeHelper.GetParent(hdr) ?? VisualTreeHelper.GetParent(hdr);
+                    while (cardRoot != null && !(cardRoot is Border b && b.BorderThickness.Top >= 1))
+                        cardRoot = LogicalTreeHelper.GetParent(cardRoot) ?? VisualTreeHelper.GetParent(cardRoot);
+
+                    if (cardRoot == null) continue;
+
+                    var cardItems = BuilderPackageAndUiPatcher.GetLogicalElements(cardRoot);
+                    var textBoxes = cardItems.OfType<TextBox>().ToList();
+                    if (textBoxes.Count == 0) continue;
+
+                    var snap = new FactionSnapshotData();
+                    string facName = (textBoxes[0].Text ?? "").Trim();
+                    if (string.IsNullOrWhiteSpace(facName))
+                        facName = (hdr.Text ?? "").Replace("Generator Stron —", "").Trim();
+                    snap.FactionName = string.IsNullOrWhiteSpace(facName) ? "ORGA" : facName;
+                    snap.ChannelName = snap.FactionName.ToUpperInvariant() + "-MESH";
+
+                    var colorBtn = cardItems.OfType<Button>().FirstOrDefault(b =>
+                        Regex.IsMatch(BuilderPackageAndUiPatcher.ExtractButtonText(b), @"#[0-9A-Fa-f]{6}"));
+                    if (colorBtn != null)
+                    {
+                        var m = Regex.Match(BuilderPackageAndUiPatcher.ExtractButtonText(colorBtn), @"#[0-9A-Fa-f]{6}");
+                        if (m.Success) snap.ColorHex = m.Value.ToUpperInvariant();
+                    }
+
+                    foreach (var rowGrid in cardItems.OfType<Grid>())
+                    {
+                        if (rowGrid.ColumnDefinitions.Count >= 3)
+                        {
+                            var rowBoxes = rowGrid.Children.OfType<TextBox>().ToList();
+                            var rowCombos = rowGrid.Children.OfType<ComboBox>().ToList();
+
+                            if (rowBoxes.Count >= 1 && (rowBoxes.Count + rowCombos.Count) >= 3)
+                            {
+                                var allInputs = rowGrid.Children.Cast<UIElement>()
+                                    .Where(el => el is TextBox || el is ComboBox)
+                                    .ToList();
+
+                                string GetVal(UIElement el)
+                                {
+                                    if (el is TextBox tb) return (tb.Text ?? "").Trim();
+                                    if (el is ComboBox cb)
+                                    {
+                                        if (cb.SelectedItem is ComboBoxItem cbi) return (cbi.Content?.ToString() ?? "").Trim();
+                                        return (cb.SelectedItem?.ToString() ?? cb.Text ?? "").Trim();
+                                    }
+                                    return "";
+                                }
+
+                                if (allInputs.Count >= 3)
+                                {
+                                    string c0 = GetVal(allInputs[0]);
+                                    string c1 = GetVal(allInputs[1]);
+                                    string c2 = GetVal(allInputs[2]);
+                                    string c3 = allInputs.Count >= 4 ? GetVal(allInputs[3]) : "-";
+
+                                    string role = c0;
+                                    string band = c1;
+                                    string freq = c2;
+                                    string tone = c3;
+
+                                    if (c0.Equals("PMR", StringComparison.OrdinalIgnoreCase) || c0.Equals("VHF", StringComparison.OrdinalIgnoreCase) ||
+                                        c0.Equals("UHF", StringComparison.OrdinalIgnoreCase) || c0.Equals("DMR", StringComparison.OrdinalIgnoreCase))
+                                    {
+                                        band = c0;
+                                        role = c1;
+                                        freq = c2;
+                                    }
+
+                                    if (!string.IsNullOrWhiteSpace(role) || !string.IsNullOrWhiteSpace(freq))
+                                    {
+                                        snap.VoiceChannels.Add(new FactionVoiceRowData
+                                        {
+                                            Role = string.IsNullOrWhiteSpace(role) ? "Kanał" : role,
+                                            Band = string.IsNullOrWhiteSpace(band) ? "PMR" : band,
+                                            Freq = string.IsNullOrWhiteSpace(freq) ? "-" : freq,
+                                            Tone = string.IsNullOrWhiteSpace(tone) ? "-" : tone
+                                        });
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    list.Add(snap);
+                }
+
+                foreach (var memObj in EnumerateAllInMemoryFactions(win))
+                {
+                    string n = GetPropStr(memObj, "Name", "FactionName", "SideName");
+                    if (string.IsNullOrWhiteSpace(n)) continue;
+                    var existing = list.FirstOrDefault(x => string.Equals(x.FactionName, n.Trim(), StringComparison.OrdinalIgnoreCase));
+                    if (existing == null)
+                    {
+                        existing = new FactionSnapshotData { FactionName = n.Trim() };
+                        list.Add(existing);
+                    }
+
+                    existing.ColorHex = GetPropStr(memObj, "ColorHex", "Color") ?? existing.ColorHex;
+                    existing.ChannelName = GetPropStr(memObj, "ChannelName", "MeshChannel") ?? existing.ChannelName;
+                    existing.OtsHost = GetPropStr(memObj, "OtsHost", "ServerHost") ?? existing.OtsHost;
+                    existing.EmergencyPhone = GetPropStr(memObj, "EmergencyPhone", "SosPhone") ?? existing.EmergencyPhone;
+
+                    if (existing.VoiceChannels.Count == 0)
+                    {
+                        var flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.IgnoreCase;
+                        foreach (var prop in memObj.GetType().GetProperties(flags))
+                        {
+                            if (typeof(IEnumerable).IsAssignableFrom(prop.PropertyType) && prop.PropertyType != typeof(string))
+                            {
+                                if (prop.GetValue(memObj) is IEnumerable vcList)
+                                {
+                                    foreach (var vi in vcList)
+                                    {
+                                        if (vi == null || vi is string) continue;
+                                        string r = GetPropStr(vi, "RoleName", "Role", "Name", "Title");
+                                        string b = GetPropStr(vi, "BandType", "Band", "Type") ?? "PMR";
+                                        string f = GetPropStr(vi, "FreqMhz", "Frequency", "Freq", "Channel");
+                                        string tn = GetPropStr(vi, "ToneOrCode", "Tone", "Ctcss") ?? "-";
+                                        if (!string.IsNullOrWhiteSpace(f) || !string.IsNullOrWhiteSpace(r))
+                                        {
+                                            existing.VoiceChannels.Add(new FactionVoiceRowData
+                                            {
+                                                Role = string.IsNullOrWhiteSpace(r) ? "Kanał" : r,
+                                                Band = b,
+                                                Freq = string.IsNullOrWhiteSpace(f) ? "-" : f,
+                                                Tone = tn
+                                            });
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
             catch { }
 
-            if (res.Count == 0)
-            {
-                res.Add("ORGA");
-                res.Add("STRONA-2");
-            }
-            return res;
+            return list;
         }
 
-        /// <summary>
-        /// Pobiera obiekty stron konfliktu ze statycznych pól serwisów (np. BuilderCoreSidebarAndProjectEngine)
-        /// oraz z MainWindow — ze zbuforowaną listą FieldInfo (czas wykonania < 0.1 ms!).
-        /// </summary>
+        public static List<string> GetAllFactionNamesFromUi(Window win)
+        {
+            var snaps = ReadAllFactionsFromScreenAndMemory(win);
+            var names = snaps.Select(s => s.FactionName)
+                             .Where(n => !string.IsNullOrWhiteSpace(n))
+                             .Distinct(StringComparer.OrdinalIgnoreCase)
+                             .ToList();
+
+            if (names.Count == 0)
+            {
+                names.Add("ORGA");
+                names.Add("STRONA-2");
+            }
+            return names;
+        }
+
         public static List<object> EnumerateAllInMemoryFactions(Window win)
         {
             var list = new List<object>();
@@ -905,9 +938,7 @@ namespace FieldTakHub.Builder.Services
                         foreach (var sf in t.GetFields(flags))
                         {
                             if (typeof(IEnumerable).IsAssignableFrom(sf.FieldType) && sf.FieldType != typeof(string))
-                            {
                                 _cachedStaticCollectionFields.Add(sf);
-                            }
                         }
                     }
                 }
@@ -916,26 +947,8 @@ namespace FieldTakHub.Builder.Services
                 {
                     try { CollectFactions(sf.GetValue(null), list); } catch { }
                 }
-
-                var roots = new List<object> { win };
-                if (win.DataContext != null) roots.Add(win.DataContext);
-                var instFlags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
-                foreach (var r in roots)
-                {
-                    var rt = r.GetType();
-                    foreach (var f in rt.GetFields(instFlags))
-                    {
-                        try { CollectFactions(f.GetValue(r), list); } catch { }
-                    }
-                    foreach (var p in rt.GetProperties(instFlags))
-                    {
-                        if (p.GetIndexParameters().Length > 0) continue;
-                        try { CollectFactions(p.GetValue(r), list); } catch { }
-                    }
-                }
             }
             catch { }
-
             return list;
         }
 
@@ -981,70 +994,25 @@ namespace FieldTakHub.Builder.Services
 
         public static FactionSnapshotData CaptureCurrentFactionSnapshot(Window win, string preferredFactionName)
         {
-            var snap = new FactionSnapshotData();
-            if (!string.IsNullOrWhiteSpace(preferredFactionName)) snap.FactionName = preferredFactionName.Trim();
-            if (win == null) return snap;
+            var all = ReadAllFactionsFromScreenAndMemory(win);
+            FactionSnapshotData snap = null;
 
-            try
+            if (!string.IsNullOrWhiteSpace(preferredFactionName))
             {
-                var memFactions = EnumerateAllInMemoryFactions(win);
-                object matched = null;
-                if (!string.IsNullOrWhiteSpace(preferredFactionName))
-                {
-                    matched = memFactions.FirstOrDefault(x =>
-                        string.Equals(GetPropStr(x, "Name", "FactionName"), preferredFactionName.Trim(), StringComparison.OrdinalIgnoreCase));
-                }
-                if (matched == null && memFactions.Count > 0) matched = memFactions[0];
-
-                if (matched != null)
-                {
-                    snap.FactionName = GetPropStr(matched, "Name", "FactionName") ?? snap.FactionName;
-                    snap.ColorHex = GetPropStr(matched, "ColorHex", "Color") ?? snap.ColorHex;
-                    snap.ChannelName = GetPropStr(matched, "ChannelName", "MeshChannel", "PrimaryChannel") ?? snap.ChannelName;
-                    snap.Psk = GetPropStr(matched, "Psk", "PskBase64") ?? snap.Psk;
-                    snap.Region = GetPropStr(matched, "LoraRegion", "Region") ?? snap.Region;
-                    snap.ModemPreset = GetPropStr(matched, "LoraModemPreset", "ModemPreset", "Preset") ?? snap.ModemPreset;
-                    snap.OtsHost = GetPropStr(matched, "OtsHost", "ServerHost") ?? snap.OtsHost;
-                    snap.EmergencyPhone = GetPropStr(matched, "EmergencyPhone", "SosPhone") ?? snap.EmergencyPhone;
-
-                    // Odczytaj wszystkie kolekcje kanałów głosowych wewnątrz obiektu strony
-                    var flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.IgnoreCase;
-                    foreach (var prop in matched.GetType().GetProperties(flags))
-                    {
-                        if (typeof(IEnumerable).IsAssignableFrom(prop.PropertyType) && prop.PropertyType != typeof(string))
-                        {
-                            if (prop.GetValue(matched) is IEnumerable vcList)
-                            {
-                                foreach (var vi in vcList)
-                                {
-                                    if (vi == null || vi is string) continue;
-                                    string r = GetPropStr(vi, "RoleName", "Role", "Name", "Title", "ChannelName");
-                                    string b = GetPropStr(vi, "BandType", "Band", "Type", "Modulation") ?? "PMR";
-                                    string f = GetPropStr(vi, "FreqMhz", "Frequency", "Freq", "Channel", "Value");
-                                    string tn = GetPropStr(vi, "ToneOrCode", "Tone", "Ctcss", "Subtone", "Code") ?? "-";
-                                    if (!string.IsNullOrWhiteSpace(f) || !string.IsNullOrWhiteSpace(r))
-                                    {
-                                        snap.VoiceChannels.Add(new FactionVoiceRowData
-                                        {
-                                            Role = string.IsNullOrWhiteSpace(r) ? "Kanał" : r,
-                                            Band = b,
-                                            Freq = string.IsNullOrWhiteSpace(f) ? "-" : f,
-                                            Tone = tn
-                                        });
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
+                snap = all.FirstOrDefault(x => string.Equals(x.FactionName, preferredFactionName.Trim(), StringComparison.OrdinalIgnoreCase));
             }
-            catch { }
+            if (snap == null && all.Count > 0)
+            {
+                snap = all[0];
+            }
+            if (snap == null)
+            {
+                snap = new FactionSnapshotData { FactionName = string.IsNullOrWhiteSpace(preferredFactionName) ? "ORGA" : preferredFactionName.Trim() };
+            }
 
             if (snap.VoiceChannels.Count == 0)
             {
                 snap.VoiceChannels.Add(new FactionVoiceRowData { Role = "Dowodzenie HQ", Band = "PMR", Freq = "CH 1 (446.00625 MHz)", Tone = "CTCSS 67.0 Hz" });
-                snap.VoiceChannels.Add(new FactionVoiceRowData { Role = "Taktyczny (Zapasowy)", Band = "PMR", Freq = "CH 3 (446.03125 MHz)", Tone = "CTCSS 88.5 Hz" });
-                snap.VoiceChannels.Add(new FactionVoiceRowData { Role = "Ratunkowy ORGA / HQ", Band = "PMR", Freq = "CH 8 (446.09375 MHz)", Tone = "Brak tonu" });
             }
             return snap;
         }
