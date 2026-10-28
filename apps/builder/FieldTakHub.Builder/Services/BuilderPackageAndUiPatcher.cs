@@ -22,14 +22,22 @@ namespace FieldTakHub.Builder.Services
         private static bool _sharedFoldersInitialized;
         private static HttpListener _hotspotListener;
         private static int _hotspotPort = 8769;
+        private static DateTime _lastEnhancementRunUtc = DateTime.MinValue;
         public static string LatestHotspotJsonPayload = "{}";
 
         /// <summary>
-        /// Przeszukuje drzewo wizualne, ZATRZYMUJĄC SIĘ na granicach kontrolek wejściowych
-        /// (TextBox, ComboBox, Slider, Button, CheckBox, DataGrid, PasswordBox, ScrollBar).
-        /// Nigdy nie wchodzi do wnętrza ich szablonów (ControlTemplate), dzięki czemu suwaki,
-        /// pola tekstowe i rozwijane menu zachowują 100% swojego wyglądu i działania.
+        /// Wersja z throttlingiem czasowym (max raz na 450 ms), eliminująca jakiekolwiek spowolnienia
+        /// przy przechodzeniu między zakładkami i przewijaniu (Punkt 10).
         /// </summary>
+        public static void ApplyEnhancementsThrottled(Window win)
+        {
+            if (win == null) return;
+            var now = DateTime.UtcNow;
+            if ((now - _lastEnhancementRunUtc).TotalMilliseconds < 450) return;
+            _lastEnhancementRunUtc = now;
+            ApplyEnhancements(win, null);
+        }
+
         public static List<DependencyObject> GetVisualTreeElements(DependencyObject root)
         {
             var result = new List<DependencyObject>();
@@ -126,6 +134,7 @@ namespace FieldTakHub.Builder.Services
         public static void ApplyEnhancements(Window win, List<DependencyObject> allElements)
         {
             if (win == null) return;
+            _lastEnhancementRunUtc = DateTime.UtcNow;
             EnsureSharedFolderStructure();
             try
             {
@@ -134,21 +143,108 @@ namespace FieldTakHub.Builder.Services
 
                 var safeElements = GetVisualTreeElements(win);
                 CollapseLegacyTopModeBarPrecisely(safeElements);
-                PolishLeftSidebarAppearance(win, safeElements);
+                FixSidebarCollapseButtonAndIcons(win, safeElements);
                 PatchZeroExpirationInputs(safeElements);
                 PatchFactionFilesAndPosterButtons(win, safeElements);
                 PatchFtakGeneratorCardToThreeButtons(win, safeElements);
 
-                // Zawsze uruchamiaj ulepszenia widoku OPORD na żywym drzewie wizualnym
                 BuilderOpordV35Enhancements.EnhanceLiveOpordTree(win, safeElements);
             }
             catch { }
         }
 
         /// <summary>
-        /// Usuwa wyłącznie puste ramki po starym górnym pasku trybów (dwie linie cyjanowe nad ScrollViewerem),
-        /// sprawdzając dwa przebiegi (wewnętrzny i zewnętrzny Border), bez dotykania jakichkolwiek kontrolek.
+        /// Naprawia Punkt 2 i Punkt 3:
+        /// - Przywraca widoczną strzałkę "❮" / "❯" na przycisku zwijania menu bocznego (Padding = 0),
+        /// - Naprawia ucięte ikony na pasku bocznym po jego zminimalizowaniu (Padding = 0 i wyśrodkowanie ikon).
         /// </summary>
+        private static void FixSidebarCollapseButtonAndIcons(Window win, List<DependencyObject> safeElements)
+        {
+            try
+            {
+                foreach (var border in safeElements.OfType<Border>())
+                {
+                    if (IsInsideControlTemplate(border)) continue;
+                    if (Grid.GetColumn(border) == 0 && border.ActualWidth >= 44 && border.ActualWidth <= 290)
+                    {
+                        bool isCollapsed = border.ActualWidth < 95;
+                        var sideButtons = GetVisualTreeElements(border).OfType<Button>().ToList();
+
+                        foreach (var btn in sideButtons)
+                        {
+                            // Rozpoznaj przycisk zwijania menu bocznego (mały kwadratowy przycisk w nagłówku paska)
+                            bool isCollapseToggle =
+                                (btn.Width >= 22 && btn.Width <= 42) ||
+                                (btn.ActualWidth >= 22 && btn.ActualWidth <= 42) ||
+                                ExtractButtonText(btn) == "<" || ExtractButtonText(btn) == ">" ||
+                                ExtractButtonText(btn) == "❮" || ExtractButtonText(btn) == "❯" ||
+                                ExtractButtonText(btn) == "«" || ExtractButtonText(btn) == "»";
+
+                            if (isCollapseToggle)
+                            {
+                                btn.Padding = new Thickness(0);
+                                btn.HorizontalContentAlignment = HorizontalAlignment.Center;
+                                btn.VerticalContentAlignment = VerticalAlignment.Center;
+                                btn.Foreground = new SolidColorBrush(Color.FromRgb(31, 224, 197));
+                                btn.FontSize = 14;
+                                btn.FontWeight = FontWeights.Bold;
+                                btn.Content = isCollapsed ? "❯" : "❮";
+                                continue;
+                            }
+
+                            // Dla pozostałych przycisków nawigacyjnych w pasku bocznym:
+                            if (isCollapsed)
+                            {
+                                btn.Padding = new Thickness(0);
+                                btn.HorizontalContentAlignment = HorizontalAlignment.Center;
+                                btn.VerticalContentAlignment = VerticalAlignment.Center;
+
+                                // Jeśli zawartością przycisku jest StackPanel/Grid z ikoną i tekstem, wyśrodkuj ikonę i ukryj tekst w trybie zwiniętym
+                                if (btn.Content is Panel p)
+                                {
+                                    p.HorizontalAlignment = HorizontalAlignment.Center;
+                                    var tbs = p.Children.OfType<TextBlock>().ToList();
+                                    if (tbs.Count >= 1)
+                                    {
+                                        tbs[0].Margin = new Thickness(0);
+                                        tbs[0].HorizontalAlignment = HorizontalAlignment.Center;
+                                        tbs[0].TextAlignment = TextAlignment.Center;
+                                        tbs[0].Visibility = Visibility.Visible;
+                                    }
+                                    for (int i = 1; i < tbs.Count; i++)
+                                    {
+                                        tbs[i].Visibility = Visibility.Collapsed;
+                                    }
+                                }
+                            }
+                            else
+                            {
+                                btn.Padding = new Thickness(10, 6, 10, 6);
+                                btn.HorizontalContentAlignment = HorizontalAlignment.Left;
+                                btn.VerticalContentAlignment = VerticalAlignment.Center;
+
+                                if (btn.Content is Panel p)
+                                {
+                                    p.HorizontalAlignment = HorizontalAlignment.Left;
+                                    var tbs = p.Children.OfType<TextBlock>().ToList();
+                                    if (tbs.Count >= 1)
+                                    {
+                                        tbs[0].Margin = new Thickness(0, 0, 8, 0);
+                                        tbs[0].Visibility = Visibility.Visible;
+                                    }
+                                    for (int i = 1; i < tbs.Count; i++)
+                                    {
+                                        tbs[i].Visibility = Visibility.Visible;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            catch { }
+        }
+
         public static void CollapseLegacyTopModeBarPrecisely(List<DependencyObject> elements)
         {
             if (elements == null) return;
@@ -177,17 +273,12 @@ namespace FieldTakHub.Builder.Services
 
                     if (el is Border b && b.Visibility == Visibility.Visible)
                     {
-                        // Sprawdź czy ten Border leży PONAD głównym ScrollViewerem (nie wewnątrz ScrollViewera)
                         if (IsInsideScrollViewer(b)) continue;
-                        // Nie ruszaj lewego paska bocznego (Sidebar w kolumnie 0 o szerokości <= 280)
-                        if (Grid.GetColumn(b) == 0 && b.ActualWidth > 0 && b.ActualWidth <= 280) continue;
+                        if (Grid.GetColumn(b) == 0 && b.ActualWidth > 0 && b.ActualWidth <= 290) continue;
 
                         if (b.Child == null)
                         {
-                            if (b.ActualHeight < 90)
-                            {
-                                CollapseSingleBorderAndRow(b);
-                            }
+                            if (b.ActualHeight < 90) CollapseSingleBorderAndRow(b);
                         }
                         else if (b.Child is UIElement childEl)
                         {
@@ -202,10 +293,7 @@ namespace FieldTakHub.Builder.Services
                                     (c is Panel sp && sp.Children.Count > 0 && sp.Children.Cast<UIElement>().All(x => x.Visibility == Visibility.Collapsed)) ||
                                     (c is Border sb && (sb.Visibility == Visibility.Collapsed || (sb.Child != null && sb.Child.Visibility == Visibility.Collapsed))));
 
-                                if (allHidden)
-                                {
-                                    CollapseSingleBorderAndRow(b);
-                                }
+                                if (allHidden) CollapseSingleBorderAndRow(b);
                             }
                         }
                     }
@@ -273,41 +361,6 @@ namespace FieldTakHub.Builder.Services
                     }
                 }
             }
-        }
-
-        private static void PolishLeftSidebarAppearance(Window win, List<DependencyObject> safeElements)
-        {
-            try
-            {
-                foreach (var border in safeElements.OfType<Border>())
-                {
-                    if (IsInsideControlTemplate(border)) continue;
-                    if (Grid.GetColumn(border) == 0 && border.ActualWidth >= 48 && border.ActualWidth <= 280)
-                    {
-                        if (border.Child is Panel sidePanel)
-                        {
-                            bool isCollapsed = border.ActualWidth < 90;
-                            foreach (var btn in GetVisualTreeElements(sidePanel).OfType<Button>())
-                            {
-                                string txt = ExtractButtonText(btn);
-                                if (txt == "<" || txt == ">" || txt == "«" || txt == "»" || txt == "☰")
-                                {
-                                    btn.Width = 30;
-                                    btn.Height = 30;
-                                    btn.Padding = new Thickness(0);
-                                    continue;
-                                }
-                                btn.MinHeight = 38;
-                                btn.Margin = isCollapsed ? new Thickness(4, 3, 4, 3) : new Thickness(0, 3, 0, 3);
-                                btn.Padding = isCollapsed ? new Thickness(0, 6, 0, 6) : new Thickness(12, 7, 12, 7);
-                                btn.HorizontalContentAlignment = isCollapsed ? HorizontalAlignment.Center : HorizontalAlignment.Left;
-                                btn.VerticalContentAlignment = VerticalAlignment.Center;
-                            }
-                        }
-                    }
-                }
-            }
-            catch { }
         }
 
         private static void PatchZeroExpirationInputs(List<DependencyObject> safeElements)
@@ -633,40 +686,65 @@ namespace FieldTakHub.Builder.Services
 
     internal static class FactionLiveSyncBridge
     {
+        private static readonly HashSet<string> InvalidFactionTokens = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "PLI", "GeoChat", "TAK", "TAK_Tracker", "Router", "Client", "Auto",
+            "EU_868", "EU_433", "US", "SHORT_FAST", "SHORT_SLOW", "MEDIUM_FAST", "LONG_FAST",
+            "PMR", "VHF", "UHF", "DMR", "MGRS", "UTM", "WGS84", "DMS", "MILSIM", "ASG"
+        };
+
+        private static bool IsValidFactionName(string candidate)
+        {
+            if (string.IsNullOrWhiteSpace(candidate)) return false;
+            string clean = candidate.Trim();
+            if (clean.Length < 2 || clean.Length > 32) return false;
+            if (InvalidFactionTokens.Contains(clean)) return false;
+            if (clean.StartsWith("System.", StringComparison.OrdinalIgnoreCase)) return false;
+            if (clean.Contains("1:") || clean.Contains("MHz") || clean.Contains("CTCSS")) return false;
+            return true;
+        }
+
+        /// <summary>
+        /// Pobiera wyłącznie prawdziwe nazwy stron konfliktu z Generatora Stron / Paczek (bez PLI, GeoChat itp. - Punkt 6).
+        /// </summary>
         public static List<string> GetAllFactionNamesFromUi(Window win)
         {
             var res = new List<string>();
-            if (win == null) return new List<string> { "ORGA", "BLUFOR", "OPFOR" };
+            if (win == null) return new List<string> { "ORGA", "STRONA-2" };
+
             try
             {
+                // 1. Zczytaj z kolekcji Factions w pamięci okna lub serwisów
                 foreach (var facObj in EnumerateFactionObjectsFromWindow(win))
                 {
                     string n = GetPropStr(facObj, "Name", "FactionName", "SideName");
-                    if (!string.IsNullOrWhiteSpace(n) && !res.Contains(n, StringComparer.OrdinalIgnoreCase))
+                    if (IsValidFactionName(n) && !res.Contains(n.Trim(), StringComparer.OrdinalIgnoreCase))
                         res.Add(n.Trim());
                 }
 
-                var all = BuilderPackageAndUiPatcher.GetVisualTreeElements(win);
-                foreach (var lb in all.OfType<ListBox>())
+                // 2. Sprawdź metodę w OpordBuilderManager lub MapStudio (jeśli istnieje lista stron)
+                var flags = BindingFlags.Static | BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+                foreach (var m in typeof(OpordBuilderManager).GetMethods(flags))
                 {
-                    foreach (var it in lb.Items)
+                    if ((m.Name.Contains("Faction", StringComparison.OrdinalIgnoreCase) || m.Name.Contains("Sides", StringComparison.OrdinalIgnoreCase)) &&
+                        m.GetParameters().Length == 0 && typeof(IEnumerable<string>).IsAssignableFrom(m.ReturnType))
                     {
-                        string n = GetPropStr(it, "Name", "FactionName") ?? it?.ToString() ?? "";
-                        if (!string.IsNullOrWhiteSpace(n) && !res.Contains(n, StringComparer.OrdinalIgnoreCase)) res.Add(n.Trim());
-                    }
-                }
-                foreach (var cb in all.OfType<CheckBox>())
-                {
-                    // Zczytaj również nazwy stron z modułu Generator Map 1:1 (np. ORGA, STRONA-2)
-                    string c = cb.Content?.ToString() ?? "";
-                    if (!string.IsNullOrWhiteSpace(c) && c.Length <= 24 && !c.Contains(" ") && !res.Contains(c, StringComparer.OrdinalIgnoreCase))
-                    {
-                        res.Add(c.Trim());
+                        if (m.Invoke(null, null) is IEnumerable<string> names)
+                        {
+                            foreach (var fn in names)
+                                if (IsValidFactionName(fn) && !res.Contains(fn.Trim(), StringComparer.OrdinalIgnoreCase))
+                                    res.Add(fn.Trim());
+                        }
                     }
                 }
             }
             catch { }
-            if (res.Count == 0) { res.Add("ORGA"); res.Add("BLUFOR"); res.Add("OPFOR"); }
+
+            if (res.Count == 0)
+            {
+                res.Add("ORGA");
+                res.Add("STRONA-2");
+            }
             return res;
         }
 
@@ -691,6 +769,17 @@ namespace FieldTakHub.Builder.Services
                     try { CollectFactions(p.GetValue(r), list); } catch { }
                 }
             }
+
+            // Sprawdź również pola statyczne w klasach serwisowych projektu
+            foreach (var asmType in win.GetType().Assembly.GetTypes())
+            {
+                if (!asmType.Name.Contains("Builder") && !asmType.Name.Contains("Faction") && !asmType.Name.Contains("MainWindow")) continue;
+                foreach (var sf in asmType.GetFields(BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic))
+                {
+                    try { CollectFactions(sf.GetValue(null), list); } catch { }
+                }
+            }
+
             return list;
         }
 

@@ -1000,8 +1000,7 @@ namespace FieldTakHub.Builder.Services
                 {
                     _lastAutoI18nTick = nowTick;
                     var currentDescendants = GetAllVisualDescendants(win).ToList();
-                    CollapseObsoleteBuilderModeSelector(currentDescendants);
-                    BuilderPackageAndUiPatcher.ApplyEnhancements(win, currentDescendants);
+                    BuilderPackageAndUiPatcher.ApplyEnhancementsThrottled(win);
                     // I18n runs only on language toggle or module switch
                 }
                 if (_injectedSidebarContainer.Visibility != Visibility.Visible)

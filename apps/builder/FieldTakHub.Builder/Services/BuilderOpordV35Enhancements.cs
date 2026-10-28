@@ -36,6 +36,8 @@ namespace FieldTakHub.Builder.Services
     {
         private static readonly string[] ColSets = { "ABCDEFGH", "JKLMNPQR", "STUVWXYZ" };
         private static readonly string[] RowSets = { "ABCDEFGHJKLMNPQRSTUV", "FGHJKLMNPQRSTUVABCDE" };
+        private static OpordParagraphModel _cachedLiveModel;
+        private static OpordDayPlanModel _cachedLiveDay;
 
         public static ExtractedMapSnapshot ExtractMapDataSafe(Window win)
         {
@@ -123,33 +125,66 @@ namespace FieldTakHub.Builder.Services
             catch { return string.Format(CultureInfo.InvariantCulture, "{0:F5}, {1:F5}", lat, lon); }
         }
 
-        private static OpordParagraphModel GetActiveOpordModelViaReflection()
+        private static OpordParagraphModel FindOpordModelInApp()
         {
+            if (_cachedLiveModel != null) return _cachedLiveModel;
             try
             {
                 var flags = BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic;
-                foreach (var f in typeof(OpordBuilderManager).GetFields(flags))
+                foreach (var asmType in typeof(OpordBuilderManager).Assembly.GetTypes())
                 {
-                    if (typeof(OpordParagraphModel).IsAssignableFrom(f.FieldType))
-                        return f.GetValue(null) as OpordParagraphModel;
-                }
-                foreach (var p in typeof(OpordBuilderManager).GetProperties(flags))
-                {
-                    if (typeof(OpordParagraphModel).IsAssignableFrom(p.PropertyType))
-                        return p.GetValue(null) as OpordParagraphModel;
+                    foreach (var f in asmType.GetFields(flags))
+                    {
+                        if (typeof(OpordParagraphModel).IsAssignableFrom(f.FieldType))
+                        {
+                            var val = f.GetValue(null) as OpordParagraphModel;
+                            if (val != null) { _cachedLiveModel = val; return val; }
+                        }
+                    }
+                    foreach (var p in asmType.GetProperties(flags))
+                    {
+                        if (p.GetIndexParameters().Length == 0 && typeof(OpordParagraphModel).IsAssignableFrom(p.PropertyType))
+                        {
+                            var val = p.GetValue(null) as OpordParagraphModel;
+                            if (val != null) { _cachedLiveModel = val; return val; }
+                        }
+                    }
                 }
             }
             catch { }
             return null;
         }
 
+        private static void InvokeRebuildOpordForm(Window win)
+        {
+            try
+            {
+                var m = typeof(OpordBuilderManager).GetMethod("RebuildOpordForm", BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic);
+                if (m != null) m.Invoke(null, new object[] { win });
+            }
+            catch { }
+        }
+
+        private static void InvokeOriginalSyncComms(Window win, OpordParagraphModel model, OpordDayPlanModel activeDay)
+        {
+            try
+            {
+                var m = typeof(OpordBuilderManager).GetMethod("SyncCommsFromFactionGenerator", BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic);
+                if (m != null) m.Invoke(null, new object[] { win, model, activeDay });
+            }
+            catch { }
+        }
+
         public static void SyncAllFromGenerators(Window win, OpordParagraphModel model, OpordDayPlanModel activeDay)
         {
-            if (model == null) model = GetActiveOpordModelViaReflection();
-            if (model == null) return;
-            if (activeDay == null && model.Days != null && model.Days.Count > 0)
+            if (model != null) _cachedLiveModel = model;
+            else model = FindOpordModelInApp();
+
+            if (activeDay != null) _cachedLiveDay = activeDay;
+            else if (model != null && model.Days != null && model.Days.Count > 0)
                 activeDay = model.Days[Math.Clamp(model.ActiveDayIndex, 0, model.Days.Count - 1)];
-            if (activeDay == null) return;
+
+            if (model == null || activeDay == null) return;
 
             var snap = FactionLiveSyncBridge.CaptureCurrentFactionSnapshot(win, model.TargetFaction);
             if (!string.IsNullOrWhiteSpace(snap.FactionName)) model.TargetFaction = snap.FactionName;
@@ -201,33 +236,31 @@ namespace FieldTakHub.Builder.Services
 
         public static void AttachOpordUiExtensions(Window win, OpordParagraphModel model, OpordDayPlanModel activeDay, StackPanel mainStack, Action rebuildCallback)
         {
+            if (model != null) _cachedLiveModel = model;
+            if (activeDay != null) _cachedLiveDay = activeDay;
             EnhanceLiveOpordTree(win, BuilderPackageAndUiPatcher.GetVisualTreeElements(win));
         }
 
-        /// <summary>
-        /// Bezpośrednio modyfikuje żywe drzewo wizualne zakładki Generator OPORD (widoczne na zrzutach ekranu),
-        /// dzięki czemu wszystkie 6 punktów z listy zmian działa w 100% niezawodnie!
-        /// </summary>
         public static void EnhanceLiveOpordTree(Window win, List<DependencyObject> safeElements = null)
         {
             if (win == null) return;
             if (safeElements == null) safeElements = BuilderPackageAndUiPatcher.GetVisualTreeElements(win);
 
-            // Znajdź główny nagłówek OPORD: "GENERATOR ROZKAZU BOJOWEGO MILSIM / NATO"
             var opordTitleTb = safeElements.OfType<TextBlock>().FirstOrDefault(t =>
                 (t.Text ?? "").Contains("GENERATOR ROZKAZU BOJOWEGO", StringComparison.OrdinalIgnoreCase));
 
-            if (opordTitleTb == null) return; // Zakładka OPORD nie jest obecnie na ekranie
+            if (opordTitleTb == null) return;
 
-            var model = GetActiveOpordModelViaReflection();
-            OpordDayPlanModel activeDay = null;
+            var model = FindOpordModelInApp();
+            OpordDayPlanModel activeDay = _cachedLiveDay;
             if (model != null && model.Days != null && model.Days.Count > 0)
             {
                 activeDay = model.Days[Math.Clamp(model.ActiveDayIndex, 0, model.Days.Count - 1)];
+                _cachedLiveDay = activeDay;
             }
 
-            // 1. Dodaj przycisk "🔄 Pobierz z Generatora Stron" na samą górę do karty "GENERATOR ROZKAZU BOJOWEGO"
-            //    oraz odśwież listę wyboru strony konfliktu (ComboBox)
+            // 1. Górny pasek OPORD: wyczyść śmieciowe pozycje (PLI / GeoChat) z ComboBoxa stron (Punkt 4 i 6)
+            //    i podłącz działający przycisk "🔄 Pobierz dane z Generatora Stron" (Punkt 5)
             DependencyObject topParent = VisualTreeHelper.GetParent(opordTitleTb);
             while (topParent != null && !(topParent is StackPanel)) topParent = VisualTreeHelper.GetParent(topParent);
             if (topParent is StackPanel topHeaderStack)
@@ -236,13 +269,56 @@ namespace FieldTakHub.Builder.Services
                 var factionCombo = topScope.OfType<ComboBox>().FirstOrDefault();
                 if (factionCombo != null)
                 {
-                    var liveFactions = FactionLiveSyncBridge.GetAllFactionNamesFromUi(win);
-                    foreach (string fn in liveFactions)
+                    var cleanFactions = FactionLiveSyncBridge.GetAllFactionNamesFromUi(win);
+                    string curSelected = (factionCombo.SelectedItem is ComboBoxItem cbi ? cbi.Content?.ToString() : factionCombo.SelectedItem?.ToString()) ?? model?.TargetFaction ?? "";
+
+                    // Usuń PLI, GeoChat i inne nieprawidłowe elementy z listy
+                    for (int i = factionCombo.Items.Count - 1; i >= 0; i--)
+                    {
+                        string itemStr = factionCombo.Items[i]?.ToString() ?? "";
+                        if (itemStr.Equals("PLI", StringComparison.OrdinalIgnoreCase) ||
+                            itemStr.Equals("GeoChat", StringComparison.OrdinalIgnoreCase) ||
+                            itemStr.Equals("TAK", StringComparison.OrdinalIgnoreCase))
+                        {
+                            factionCombo.Items.RemoveAt(i);
+                        }
+                    }
+
+                    foreach (string fn in cleanFactions)
                     {
                         if (!factionCombo.Items.Cast<object>().Any(x => string.Equals(x?.ToString(), fn, StringComparison.OrdinalIgnoreCase)))
                         {
                             factionCombo.Items.Add(fn);
                         }
+                    }
+
+                    if (factionCombo.Tag?.ToString() != "FTH_FAC_COMBO_HOOKED")
+                    {
+                        factionCombo.Tag = "FTH_FAC_COMBO_HOOKED";
+                        factionCombo.DropDownOpened += (_, __) =>
+                        {
+                            var fresh = FactionLiveSyncBridge.GetAllFactionNamesFromUi(win);
+                            for (int i = factionCombo.Items.Count - 1; i >= 0; i--)
+                            {
+                                string s = factionCombo.Items[i]?.ToString() ?? "";
+                                if (s.Equals("PLI", StringComparison.OrdinalIgnoreCase) || s.Equals("GeoChat", StringComparison.OrdinalIgnoreCase))
+                                    factionCombo.Items.RemoveAt(i);
+                            }
+                            foreach (string fn in fresh)
+                            {
+                                if (!factionCombo.Items.Cast<object>().Any(x => string.Equals(x?.ToString(), fn, StringComparison.OrdinalIgnoreCase)))
+                                    factionCombo.Items.Add(fn);
+                            }
+                        };
+                        factionCombo.SelectionChanged += (_, __) =>
+                        {
+                            if (factionCombo.SelectedItem != null && model != null)
+                            {
+                                model.TargetFaction = factionCombo.SelectedItem.ToString();
+                                InvokeOriginalSyncComms(win, model, activeDay);
+                                SyncAllFromGenerators(win, model, activeDay);
+                            }
+                        };
                     }
                 }
 
@@ -252,7 +328,7 @@ namespace FieldTakHub.Builder.Services
                     var topSyncBtn = new Button
                     {
                         Content = BuilderI18n.T(
-                            "🔄 Pobierz dane z Generatora Stron i Mapy 1:1 (Odśwież strony, Tabelę E Łączności oraz współrzędne MGRS)",
+                            "🔄 Pobierz dane z Generatora Stron i Mapy 1:1 (Odśwież listę stron, Tabelę E Łączności oraz współrzędne MGRS)",
                             "🔄 Pull Data from Faction & Map Generators (Refresh Factions, Table E Comms & MGRS Coords)"),
                         Height = 36,
                         Margin = new Thickness(0, 8, 0, 2),
@@ -266,38 +342,80 @@ namespace FieldTakHub.Builder.Services
                     };
                     topSyncBtn.Click += (_, __) =>
                     {
-                        SyncAllFromGenerators(win, model, activeDay);
-                        RefreshSectionEAndCoordinatesInLiveTree(win, model, activeDay);
+                        var m = FindOpordModelInApp();
+                        var d = (m != null && m.Days != null && m.Days.Count > 0) ? m.Days[Math.Clamp(m.ActiveDayIndex, 0, m.Days.Count - 1)] : activeDay;
+                        InvokeOriginalSyncComms(win, m, d);
+                        SyncAllFromGenerators(win, m, d);
+                        InvokeRebuildOpordForm(win);
                     };
                     topHeaderStack.Children.Add(topSyncBtn);
                 }
             }
 
-            // 2. Zabezpiecz sekcję B.2 METOC: wyczyść domyślne 49.8494 / 18.8127 gdy brak AO i zablokuj przycisk "Pobierz METOC", gdy Miejscowość jest pusta i brak AO!
+            // 2. Napraw wygląd i działanie przycisku "☑️ Generuj tylko aktywny dzień" (Punkt 9)
+            PatchActiveDayOnlyButton(win, safeElements, model);
+
+            // 3. Zabezpiecz sekcję B.2 METOC
             PatchMetocSectionInLiveTree(win, safeElements, activeDay);
 
-            // 3. Sekcja E. Tabela łączności: ukryj stary przycisk "Pobierz z Generatora Stron", wypełnij zakresy częstotliwości i dodaj tabelę własnych kanałów ("na ptaszek")
+            // 4. Sekcja E. Tabela łączności: USUŃ 3 pola ręczne zaraz pod nagłówkiem E (Punkt 7),
+            //    zostaw automatycznie zaciągane częstotliwości z Generatora Stron + opcjonalną tabelę z estetycznym przyciskiem "−" (Punkt 8)
             PatchSectionECommsInLiveTree(win, safeElements, model, activeDay);
 
-            // 4. Sekcja IV. Logistyka oraz Załączniki: dodaj opcjonalny Załącznik 3 z Mapą ("na ptaszek")
+            // 5. Sekcja IV. Logistyka: Załącznik 3 z Mapą
             PatchSectionIVAnnex3MapInLiveTree(win, safeElements, activeDay);
+        }
 
-            // 5. Przycisk "Kopiuj na Discorda": podłącz okno skondensowanego eksportu z podziałem na wiadomości
+        private static void PatchActiveDayOnlyButton(Window win, List<DependencyObject> safeElements, OpordParagraphModel model)
+        {
+            Button generateAllDaysBtn = null;
+            Button activeDayOnlyBtn = null;
+
             foreach (var btn in safeElements.OfType<Button>())
             {
-                string bt = BuilderPackageAndUiPatcher.ExtractButtonText(btn);
-                if (bt.Contains("Kopiuj na Discorda", StringComparison.OrdinalIgnoreCase) || bt.Contains("Copy for Discord", StringComparison.OrdinalIgnoreCase))
+                string txt = BuilderPackageAndUiPatcher.ExtractButtonText(btn);
+                if (txt.Contains("Generuj wszystkie dni", StringComparison.OrdinalIgnoreCase) || txt.Contains("Generate all days", StringComparison.OrdinalIgnoreCase))
                 {
-                    if (btn.Tag?.ToString() != "FTH_DISCORD_MODAL_HOOKED")
+                    generateAllDaysBtn = btn;
+                }
+                else if (txt.Contains("aktywny dzień", StringComparison.OrdinalIgnoreCase) || txt.Contains("active day", StringComparison.OrdinalIgnoreCase))
+                {
+                    activeDayOnlyBtn = btn;
+                }
+            }
+
+            if (activeDayOnlyBtn != null)
+            {
+                activeDayOnlyBtn.Content = BuilderI18n.T("☑️ Generuj tylko aktywny dzień", "☑️ Generate active day only");
+                if (generateAllDaysBtn != null)
+                {
+                    // Dopasuj wygląd (tło, ramkę, kolor tekstu i czcionkę) 1:1 do przycisku "Generuj wszystkie dni"
+                    activeDayOnlyBtn.Background = generateAllDaysBtn.Background;
+                    activeDayOnlyBtn.Foreground = generateAllDaysBtn.Foreground;
+                    activeDayOnlyBtn.BorderBrush = generateAllDaysBtn.BorderBrush;
+                    activeDayOnlyBtn.BorderThickness = generateAllDaysBtn.BorderThickness;
+                    activeDayOnlyBtn.Padding = generateAllDaysBtn.Padding;
+                    activeDayOnlyBtn.Height = generateAllDaysBtn.Height;
+                    activeDayOnlyBtn.FontWeight = generateAllDaysBtn.FontWeight;
+                }
+
+                if (activeDayOnlyBtn.Tag?.ToString() != "FTH_ACTIVE_DAY_BTN_FIXED")
+                {
+                    activeDayOnlyBtn.Tag = "FTH_ACTIVE_DAY_BTN_FIXED";
+                    activeDayOnlyBtn.PreviewMouseLeftButtonDown += (s, e) =>
                     {
-                        btn.Tag = "FTH_DISCORD_MODAL_HOOKED";
-                        btn.PreviewMouseLeftButtonDown += (s, e) =>
+                        e.Handled = true;
+                        var m = model ?? FindOpordModelInApp();
+                        if (m != null && m.Days != null && m.Days.Count > 0)
                         {
-                            e.Handled = true;
-                            SyncAllFromGenerators(win, model, activeDay);
-                            ShowCondensedDiscordModal(win, model);
-                        };
-                    }
+                            int activeIdx = Math.Clamp(m.ActiveDayIndex, 0, m.Days.Count - 1);
+                            for (int i = 0; i < m.Days.Count; i++)
+                            {
+                                m.Days[i].IncludeInExport = (i == activeIdx);
+                            }
+                            InvokeRebuildOpordForm(win);
+                        }
+                    };
                 }
             }
         }
@@ -316,7 +434,6 @@ namespace FieldTakHub.Builder.Services
 
             var metocControls = BuilderPackageAndUiPatcher.GetVisualTreeElements(metocStack);
             var textBoxes = metocControls.OfType<TextBox>().ToList();
-            // W sekcji B.2 są 4 pola TextBox: [0]=Data, [1]=Miejscowość, [2]=Lat, [3]=Lon
             TextBox locBox = textBoxes.Count >= 2 ? textBoxes[1] : null;
             TextBox latBox = textBoxes.Count >= 3 ? textBoxes[2] : null;
             TextBox lonBox = textBoxes.Count >= 4 ? textBoxes[3] : null;
@@ -324,7 +441,6 @@ namespace FieldTakHub.Builder.Services
             var mapData = ExtractMapDataSafe(win);
             bool hasAo = mapData != null && (mapData.HasAoPolygon || mapData.Pois.Count > 0);
 
-            // Jeśli Miejscowość jest pusta i brak AO na mapie, wyczyść domyślne współrzędne arkusza (49.8494 / 18.8127)
             if (!hasAo && locBox != null && string.IsNullOrWhiteSpace(locBox.Text))
             {
                 if (latBox != null && (latBox.Text.StartsWith("49.84") || latBox.Text.StartsWith("49.85"))) latBox.Text = "";
@@ -364,6 +480,12 @@ namespace FieldTakHub.Builder.Services
             }
         }
 
+        /// <summary>
+        /// Naprawia Punkt 7 i Punkt 8:
+        /// - Usuwa (ukrywa) 3 pola ręcznego wpisywania częstotliwości zaraz pod nagłówkiem E. Tabela łączności,
+        /// - Zostawia pod nagłówkiem E automatycznie zaciągane częstotliwości z Generatora Stron,
+        /// - W opcjonalnej tabeli ręcznych częstotliwości naprawia przycisk usuwania wiersza ("−" z Padding = 0).
+        /// </summary>
         private static void PatchSectionECommsInLiveTree(Window win, List<DependencyObject> safeElements, OpordParagraphModel model, OpordDayPlanModel activeDay)
         {
             var secEHeader = safeElements.OfType<TextBlock>().FirstOrDefault(t =>
@@ -372,7 +494,6 @@ namespace FieldTakHub.Builder.Services
 
             if (secEHeader == null) return;
 
-            // Ukryj stary przycisk "Pobierz z Generatora Stron" obok nagłówka E. Tabela łączności (bo jest już na samej górze)
             var headerParent = VisualTreeHelper.GetParent(secEHeader) as Panel;
             if (headerParent != null)
             {
@@ -392,17 +513,34 @@ namespace FieldTakHub.Builder.Services
             while (secParent != null && !(secParent is StackPanel)) secParent = VisualTreeHelper.GetParent(secParent);
             if (!(secParent is StackPanel secStack)) return;
 
-            if (activeDay != null && string.IsNullOrWhiteSpace(activeDay.SyncedCommsMatrixSummary))
+            // Ukryj 3 ręczne pola tekstowe (Kanał główny, Kanał zapasowy, Kanał HQ) znajdujące się bezpośrednio pod nagłówkiem E (Punkt 7)!
+            foreach (var tb in BuilderPackageAndUiPatcher.GetVisualTreeElements(secStack).OfType<TextBox>())
             {
-                SyncAllFromGenerators(win, model, activeDay);
+                var p = VisualTreeHelper.GetParent(tb) as Panel;
+                if (p == null) continue;
+                string lbl = string.Join(" ", p.Children.OfType<TextBlock>().Select(x => x.Text ?? ""));
+                if (lbl.Contains("Kanał główny", StringComparison.OrdinalIgnoreCase) ||
+                    lbl.Contains("Kanał zapasowy", StringComparison.OrdinalIgnoreCase) ||
+                    lbl.Contains("Kanał HQ", StringComparison.OrdinalIgnoreCase) ||
+                    lbl.Contains("Primary channel", StringComparison.OrdinalIgnoreCase) ||
+                    lbl.Contains("Alternate channel", StringComparison.OrdinalIgnoreCase) ||
+                    lbl.Contains("HQ channel", StringComparison.OrdinalIgnoreCase))
+                {
+                    p.Visibility = Visibility.Collapsed;
+                    p.Height = 0;
+                    p.Margin = new Thickness(0);
+                    if (VisualTreeHelper.GetParent(p) is Grid rowGrid && rowGrid.ColumnDefinitions.Count == 3)
+                    {
+                        rowGrid.Visibility = Visibility.Collapsed;
+                        rowGrid.Height = 0;
+                        rowGrid.Margin = new Thickness(0);
+                    }
+                }
             }
-
-            RefreshSectionEAndCoordinatesInLiveTree(win, model, activeDay);
 
             if (secStack.Tag?.ToString() == "FTH_CUSTOM_COMMS_ADDED") return;
             secStack.Tag = "FTH_CUSTOM_COMMS_ADDED";
 
-            // Dodaj opcjonalną tabelkę na inne kanały ("na ptaszek") w Sekcji E
             var customBoxBorder = new Border
             {
                 Background = new SolidColorBrush(Color.FromRgb(8, 22, 28)),
@@ -436,7 +574,8 @@ namespace FieldTakHub.Builder.Services
 
             void SaveRowsToDayModel()
             {
-                if (activeDay == null) return;
+                var d = activeDay ?? _cachedLiveDay;
+                if (d == null) return;
                 var lines = new List<string>();
                 foreach (Grid g in rowsContainer.Children.OfType<Grid>())
                 {
@@ -446,12 +585,12 @@ namespace FieldTakHub.Builder.Services
                         lines.Add($"• {tbs[0].Text.Trim()} [{tbs[1].Text.Trim()}]: {tbs[2].Text.Trim()} ({tbs[3].Text.Trim()})");
                     }
                 }
-                activeDay.CustomChannelsTableText = string.Join("\n", lines);
+                d.CustomChannelsTableText = string.Join("\n", lines);
             }
 
             void AddCustomRow(string role, string band, string freq, string tone)
             {
-                var g = new Grid { Margin = new Thickness(0, 0, 0, 4) };
+                var g = new Grid { Margin = new Thickness(0, 0, 0, 6) };
                 g.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1.2, GridUnitType.Star) });
                 g.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(0.7, GridUnitType.Star) });
                 g.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1.4, GridUnitType.Star) });
@@ -463,7 +602,9 @@ namespace FieldTakHub.Builder.Services
                     var t = new TextBox
                     {
                         Text = val,
-                        Padding = new Thickness(6, 4, 6, 4),
+                        Height = 30,
+                        VerticalContentAlignment = VerticalAlignment.Center,
+                        Padding = new Thickness(8, 2, 8, 2),
                         Margin = new Thickness(0, 0, 6, 0),
                         Background = new SolidColorBrush(Color.FromRgb(13, 33, 41)),
                         Foreground = Brushes.White,
@@ -481,15 +622,23 @@ namespace FieldTakHub.Builder.Services
                 g.Children.Add(CreateCell(freq, 2));
                 g.Children.Add(CreateCell(tone, 3));
 
+                // Punkt 8: Estetyczny przycisk "−" (Padding = 0, dzięki czemu znak nigdy nie jest ucięty do kropek ":")
                 var delBtn = new Button
                 {
-                    Content = "✕",
-                    Width = 28,
-                    Height = 26,
-                    Background = new SolidColorBrush(Color.FromRgb(70, 20, 20)),
+                    Content = "−",
+                    Width = 32,
+                    Height = 30,
+                    Padding = new Thickness(0),
+                    HorizontalContentAlignment = HorizontalAlignment.Center,
+                    VerticalContentAlignment = VerticalAlignment.Center,
+                    Background = new SolidColorBrush(Color.FromRgb(85, 22, 22)),
                     Foreground = Brushes.White,
+                    BorderBrush = new SolidColorBrush(Color.FromRgb(235, 64, 52)),
+                    BorderThickness = new Thickness(1.2),
+                    FontSize = 16,
                     FontWeight = FontWeights.Bold,
-                    Cursor = Cursors.Hand
+                    Cursor = Cursors.Hand,
+                    ToolTip = BuilderI18n.T("Usuń ten kanał", "Remove channel")
                 };
                 delBtn.Click += (_, __) => { rowsContainer.Children.Remove(g); SaveRowsToDayModel(); };
                 Grid.SetColumn(delBtn, 4);
@@ -505,7 +654,7 @@ namespace FieldTakHub.Builder.Services
             {
                 Content = BuilderI18n.T("➕ Dodaj kolejny kanał własny", "➕ Add Custom Channel Row"),
                 HorizontalAlignment = HorizontalAlignment.Left,
-                Padding = new Thickness(12, 4, 12, 4),
+                Padding = new Thickness(12, 5, 12, 5),
                 Margin = new Thickness(0, 4, 0, 0),
                 Background = new SolidColorBrush(Color.FromRgb(18, 48, 58)),
                 Foreground = new SolidColorBrush(Color.FromRgb(31, 224, 197)),
@@ -525,13 +674,15 @@ namespace FieldTakHub.Builder.Services
 
             chk.Checked += (_, __) =>
             {
-                if (activeDay != null) activeDay.IncludeCustomChannelsTable = true;
+                var d = activeDay ?? _cachedLiveDay;
+                if (d != null) d.IncludeCustomChannelsTable = true;
                 bodyPanel.Visibility = Visibility.Visible;
                 SaveRowsToDayModel();
             };
             chk.Unchecked += (_, __) =>
             {
-                if (activeDay != null) activeDay.IncludeCustomChannelsTable = false;
+                var d = activeDay ?? _cachedLiveDay;
+                if (d != null) d.IncludeCustomChannelsTable = false;
                 bodyPanel.Visibility = Visibility.Collapsed;
             };
 
@@ -547,33 +698,6 @@ namespace FieldTakHub.Builder.Services
                 }
             }
             secStack.Children.Insert(insertIdx, customBoxBorder);
-        }
-
-        private static void RefreshSectionEAndCoordinatesInLiveTree(Window win, OpordParagraphModel model, OpordDayPlanModel activeDay)
-        {
-            if (win == null || activeDay == null) return;
-            var all = BuilderPackageAndUiPatcher.GetVisualTreeElements(win);
-
-            foreach (var tb in all.OfType<TextBox>())
-            {
-                var p = VisualTreeHelper.GetParent(tb) as Panel;
-                if (p == null) continue;
-                string lbl = string.Join(" ", p.Children.OfType<TextBlock>().Select(x => x.Text ?? ""));
-                if (lbl.Contains("Kanał główny", StringComparison.OrdinalIgnoreCase)) tb.Text = activeDay.PrimaryChannel;
-                else if (lbl.Contains("Kanał zapasowy", StringComparison.OrdinalIgnoreCase)) tb.Text = activeDay.AlternateChannel;
-                else if (lbl.Contains("Kanał HQ", StringComparison.OrdinalIgnoreCase)) tb.Text = activeDay.HqChannel;
-                else if (lbl.Contains("A. Obszar zainteresowania", StringComparison.OrdinalIgnoreCase) && !string.IsNullOrWhiteSpace(activeDay.AreaOfInterestPoiDesc))
-                    tb.Text = activeDay.AreaOfInterestPoiDesc;
-            }
-
-            foreach (var txt in all.OfType<TextBlock>())
-            {
-                string t = txt.Text ?? "";
-                if (t.Contains("[ZACIĄGNIĘTE Z GENERATORA STRON", StringComparison.OrdinalIgnoreCase))
-                {
-                    txt.Text = activeDay.SyncedCommsMatrixSummary;
-                }
-            }
         }
 
         private static void PatchSectionIVAnnex3MapInLiveTree(Window win, List<DependencyObject> safeElements, OpordDayPlanModel activeDay)
@@ -634,7 +758,7 @@ namespace FieldTakHub.Builder.Services
                 BorderBrush = new SolidColorBrush(Color.FromRgb(34, 74, 89)),
                 FontSize = 11.5
             };
-            pathBox.TextChanged += (_, __) => { if (activeDay != null) activeDay.Annex3MapImagePath = pathBox.Text; };
+            pathBox.TextChanged += (_, __) => { var d = activeDay ?? _cachedLiveDay; if (d != null) d.Annex3MapImagePath = pathBox.Text; };
             Grid.SetColumn(pathBox, 0);
             row.Children.Add(pathBox);
 
@@ -658,7 +782,8 @@ namespace FieldTakHub.Builder.Services
                 if (ofd.ShowDialog(win) == true)
                 {
                     pathBox.Text = ofd.FileName;
-                    if (activeDay != null) activeDay.Annex3MapImagePath = ofd.FileName;
+                    var d = activeDay ?? _cachedLiveDay;
+                    if (d != null) d.Annex3MapImagePath = ofd.FileName;
                 }
             };
             Grid.SetColumn(pickBtn, 1);
@@ -667,12 +792,14 @@ namespace FieldTakHub.Builder.Services
 
             chkAnnex3.Checked += (_, __) =>
             {
-                if (activeDay != null) activeDay.IncludeAnnex3Map = true;
+                var d = activeDay ?? _cachedLiveDay;
+                if (d != null) d.IncludeAnnex3Map = true;
                 detailsPanel.Visibility = Visibility.Visible;
             };
             chkAnnex3.Unchecked += (_, __) =>
             {
-                if (activeDay != null) activeDay.IncludeAnnex3Map = false;
+                var d = activeDay ?? _cachedLiveDay;
+                if (d != null) d.IncludeAnnex3Map = false;
                 detailsPanel.Visibility = Visibility.Collapsed;
             };
 
@@ -712,8 +839,13 @@ namespace FieldTakHub.Builder.Services
             return sb.ToString();
         }
 
+        /// <summary>
+        /// Punkt 1: Bezpośredni, skondensowany generator Markdown dla Discorda (kopiowany od razu do schowka, bez pustego okna!).
+        /// </summary>
         public static string BuildCondensedDiscordMarkdown(OpordParagraphModel m)
         {
+            if (m == null) m = FindOpordModelInApp();
+            if (m != null) _cachedLiveModel = m;
             var chunks = BuildCondensedDiscordChunks(m);
             if (chunks.Count == 0) return "";
             if (chunks.Count == 1) return chunks[0];
@@ -729,7 +861,7 @@ namespace FieldTakHub.Builder.Services
 
         public static List<string> BuildCondensedDiscordChunks(OpordParagraphModel m)
         {
-            if (m == null) m = GetActiveOpordModelViaReflection();
+            if (m == null) m = FindOpordModelInApp();
             var chunks = new List<string>();
             if (m == null || m.Days == null || m.Days.Count == 0) return chunks;
 
@@ -757,7 +889,8 @@ namespace FieldTakHub.Builder.Services
 
                 var b2 = new StringBuilder();
                 b2.AppendLine($"### 📡 ŁĄCZNOŚĆ, SARNEG & LOGISTYKA — {d.DayTitle} ({m.TargetFaction})");
-                b2.AppendLine($"• **Główny:** `{d.PrimaryChannel}`\n• **Zapas:** `{d.AlternateChannel}`\n• **HQ:** `{d.HqChannel}`");
+                if (!string.IsNullOrWhiteSpace(d.SyncedCommsMatrixSummary))
+                    b2.AppendLine($"```text\n{d.SyncedCommsMatrixSummary}\n```");
                 if (d.IncludeCustomChannelsTable && !string.IsNullOrWhiteSpace(d.CustomChannelsTableText))
                     b2.AppendLine($"• **Kanały dodatkowe:**\n{d.CustomChannelsTableText.Trim()}");
 
@@ -790,92 +923,6 @@ namespace FieldTakHub.Builder.Services
                             .Select(x => x.Trim())
                             .Where(x => !string.IsNullOrEmpty(x));
             return string.Join(" • ", parts);
-        }
-
-        public static void ShowCondensedDiscordModal(Window win, OpordParagraphModel model)
-        {
-            var chunks = BuildCondensedDiscordChunks(model);
-            string full = BuildCondensedDiscordMarkdown(model);
-            Clipboard.SetText(full);
-
-            var dlg = new Window
-            {
-                Title = BuilderI18n.T("💬 Skondensowany Eksport na Discorda (Gotowy do wklejenia / podziału)", "💬 Condensed Discord Export"),
-                Width = 660,
-                Height = 500,
-                WindowStartupLocation = WindowStartupLocation.CenterOwner,
-                Owner = win,
-                Background = new SolidColorBrush(Color.FromRgb(10, 24, 30)),
-                Foreground = Brushes.White
-            };
-
-            var grid = new Grid { Margin = new Thickness(16) };
-            grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-            grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-            grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
-
-            grid.Children.Add(new TextBlock
-            {
-                Text = $"✅ Skopiowano skondensowany rozkaz do schowka! Liczba wiadomości (<1900 zn.): {chunks.Count}",
-                Foreground = new SolidColorBrush(Color.FromRgb(31, 224, 197)),
-                FontWeight = FontWeights.Bold,
-                Margin = new Thickness(0, 0, 0, 8)
-            });
-
-            var wrap = new WrapPanel { Margin = new Thickness(0, 0, 0, 10) };
-            Grid.SetRow(wrap, 1);
-
-            var box = new TextBox
-            {
-                Text = full,
-                IsReadOnly = true,
-                AcceptsReturn = true,
-                TextWrapping = TextWrapping.Wrap,
-                VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
-                FontFamily = new FontFamily("Consolas"),
-                FontSize = 12,
-                Padding = new Thickness(10),
-                Background = new SolidColorBrush(Color.FromRgb(7, 17, 21)),
-                Foreground = Brushes.White
-            };
-            Grid.SetRow(box, 2);
-
-            var bAll = new Button
-            {
-                Content = "📋 Kopiuj CAŁOŚĆ",
-                Padding = new Thickness(12, 6, 12, 6),
-                Margin = new Thickness(0, 0, 8, 6),
-                Background = new SolidColorBrush(Color.FromRgb(31, 224, 197)),
-                Foreground = new SolidColorBrush(Color.FromRgb(5, 16, 20)),
-                FontWeight = FontWeights.Bold,
-                Cursor = Cursors.Hand
-            };
-            bAll.Click += (_, __) => { Clipboard.SetText(full); box.Text = full; };
-            wrap.Children.Add(bAll);
-
-            for (int i = 0; i < chunks.Count; i++)
-            {
-                int idx = i;
-                string cTxt = chunks[i];
-                var bPart = new Button
-                {
-                    Content = $"💬 Kopiuj Wiadomość {idx + 1}/{chunks.Count} ({cTxt.Length} zn.)",
-                    Padding = new Thickness(12, 6, 12, 6),
-                    Margin = new Thickness(0, 0, 8, 6),
-                    Background = new SolidColorBrush(Color.FromRgb(22, 54, 66)),
-                    Foreground = new SolidColorBrush(Color.FromRgb(250, 208, 44)),
-                    BorderBrush = new SolidColorBrush(Color.FromRgb(250, 208, 44)),
-                    FontWeight = FontWeights.Bold,
-                    Cursor = Cursors.Hand
-                };
-                bPart.Click += (_, __) => { Clipboard.SetText(cTxt); box.Text = cTxt; };
-                wrap.Children.Add(bPart);
-            }
-
-            grid.Children.Add(wrap);
-            grid.Children.Add(box);
-            dlg.Content = grid;
-            dlg.ShowDialog();
         }
     }
 }

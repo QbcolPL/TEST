@@ -299,7 +299,7 @@ namespace FieldTakHub.Builder.Services
 
                 var btnSelectOnlyActiveDay = new Button
                 {
-                    Content = BuilderI18n.T("1️⃣ Tylko aktywny dzień", "1️⃣ Only Active Day"),
+                    Content = BuilderI18n.T("☑️ Generuj tylko aktywny dzień", "1️⃣ Only Active Day"),
                     Height = 24,
                     Padding = new Thickness(8, 1, 8, 1),
                     Background = new SolidColorBrush(Color.FromRgb(16, 42, 52)),
