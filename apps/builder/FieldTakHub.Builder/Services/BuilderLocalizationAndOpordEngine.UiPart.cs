@@ -607,6 +607,7 @@ namespace FieldTakHub.Builder.Services
 
                 btnFetchUnifiedMetoc.Click += async (_, __) =>
                 {
+                    if (!BuilderOpordV35Enhancements.CheckAndPrepareMetocBeforeFetch()) return;
                     btnFetchUnifiedMetoc.IsEnabled = false;
                     try
                     {
@@ -1706,6 +1707,7 @@ namespace FieldTakHub.Builder.Services
             };
             tb.TextChanged += (_, __) => onChanged?.Invoke(tb.Text);
             sp.Children.Add(tb);
+                BuilderOpordV35Enhancements.UpgradeOpordMainStack(sp);
             return sp;
         }
 

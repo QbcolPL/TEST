@@ -1402,7 +1402,7 @@ private static void CaptureAndCollapseTopMenuBar(List<DependencyObject> allEleme
             _projBtnNew = CreateSidebarActionButton(
                 "M14,2H6A2,2 0 0,0 4,4V20A2,2 0 0,0 6,22H18A2,2 0 0,0 20,20V8L14,2M18,20H6V4H13V9H18V20M11,11V14H8V16H11V19H13V16H16V14H13V11H11Z",
                 "Nowy projekt (Stan zerowy)",
-                "#2ECC71",
+                FieldTakHub.Builder.Services.TacticalSharedState.GetNextUniqueColorHex(),
                 () => CreateNewZeroProjectInteractive(win));
             topStack.Children.Add(_projBtnNew);
 

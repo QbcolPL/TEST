@@ -2044,7 +2044,7 @@ namespace FieldTakHub.Builder.Services
                     else
                     {
                         AddLegendRow("HQ", "Sztab / Dowództwo strony", "#2684FF");
-                        AddLegendRow("⛺", "Namiot / Baza polowa / Respawn", "#2ECC71");
+                        AddLegendRow("⛺", "Namiot / Baza polowa / Respawn", FieldTakHub.Builder.Services.TacticalSharedState.GetNextUniqueColorHex());
                         AddLegendRow("➤", "Kierunek natarcia / Ruch", "#F5B82E");
                         AddLegendRow("AO", "Granica Terenu Gry (strefa poza grą)", "#EB4034");
                     }

@@ -1248,7 +1248,7 @@ namespace FieldTakHub.Builder.Services
             topCornerBar.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
             topCornerBar.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
 
-            string[] palette = { "#F5B82E", "#2ECC71", "#9B59B6", "#E67E22", "#1ABC9C", "#E84393" };
+            string[] palette = { "#F5B82E", FieldTakHub.Builder.Services.TacticalSharedState.GetNextUniqueColorHex(), "#9B59B6", "#E67E22", "#1ABC9C", "#E84393" };
             var btnPlus = CreateCornerIconButton("+", BrushGreenPlus, true, "Dodaj nową stronę konfliktu", () =>
             {
                 int nextNum = _factions.Count + 1;
@@ -1677,7 +1677,7 @@ namespace FieldTakHub.Builder.Services
             previewBorder.Child = previewText; root.Children.Add(previewBorder);
 
             var swatchesWrap = new WrapPanel { Margin = new Thickness(0, 0, 0, 10) };
-            string[] presets = { "#2684FF", "#EB4034", "#F5B82E", "#2ECC71", "#9B59B6", "#1FE0C5", "#E67E22", "#E84393", "#00CEC9", "#FFFFFF" };
+            string[] presets = { "#2684FF", "#EB4034", "#F5B82E", FieldTakHub.Builder.Services.TacticalSharedState.GetNextUniqueColorHex(), "#9B59B6", "#1FE0C5", "#E67E22", "#E84393", "#00CEC9", "#FFFFFF" };
             Slider sR = null, sG = null, sB = null; TextBox hexBox = null; bool updating = false;
 
             void UpdateFromRgb()

@@ -197,7 +197,7 @@ namespace FieldTakHub.Builder.Services
             if (string.IsNullOrEmpty(color) || color == "#2684FF")
             {
                 if (name.Contains("Infil", StringComparison.OrdinalIgnoreCase) || name.Contains("Resp", StringComparison.OrdinalIgnoreCase))
-                    color = "#2ECC71";
+                    color = FieldTakHub.Builder.Services.TacticalSharedState.GetNextUniqueColorHex();
                 else if (name.Contains("Kod", StringComparison.OrdinalIgnoreCase) || name.Contains("Cel", StringComparison.OrdinalIgnoreCase) || name.Contains("OBJ", StringComparison.OrdinalIgnoreCase))
                     color = "#EB4034";
                 else if (name.Contains("Update", StringComparison.OrdinalIgnoreCase) || name.Contains("CP", StringComparison.OrdinalIgnoreCase))
@@ -466,7 +466,7 @@ namespace FieldTakHub.Builder.Services
                             Kind = "Route",
                             SymbolCode = "Route",
                             Name = rawName,
-                            ColorHex = "#2ECC71",
+                            ColorHex = FieldTakHub.Builder.Services.TacticalSharedState.GetNextUniqueColorHex(),
                             ShowLabel = true,
                             SizeMultiplier = 1.0
                         };
