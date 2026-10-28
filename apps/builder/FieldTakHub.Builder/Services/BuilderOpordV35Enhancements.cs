@@ -13,7 +13,6 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
-using System.Windows.Shapes;
 using System.Windows.Threading;
 using Microsoft.Win32;
 
@@ -43,7 +42,7 @@ namespace FieldTakHub.Builder.Services
         private static OpordParagraphModel _cachedLiveModel;
         private static OpordDayPlanModel _cachedLiveDay;
         private static MethodInfo _cachedRebuildMethod;
-        public static bool IsRebuildingOpord;
+        public static bool IsRebuildingOpord { get; set; }
 
         public static void OnModuleSwitched(Window win)
         {
@@ -175,12 +174,12 @@ namespace FieldTakHub.Builder.Services
                     {
                         foreach (UIElement ch in canvas.Children)
                         {
-                            if (ch is Polygon poly && poly.Points != null && poly.Points.Count >= 3 && poly.Visibility == Visibility.Visible)
+                            if (ch is System.Windows.Shapes.Polygon poly && poly.Points != null && poly.Points.Count >= 3 && poly.Visibility == Visibility.Visible)
                             {
                                 snap.HasAoPolygon = true;
                                 break;
                             }
-                            if (ch is Polyline pline && pline.Points != null && pline.Points.Count >= 3 && pline.Visibility == Visibility.Visible)
+                            if (ch is System.Windows.Shapes.Polyline pline && pline.Points != null && pline.Points.Count >= 3 && pline.Visibility == Visibility.Visible)
                             {
                                 snap.HasAoPolygon = true;
                                 break;
@@ -993,7 +992,7 @@ namespace FieldTakHub.Builder.Services
                     try
                     {
                         byte[] b = File.ReadAllBytes(d.Annex3MapImagePath);
-                        string ext = Path.GetExtension(d.Annex3MapImagePath).ToLowerInvariant();
+                        string ext = System.IO.Path.GetExtension(d.Annex3MapImagePath).ToLowerInvariant();
                         string mime = (ext == ".jpg" || ext == ".jpeg") ? "image/jpeg" : "image/png";
                         sb.AppendLine($"<div style='text-align:center;margin-top:8px;'><img src='data:{mime};base64,{Convert.ToBase64String(b)}' style='max-width:100%;max-height:210mm;border:2px solid #1e3a46;border-radius:6px;'/></div>");
                     }
