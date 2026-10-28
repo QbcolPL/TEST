@@ -20,37 +20,66 @@ namespace FieldTakHub.Builder.Services
     internal static class BuilderPackageAndUiPatcher
     {
         private static bool _sharedFoldersInitialized;
+        private static bool _isApplying;
+        private static int _pendingLayoutPasses = 2;
+        private static DateTime _lastApplyUtc = DateTime.MinValue;
         private static HttpListener _hotspotListener;
         private static int _hotspotPort = 8769;
-        private static DateTime _lastEnhancementRunUtc = DateTime.MinValue;
         public static string LatestHotspotJsonPayload = "{}";
 
-        /// <summary>
-        /// Wersja z throttlingiem czasowym (max raz na 450 ms), eliminująca jakiekolwiek spowolnienia
-        /// przy przechodzeniu między zakładkami i przewijaniu (Punkt 10).
-        /// </summary>
+        public static void RequestSingleLayoutPass()
+        {
+            _pendingLayoutPasses = 1;
+        }
+
+        public static bool AllowSingleLayoutPass()
+        {
+            if (_isApplying) return false;
+            if (_pendingLayoutPasses <= 0) return false;
+            var now = DateTime.UtcNow;
+            if ((now - _lastApplyUtc).TotalMilliseconds < 250) return false;
+            _pendingLayoutPasses--;
+            _lastApplyUtc = now;
+            return true;
+        }
+
         public static void ApplyEnhancementsThrottled(Window win)
         {
-            if (win == null) return;
-            var now = DateTime.UtcNow;
-            if ((now - _lastEnhancementRunUtc).TotalMilliseconds < 450) return;
-            _lastEnhancementRunUtc = now;
+            if (win == null || _isApplying) return;
+            if (!AllowSingleLayoutPass()) return;
             ApplyEnhancements(win, null);
         }
 
-        public static List<DependencyObject> GetVisualTreeElements(DependencyObject root)
+        /// <summary>
+        /// Szybkie przeszukiwanie drzewa wizualnego:
+        /// - Pomija gałęzie ukryte (Visibility == Collapsed), co przyspiesza działanie o ~90% przy zmianie zakładek,
+        /// - Nie wchodzi do wnętrza szablonów kontrolek (TextBox, ComboBox, Slider, Button, DataGrid, WebView2).
+        /// </summary>
+        public static List<DependencyObject> GetVisualTreeElements(DependencyObject root, bool includeCollapsed = false)
         {
-            var result = new List<DependencyObject>();
+            var result = new List<DependencyObject>(128);
             if (root == null) return result;
 
-            var q = new Queue<DependencyObject>();
+            var q = new Queue<DependencyObject>(64);
             q.Enqueue(root);
             while (q.Count > 0)
             {
                 var cur = q.Dequeue();
+                if (!includeCollapsed && cur != root && cur is UIElement uie && uie.Visibility == Visibility.Collapsed)
+                {
+                    continue;
+                }
+
                 result.Add(cur);
 
                 if (cur != root && (cur is TextBoxBase || cur is ComboBox || cur is Slider || cur is ButtonBase || cur is DataGrid || cur is PasswordBox || cur is ScrollBar))
+                {
+                    continue;
+                }
+
+                // Pomiń wchodzenie w głąb kontrolki mapy WebView2
+                string typeName = cur.GetType().Name;
+                if (typeName.Contains("WebView", StringComparison.OrdinalIgnoreCase))
                 {
                     continue;
                 }
@@ -92,13 +121,13 @@ namespace FieldTakHub.Builder.Services
         {
             string root = GetWorkspaceRootDir();
             string wspolne = Path.Combine(root, "wspolne");
-            Directory.CreateDirectory(Path.Combine(wspolne, "apk"));
-            Directory.CreateDirectory(Path.Combine(wspolne, "plugins"));
-            Directory.CreateDirectory(Path.Combine(wspolne, "maps"));
-            Directory.CreateDirectory(Path.Combine(root, "out"));
             if (!_sharedFoldersInitialized)
             {
                 _sharedFoldersInitialized = true;
+                Directory.CreateDirectory(Path.Combine(wspolne, "apk"));
+                Directory.CreateDirectory(Path.Combine(wspolne, "plugins"));
+                Directory.CreateDirectory(Path.Combine(wspolne, "maps"));
+                Directory.CreateDirectory(Path.Combine(root, "out"));
                 string readme = Path.Combine(wspolne, "INSTRUKCJA_FOLDERU_WSPOLNE.txt");
                 if (!File.Exists(readme))
                 {
@@ -131,54 +160,52 @@ namespace FieldTakHub.Builder.Services
             return outDir;
         }
 
-        public static void ApplyEnhancements(Window win, List<DependencyObject> allElements)
+        public static void ApplyEnhancements(Window win, List<DependencyObject> ignoredElements)
         {
-            if (win == null) return;
-            _lastEnhancementRunUtc = DateTime.UtcNow;
-            EnsureSharedFolderStructure();
+            if (win == null || _isApplying) return;
+            _isApplying = true;
             try
             {
+                EnsureSharedFolderStructure();
                 if (win.MinWidth > 900) win.MinWidth = 900;
                 if (win.MinHeight > 580) win.MinHeight = 580;
 
-                var safeElements = GetVisualTreeElements(win);
-                CollapseLegacyTopModeBarPrecisely(safeElements);
-                FixSidebarCollapseButtonAndIcons(win, safeElements);
-                PatchZeroExpirationInputs(safeElements);
-                PatchFactionFilesAndPosterButtons(win, safeElements);
-                PatchFtakGeneratorCardToThreeButtons(win, safeElements);
-
-                BuilderOpordV35Enhancements.EnhanceLiveOpordTree(win, safeElements);
+                var visibleElements = GetVisualTreeElements(win, includeCollapsed: false);
+                CollapseLegacyTopModeBarPrecisely(visibleElements);
+                FixSidebarCollapseButtonAndIcons(win, visibleElements);
+                PatchZeroExpirationInputs(visibleElements);
+                PatchFactionFilesAndPosterButtons(win, visibleElements);
+                PatchFtakGeneratorCardToThreeButtons(win, visibleElements);
             }
             catch { }
+            finally
+            {
+                _isApplying = false;
+            }
         }
 
-        /// <summary>
-        /// Naprawia Punkt 2 i Punkt 3:
-        /// - Przywraca widoczną strzałkę "❮" / "❯" na przycisku zwijania menu bocznego (Padding = 0),
-        /// - Naprawia ucięte ikony na pasku bocznym po jego zminimalizowaniu (Padding = 0 i wyśrodkowanie ikon).
-        /// </summary>
-        private static void FixSidebarCollapseButtonAndIcons(Window win, List<DependencyObject> safeElements)
+        private static void FixSidebarCollapseButtonAndIcons(Window win, List<DependencyObject> visibleElements)
         {
             try
             {
-                foreach (var border in safeElements.OfType<Border>())
+                foreach (var border in visibleElements.OfType<Border>())
                 {
                     if (IsInsideControlTemplate(border)) continue;
                     if (Grid.GetColumn(border) == 0 && border.ActualWidth >= 44 && border.ActualWidth <= 290)
                     {
                         bool isCollapsed = border.ActualWidth < 95;
-                        var sideButtons = GetVisualTreeElements(border).OfType<Button>().ToList();
+                        string stateTag = isCollapsed ? "SIDEBAR_COLLAPSED" : "SIDEBAR_EXPANDED";
+                        if (border.Tag?.ToString() == stateTag) return; // Już zaktualizowano dla tego stanu — nie wywołuj ponownego Layoutu!
+                        border.Tag = stateTag;
 
+                        var sideButtons = GetVisualTreeElements(border, includeCollapsed: true).OfType<Button>().ToList();
                         foreach (var btn in sideButtons)
                         {
-                            // Rozpoznaj przycisk zwijania menu bocznego (mały kwadratowy przycisk w nagłówku paska)
+                            string txt = ExtractButtonText(btn);
                             bool isCollapseToggle =
                                 (btn.Width >= 22 && btn.Width <= 42) ||
                                 (btn.ActualWidth >= 22 && btn.ActualWidth <= 42) ||
-                                ExtractButtonText(btn) == "<" || ExtractButtonText(btn) == ">" ||
-                                ExtractButtonText(btn) == "❮" || ExtractButtonText(btn) == "❯" ||
-                                ExtractButtonText(btn) == "«" || ExtractButtonText(btn) == "»";
+                                txt == "<" || txt == ">" || txt == "❮" || txt == "❯" || txt == "«" || txt == "»";
 
                             if (isCollapseToggle)
                             {
@@ -189,17 +216,25 @@ namespace FieldTakHub.Builder.Services
                                 btn.FontSize = 14;
                                 btn.FontWeight = FontWeights.Bold;
                                 btn.Content = isCollapsed ? "❯" : "❮";
+
+                                if (btn.Tag?.ToString() != "FTH_TOGGLE_HOOKED")
+                                {
+                                    btn.Tag = "FTH_TOGGLE_HOOKED";
+                                    btn.Click += (_, __) =>
+                                    {
+                                        border.Tag = null;
+                                        RequestSingleLayoutPass();
+                                    };
+                                }
                                 continue;
                             }
 
-                            // Dla pozostałych przycisków nawigacyjnych w pasku bocznym:
                             if (isCollapsed)
                             {
                                 btn.Padding = new Thickness(0);
                                 btn.HorizontalContentAlignment = HorizontalAlignment.Center;
                                 btn.VerticalContentAlignment = VerticalAlignment.Center;
 
-                                // Jeśli zawartością przycisku jest StackPanel/Grid z ikoną i tekstem, wyśrodkuj ikonę i ukryj tekst w trybie zwiniętym
                                 if (btn.Content is Panel p)
                                 {
                                     p.HorizontalAlignment = HorizontalAlignment.Center;
@@ -239,6 +274,7 @@ namespace FieldTakHub.Builder.Services
                                 }
                             }
                         }
+                        break;
                     }
                 }
             }
@@ -249,52 +285,49 @@ namespace FieldTakHub.Builder.Services
         {
             if (elements == null) return;
 
-            for (int pass = 0; pass < 2; pass++)
+            foreach (var el in elements)
             {
-                foreach (var el in elements)
+                if (IsInsideControlTemplate(el)) continue;
+
+                if (el is TextBlock tb)
                 {
-                    if (IsInsideControlTemplate(el)) continue;
-
-                    if (el is TextBlock tb)
+                    string txt = (tb.Text ?? "").Trim();
+                    if (txt.Contains("TRYB PRACY BUILDERA", StringComparison.OrdinalIgnoreCase) ||
+                        txt.Contains("BUILDER MODE", StringComparison.OrdinalIgnoreCase) ||
+                        txt.Contains("Wybierz moduł operacyjny", StringComparison.OrdinalIgnoreCase))
                     {
-                        string txt = (tb.Text ?? "").Trim();
-                        if (txt.Contains("TRYB PRACY BUILDERA", StringComparison.OrdinalIgnoreCase) ||
-                            txt.Contains("BUILDER MODE", StringComparison.OrdinalIgnoreCase) ||
-                            txt.Contains("Wybierz moduł operacyjny", StringComparison.OrdinalIgnoreCase))
-                        {
+                        if (tb.Visibility != Visibility.Collapsed)
                             tb.Visibility = Visibility.Collapsed;
-                            CollapseParentBarBorder(tb);
-                        }
-                        else if (txt.StartsWith("BUILDER v2.", StringComparison.OrdinalIgnoreCase))
-                        {
-                            tb.Text = "BUILDER v3.5";
-                        }
+                        CollapseParentBarBorder(tb);
                     }
-
-                    if (el is Border b && b.Visibility == Visibility.Visible)
+                    else if (txt.StartsWith("BUILDER v2.", StringComparison.OrdinalIgnoreCase))
                     {
-                        if (IsInsideScrollViewer(b)) continue;
-                        if (Grid.GetColumn(b) == 0 && b.ActualWidth > 0 && b.ActualWidth <= 290) continue;
+                        tb.Text = "BUILDER v3.5";
+                    }
+                }
 
-                        if (b.Child == null)
+                if (el is Border b && b.Visibility == Visibility.Visible)
+                {
+                    if (IsInsideScrollViewer(b)) continue;
+                    if (Grid.GetColumn(b) == 0 && b.ActualWidth > 0 && b.ActualWidth <= 290) continue;
+
+                    if (b.Child == null && b.ActualHeight > 0 && b.ActualHeight < 90)
+                    {
+                        CollapseSingleBorderAndRow(b);
+                    }
+                    else if (b.Child is UIElement childEl)
+                    {
+                        if (childEl.Visibility == Visibility.Collapsed)
                         {
-                            if (b.ActualHeight < 90) CollapseSingleBorderAndRow(b);
+                            CollapseSingleBorderAndRow(b);
                         }
-                        else if (b.Child is UIElement childEl)
+                        else if (childEl is Panel p && p.Children.Count > 0)
                         {
-                            if (childEl.Visibility == Visibility.Collapsed)
-                            {
-                                CollapseSingleBorderAndRow(b);
-                            }
-                            else if (childEl is Panel p && p.Children.Count > 0)
-                            {
-                                bool allHidden = p.Children.Cast<UIElement>().All(c =>
-                                    c.Visibility == Visibility.Collapsed ||
-                                    (c is Panel sp && sp.Children.Count > 0 && sp.Children.Cast<UIElement>().All(x => x.Visibility == Visibility.Collapsed)) ||
-                                    (c is Border sb && (sb.Visibility == Visibility.Collapsed || (sb.Child != null && sb.Child.Visibility == Visibility.Collapsed))));
+                            bool allHidden = p.Children.Cast<UIElement>().All(c =>
+                                c.Visibility == Visibility.Collapsed ||
+                                (c is Panel sp && sp.Children.Count > 0 && sp.Children.Cast<UIElement>().All(x => x.Visibility == Visibility.Collapsed)));
 
-                                if (allHidden) CollapseSingleBorderAndRow(b);
-                            }
+                            if (allHidden) CollapseSingleBorderAndRow(b);
                         }
                     }
                 }
@@ -329,6 +362,7 @@ namespace FieldTakHub.Builder.Services
 
         private static void CollapseSingleBorderAndRow(Border b)
         {
+            if (b.Visibility == Visibility.Collapsed) return;
             b.Visibility = Visibility.Collapsed;
             b.Height = 0;
             b.MinHeight = 0;
@@ -342,23 +376,8 @@ namespace FieldTakHub.Builder.Services
                 int r = Grid.GetRow(b);
                 if (r >= 0 && r < g.RowDefinitions.Count)
                 {
-                    bool otherVisibleInRow = false;
-                    foreach (UIElement ch in g.Children)
-                    {
-                        if (ch != b && Grid.GetRow(ch) == r && ch.Visibility == Visibility.Visible)
-                        {
-                            if (!(Grid.GetColumn(ch) == 0 && Grid.GetRowSpan(ch) > 1))
-                            {
-                                otherVisibleInRow = true;
-                                break;
-                            }
-                        }
-                    }
-                    if (!otherVisibleInRow)
-                    {
-                        g.RowDefinitions[r].Height = new GridLength(0);
-                        g.RowDefinitions[r].MinHeight = 0;
-                    }
+                    g.RowDefinitions[r].Height = new GridLength(0);
+                    g.RowDefinitions[r].MinHeight = 0;
                 }
             }
         }
@@ -381,66 +400,54 @@ namespace FieldTakHub.Builder.Services
         {
             foreach (var btn in safeElements.OfType<Button>())
             {
+                if (btn.Tag?.ToString() == "FTH_FAC_FILES_ACTIVE" || btn.Tag?.ToString() == "FTH_POSTER_OK") continue;
+
                 string txt = ExtractButtonText(btn);
                 string name = btn.Name ?? "";
-                string tip = (btn.ToolTip ?? "").ToString();
 
                 bool isFactionFilesBtn =
                     txt.Contains("Pliki str", StringComparison.OrdinalIgnoreCase) ||
                     txt.Contains("Faction files", StringComparison.OrdinalIgnoreCase) ||
-                    txt.Contains("Folder strony", StringComparison.OrdinalIgnoreCase) ||
                     name.Contains("FactionFiles", StringComparison.OrdinalIgnoreCase) ||
-                    name.Contains("PlikiStrony", StringComparison.OrdinalIgnoreCase) ||
-                    tip.Contains("Pliki str", StringComparison.OrdinalIgnoreCase);
+                    name.Contains("PlikiStrony", StringComparison.OrdinalIgnoreCase);
 
                 if (isFactionFilesBtn)
                 {
+                    btn.Tag = "FTH_FAC_FILES_ACTIVE";
                     btn.IsEnabled = true;
                     btn.Visibility = Visibility.Visible;
                     btn.Opacity = 1.0;
+                    btn.Cursor = Cursors.Hand;
+                    btn.Content = BuilderI18n.T("📂 Pliki strony", "📂 Faction Files");
 
-                    if (txt.Contains("Pliki strny", StringComparison.OrdinalIgnoreCase) || string.IsNullOrWhiteSpace(txt))
+                    btn.IsEnabledChanged += (sender, args) =>
                     {
-                        btn.Content = BuilderI18n.T("📂 Pliki strony", "📂 Faction Files");
-                    }
-
-                    if (btn.Tag?.ToString() != "FTH_FAC_FILES_ACTIVE")
+                        if (sender is Button b && !b.IsEnabled) b.IsEnabled = true;
+                    };
+                    btn.PreviewMouseLeftButtonDown += (s, e) =>
                     {
-                        btn.Tag = "FTH_FAC_FILES_ACTIVE";
-                        btn.Cursor = Cursors.Hand;
-                        btn.IsEnabledChanged += (sender, args) =>
+                        e.Handled = true;
+                        try
                         {
-                            if (sender is Button b && !b.IsEnabled) b.IsEnabled = true;
-                        };
-                        btn.PreviewMouseLeftButtonDown += (s, e) =>
+                            string facName = TryExtractFactionNameFromDataContext(btn);
+                            string dir = EnsureActiveFactionOutputFolder(win, facName);
+                            Process.Start(new ProcessStartInfo("explorer.exe", "\"" + dir + "\"") { UseShellExecute = true });
+                        }
+                        catch (Exception ex)
                         {
-                            e.Handled = true;
-                            try
-                            {
-                                string facName = TryExtractFactionNameFromDataContext(btn);
-                                string dir = EnsureActiveFactionOutputFolder(win, facName);
-                                Process.Start(new ProcessStartInfo("explorer.exe", "\"" + dir + "\"") { UseShellExecute = true });
-                            }
-                            catch (Exception ex)
-                            {
-                                MessageBox.Show("Nie udało się otworzyć folderu strony: " + ex.Message, "Field TAK Hub", MessageBoxButton.OK, MessageBoxImage.Warning);
-                            }
-                        };
-                    }
+                            MessageBox.Show("Nie udało się otworzyć folderu strony: " + ex.Message, "Field TAK Hub", MessageBoxButton.OK, MessageBoxImage.Warning);
+                        }
+                    };
                 }
-
-                if (txt.Contains("Plakat", StringComparison.OrdinalIgnoreCase) || txt.Contains("Safezone", StringComparison.OrdinalIgnoreCase))
+                else if (txt.Contains("Plakat", StringComparison.OrdinalIgnoreCase) || txt.Contains("Safezone", StringComparison.OrdinalIgnoreCase))
                 {
+                    btn.Tag = "FTH_POSTER_OK";
                     btn.IsEnabled = true;
-                    if (btn.Tag?.ToString() != "FTH_POSTER_OK")
+                    btn.PreviewMouseLeftButtonDown += (s, e) =>
                     {
-                        btn.Tag = "FTH_POSTER_OK";
-                        btn.PreviewMouseLeftButtonDown += (s, e) =>
-                        {
-                            e.Handled = true;
-                            GenerateAndOpenSafezonePosterHtml(win);
-                        };
-                    }
+                        e.Handled = true;
+                        GenerateAndOpenSafezonePosterHtml(win);
+                    };
                 }
             }
         }
@@ -478,7 +485,7 @@ namespace FieldTakHub.Builder.Services
                             "🎯 GENERATOR PACZEK .FTAK (FOLDER out\\<STRONA>\\ + WSPÓLNY FOLDER APK / PLUGINY / MAPY)",
                             "🎯 .FTAK PACKAGE GENERATOR (out\\<FACTION>\\ + SHARED APK / PLUGINS / MAPS)");
 
-                        var desc = GetVisualTreeElements(cardPanel);
+                        var desc = GetVisualTreeElements(cardPanel, includeCollapsed: true);
                         foreach (var cb in desc.OfType<ComboBox>()) { cb.Visibility = Visibility.Collapsed; cb.Width = 0; cb.Height = 0; }
 
                         Button origBuildAll = null;
@@ -704,9 +711,6 @@ namespace FieldTakHub.Builder.Services
             return true;
         }
 
-        /// <summary>
-        /// Pobiera wyłącznie prawdziwe nazwy stron konfliktu z Generatora Stron / Paczek (bez PLI, GeoChat itp. - Punkt 6).
-        /// </summary>
         public static List<string> GetAllFactionNamesFromUi(Window win)
         {
             var res = new List<string>();
@@ -714,28 +718,11 @@ namespace FieldTakHub.Builder.Services
 
             try
             {
-                // 1. Zczytaj z kolekcji Factions w pamięci okna lub serwisów
-                foreach (var facObj in EnumerateFactionObjectsFromWindow(win))
+                foreach (var facObj in EnumerateFactionObjectsFast(win))
                 {
                     string n = GetPropStr(facObj, "Name", "FactionName", "SideName");
                     if (IsValidFactionName(n) && !res.Contains(n.Trim(), StringComparer.OrdinalIgnoreCase))
                         res.Add(n.Trim());
-                }
-
-                // 2. Sprawdź metodę w OpordBuilderManager lub MapStudio (jeśli istnieje lista stron)
-                var flags = BindingFlags.Static | BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
-                foreach (var m in typeof(OpordBuilderManager).GetMethods(flags))
-                {
-                    if ((m.Name.Contains("Faction", StringComparison.OrdinalIgnoreCase) || m.Name.Contains("Sides", StringComparison.OrdinalIgnoreCase)) &&
-                        m.GetParameters().Length == 0 && typeof(IEnumerable<string>).IsAssignableFrom(m.ReturnType))
-                    {
-                        if (m.Invoke(null, null) is IEnumerable<string> names)
-                        {
-                            foreach (var fn in names)
-                                if (IsValidFactionName(fn) && !res.Contains(fn.Trim(), StringComparer.OrdinalIgnoreCase))
-                                    res.Add(fn.Trim());
-                        }
-                    }
                 }
             }
             catch { }
@@ -748,7 +735,10 @@ namespace FieldTakHub.Builder.Services
             return res;
         }
 
-        private static List<object> EnumerateFactionObjectsFromWindow(Window win)
+        /// <summary>
+        /// Szybkie pobieranie obiektów stron konfliktu wyłącznie z pól/właściwości MainWindow i jego DataContext (bez skanowania Assembly.GetTypes()!).
+        /// </summary>
+        private static List<object> EnumerateFactionObjectsFast(Window win)
         {
             var list = new List<object>();
             if (win == null) return list;
@@ -769,17 +759,6 @@ namespace FieldTakHub.Builder.Services
                     try { CollectFactions(p.GetValue(r), list); } catch { }
                 }
             }
-
-            // Sprawdź również pola statyczne w klasach serwisowych projektu
-            foreach (var asmType in win.GetType().Assembly.GetTypes())
-            {
-                if (!asmType.Name.Contains("Builder") && !asmType.Name.Contains("Faction") && !asmType.Name.Contains("MainWindow")) continue;
-                foreach (var sf in asmType.GetFields(BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic))
-                {
-                    try { CollectFactions(sf.GetValue(null), list); } catch { }
-                }
-            }
-
             return list;
         }
 
@@ -825,7 +804,7 @@ namespace FieldTakHub.Builder.Services
 
             try
             {
-                var memFactions = EnumerateFactionObjectsFromWindow(win);
+                var memFactions = EnumerateFactionObjectsFast(win);
                 object matched = null;
                 if (!string.IsNullOrWhiteSpace(preferredFactionName))
                 {

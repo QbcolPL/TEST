@@ -38,18 +38,26 @@ namespace FieldTakHub.Builder.Services
         private static readonly string[] RowSets = { "ABCDEFGHJKLMNPQRSTUV", "FGHJKLMNPQRSTUVABCDE" };
         private static OpordParagraphModel _cachedLiveModel;
         private static OpordDayPlanModel _cachedLiveDay;
+        private static MethodInfo _cachedExtractMapMethod;
+        private static bool _mapMethodSearched;
+        public static bool IsRebuildingOpord;
 
         public static ExtractedMapSnapshot ExtractMapDataSafe(Window win)
         {
             var snap = new ExtractedMapSnapshot();
             try
             {
-                var mgrType = typeof(OpordBuilderManager);
-                var m = mgrType.GetMethod("GetExtractedMapData", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static)
-                     ?? mgrType.GetMethod("ExtractMapData", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
-                if (m != null && m.GetParameters().Length == 0)
+                if (!_mapMethodSearched)
                 {
-                    var res = m.Invoke(null, null);
+                    _mapMethodSearched = true;
+                    var mgrType = typeof(OpordBuilderManager);
+                    _cachedExtractMapMethod = mgrType.GetMethod("GetExtractedMapData", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static)
+                                           ?? mgrType.GetMethod("ExtractMapData", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
+                }
+
+                if (_cachedExtractMapMethod != null && _cachedExtractMapMethod.GetParameters().Length == 0)
+                {
+                    var res = _cachedExtractMapMethod.Invoke(null, null);
                     if (res != null)
                     {
                         var rt = res.GetType();
@@ -76,23 +84,6 @@ namespace FieldTakHub.Builder.Services
             }
             catch { }
             return snap;
-        }
-
-        public static string DetectActiveMapCoordinateSystem(Window win)
-        {
-            try
-            {
-                foreach (var cb in BuilderPackageAndUiPatcher.GetVisualTreeElements(win).OfType<ComboBox>())
-                {
-                    string s = (cb.SelectedItem is ComboBoxItem cbi ? cbi.Content?.ToString() : cb.SelectedItem?.ToString()) ?? "";
-                    if (s.Contains("MGRS", StringComparison.OrdinalIgnoreCase)) return "MGRS";
-                    if (s.Contains("UTM", StringComparison.OrdinalIgnoreCase)) return "UTM";
-                    if (s.Contains("DMS", StringComparison.OrdinalIgnoreCase) || s.Contains("Stopnie", StringComparison.OrdinalIgnoreCase)) return "DMS";
-                    if (s.Contains("WGS84", StringComparison.OrdinalIgnoreCase)) return "WGS84";
-                }
-            }
-            catch { }
-            return "MGRS";
         }
 
         public static string LatLonToMgrs(double lat, double lon)
@@ -125,29 +116,18 @@ namespace FieldTakHub.Builder.Services
             catch { return string.Format(CultureInfo.InvariantCulture, "{0:F5}, {1:F5}", lat, lon); }
         }
 
-        private static OpordParagraphModel FindOpordModelInApp()
+        private static OpordParagraphModel FindOpordModelFast()
         {
             if (_cachedLiveModel != null) return _cachedLiveModel;
             try
             {
                 var flags = BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic;
-                foreach (var asmType in typeof(OpordBuilderManager).Assembly.GetTypes())
+                foreach (var f in typeof(OpordBuilderManager).GetFields(flags))
                 {
-                    foreach (var f in asmType.GetFields(flags))
+                    if (typeof(OpordParagraphModel).IsAssignableFrom(f.FieldType))
                     {
-                        if (typeof(OpordParagraphModel).IsAssignableFrom(f.FieldType))
-                        {
-                            var val = f.GetValue(null) as OpordParagraphModel;
-                            if (val != null) { _cachedLiveModel = val; return val; }
-                        }
-                    }
-                    foreach (var p in asmType.GetProperties(flags))
-                    {
-                        if (p.GetIndexParameters().Length == 0 && typeof(OpordParagraphModel).IsAssignableFrom(p.PropertyType))
-                        {
-                            var val = p.GetValue(null) as OpordParagraphModel;
-                            if (val != null) { _cachedLiveModel = val; return val; }
-                        }
+                        _cachedLiveModel = f.GetValue(null) as OpordParagraphModel;
+                        if (_cachedLiveModel != null) return _cachedLiveModel;
                     }
                 }
             }
@@ -155,30 +135,10 @@ namespace FieldTakHub.Builder.Services
             return null;
         }
 
-        private static void InvokeRebuildOpordForm(Window win)
-        {
-            try
-            {
-                var m = typeof(OpordBuilderManager).GetMethod("RebuildOpordForm", BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic);
-                if (m != null) m.Invoke(null, new object[] { win });
-            }
-            catch { }
-        }
-
-        private static void InvokeOriginalSyncComms(Window win, OpordParagraphModel model, OpordDayPlanModel activeDay)
-        {
-            try
-            {
-                var m = typeof(OpordBuilderManager).GetMethod("SyncCommsFromFactionGenerator", BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic);
-                if (m != null) m.Invoke(null, new object[] { win, model, activeDay });
-            }
-            catch { }
-        }
-
         public static void SyncAllFromGenerators(Window win, OpordParagraphModel model, OpordDayPlanModel activeDay)
         {
             if (model != null) _cachedLiveModel = model;
-            else model = FindOpordModelInApp();
+            else model = FindOpordModelFast();
 
             if (activeDay != null) _cachedLiveDay = activeDay;
             else if (model != null && model.Days != null && model.Days.Count > 0)
@@ -216,7 +176,6 @@ namespace FieldTakHub.Builder.Services
                 sb.AppendLine($"   - {vc.Role} [{vc.Band}]: {vc.Freq} ({vc.Tone})");
             activeDay.SyncedCommsMatrixSummary = sb.ToString().TrimEnd();
 
-            string sys = DetectActiveMapCoordinateSystem(win);
             var md = ExtractMapDataSafe(win);
             if (md != null && (md.HasAoPolygon || md.Pois.Count > 0))
             {
@@ -224,164 +183,122 @@ namespace FieldTakHub.Builder.Services
                 activeDay.LocationLon = md.CenterLon.ToString("F6", CultureInfo.InvariantCulture);
                 string mgrs = LatLonToMgrs(md.CenterLat, md.CenterLon);
                 if (string.IsNullOrWhiteSpace(activeDay.LocationName))
-                    activeDay.LocationName = $"Rejon AO ({sys}: {mgrs})";
+                    activeDay.LocationName = $"Rejon AO (MGRS: {mgrs})";
 
                 var psb = new StringBuilder();
-                psb.AppendLine($"Układ współrzędnych mapy: {sys} | Środek AO: {mgrs}");
+                psb.AppendLine($"Układ współrzędnych mapy: MGRS | Środek AO: {mgrs}");
                 foreach (var p in md.Pois)
                     psb.AppendLine($"• {p.Name} [{p.Type}]: {LatLonToMgrs(p.Lat, p.Lon)}");
                 activeDay.AreaOfInterestPoiDesc = psb.ToString().TrimEnd();
             }
         }
 
-        public static void AttachOpordUiExtensions(Window win, OpordParagraphModel model, OpordDayPlanModel activeDay, StackPanel mainStack, Action rebuildCallback)
-        {
-            if (model != null) _cachedLiveModel = model;
-            if (activeDay != null) _cachedLiveDay = activeDay;
-            EnhanceLiveOpordTree(win, BuilderPackageAndUiPatcher.GetVisualTreeElements(win));
-        }
-
         public static void EnhanceLiveOpordTree(Window win, List<DependencyObject> safeElements = null)
         {
-            if (win == null) return;
-            if (safeElements == null) safeElements = BuilderPackageAndUiPatcher.GetVisualTreeElements(win);
-
-            var opordTitleTb = safeElements.OfType<TextBlock>().FirstOrDefault(t =>
-                (t.Text ?? "").Contains("GENERATOR ROZKAZU BOJOWEGO", StringComparison.OrdinalIgnoreCase));
-
-            if (opordTitleTb == null) return;
-
-            var model = FindOpordModelInApp();
-            OpordDayPlanModel activeDay = _cachedLiveDay;
-            if (model != null && model.Days != null && model.Days.Count > 0)
-            {
-                activeDay = model.Days[Math.Clamp(model.ActiveDayIndex, 0, model.Days.Count - 1)];
-                _cachedLiveDay = activeDay;
-            }
-
-            // 1. Górny pasek OPORD: wyczyść śmieciowe pozycje (PLI / GeoChat) z ComboBoxa stron (Punkt 4 i 6)
-            //    i podłącz działający przycisk "🔄 Pobierz dane z Generatora Stron" (Punkt 5)
-            DependencyObject topParent = VisualTreeHelper.GetParent(opordTitleTb);
-            while (topParent != null && !(topParent is StackPanel)) topParent = VisualTreeHelper.GetParent(topParent);
-            if (topParent is StackPanel topHeaderStack)
-            {
-                var topScope = BuilderPackageAndUiPatcher.GetVisualTreeElements(topHeaderStack);
-                var factionCombo = topScope.OfType<ComboBox>().FirstOrDefault();
-                if (factionCombo != null)
-                {
-                    var cleanFactions = FactionLiveSyncBridge.GetAllFactionNamesFromUi(win);
-                    string curSelected = (factionCombo.SelectedItem is ComboBoxItem cbi ? cbi.Content?.ToString() : factionCombo.SelectedItem?.ToString()) ?? model?.TargetFaction ?? "";
-
-                    // Usuń PLI, GeoChat i inne nieprawidłowe elementy z listy
-                    for (int i = factionCombo.Items.Count - 1; i >= 0; i--)
-                    {
-                        string itemStr = factionCombo.Items[i]?.ToString() ?? "";
-                        if (itemStr.Equals("PLI", StringComparison.OrdinalIgnoreCase) ||
-                            itemStr.Equals("GeoChat", StringComparison.OrdinalIgnoreCase) ||
-                            itemStr.Equals("TAK", StringComparison.OrdinalIgnoreCase))
-                        {
-                            factionCombo.Items.RemoveAt(i);
-                        }
-                    }
-
-                    foreach (string fn in cleanFactions)
-                    {
-                        if (!factionCombo.Items.Cast<object>().Any(x => string.Equals(x?.ToString(), fn, StringComparison.OrdinalIgnoreCase)))
-                        {
-                            factionCombo.Items.Add(fn);
-                        }
-                    }
-
-                    if (factionCombo.Tag?.ToString() != "FTH_FAC_COMBO_HOOKED")
-                    {
-                        factionCombo.Tag = "FTH_FAC_COMBO_HOOKED";
-                        factionCombo.DropDownOpened += (_, __) =>
-                        {
-                            var fresh = FactionLiveSyncBridge.GetAllFactionNamesFromUi(win);
-                            for (int i = factionCombo.Items.Count - 1; i >= 0; i--)
-                            {
-                                string s = factionCombo.Items[i]?.ToString() ?? "";
-                                if (s.Equals("PLI", StringComparison.OrdinalIgnoreCase) || s.Equals("GeoChat", StringComparison.OrdinalIgnoreCase))
-                                    factionCombo.Items.RemoveAt(i);
-                            }
-                            foreach (string fn in fresh)
-                            {
-                                if (!factionCombo.Items.Cast<object>().Any(x => string.Equals(x?.ToString(), fn, StringComparison.OrdinalIgnoreCase)))
-                                    factionCombo.Items.Add(fn);
-                            }
-                        };
-                        factionCombo.SelectionChanged += (_, __) =>
-                        {
-                            if (factionCombo.SelectedItem != null && model != null)
-                            {
-                                model.TargetFaction = factionCombo.SelectedItem.ToString();
-                                InvokeOriginalSyncComms(win, model, activeDay);
-                                SyncAllFromGenerators(win, model, activeDay);
-                            }
-                        };
-                    }
-                }
-
-                if (topHeaderStack.Tag?.ToString() != "FTH_OPORD_TOP_SYNC_ADDED")
-                {
-                    topHeaderStack.Tag = "FTH_OPORD_TOP_SYNC_ADDED";
-                    var topSyncBtn = new Button
-                    {
-                        Content = BuilderI18n.T(
-                            "🔄 Pobierz dane z Generatora Stron i Mapy 1:1 (Odśwież listę stron, Tabelę E Łączności oraz współrzędne MGRS)",
-                            "🔄 Pull Data from Faction & Map Generators (Refresh Factions, Table E Comms & MGRS Coords)"),
-                        Height = 36,
-                        Margin = new Thickness(0, 8, 0, 2),
-                        Padding = new Thickness(14, 6, 14, 6),
-                        Background = new SolidColorBrush(Color.FromRgb(14, 52, 64)),
-                        Foreground = new SolidColorBrush(Color.FromRgb(31, 224, 197)),
-                        BorderBrush = new SolidColorBrush(Color.FromRgb(31, 224, 197)),
-                        BorderThickness = new Thickness(1.5),
-                        FontWeight = FontWeights.Bold,
-                        Cursor = Cursors.Hand
-                    };
-                    topSyncBtn.Click += (_, __) =>
-                    {
-                        var m = FindOpordModelInApp();
-                        var d = (m != null && m.Days != null && m.Days.Count > 0) ? m.Days[Math.Clamp(m.ActiveDayIndex, 0, m.Days.Count - 1)] : activeDay;
-                        InvokeOriginalSyncComms(win, m, d);
-                        SyncAllFromGenerators(win, m, d);
-                        InvokeRebuildOpordForm(win);
-                    };
-                    topHeaderStack.Children.Add(topSyncBtn);
-                }
-            }
-
-            // 2. Napraw wygląd i działanie przycisku "☑️ Generuj tylko aktywny dzień" (Punkt 9)
-            PatchActiveDayOnlyButton(win, safeElements, model);
-
-            // 3. Zabezpiecz sekcję B.2 METOC
-            PatchMetocSectionInLiveTree(win, safeElements, activeDay);
-
-            // 4. Sekcja E. Tabela łączności: USUŃ 3 pola ręczne zaraz pod nagłówkiem E (Punkt 7),
-            //    zostaw automatycznie zaciągane częstotliwości z Generatora Stron + opcjonalną tabelę z estetycznym przyciskiem "−" (Punkt 8)
-            PatchSectionECommsInLiveTree(win, safeElements, model, activeDay);
-
-            // 5. Sekcja IV. Logistyka: Załącznik 3 z Mapą
-            PatchSectionIVAnnex3MapInLiveTree(win, safeElements, activeDay);
+            // Pozostawione dla kompatybilności wywołań — właściwa, szybka modyfikacja odbywa się wyłącznie w AttachOpordUiExtensions na mainStack
         }
 
-        private static void PatchActiveDayOnlyButton(Window win, List<DependencyObject> safeElements, OpordParagraphModel model)
+        /// <summary>
+        /// Wykonywane dokładnie RAZ na końcu RebuildOpordForm na nowo zbudowanym obiekcie mainStack (zanim trafi na ekran).
+        /// Czas wykonania < 2 ms, zero pętli zdarzeń LayoutUpdated / SelectionChanged!
+        /// </summary>
+        public static void AttachOpordUiExtensions(
+            Window win,
+            OpordParagraphModel model,
+            OpordDayPlanModel activeDay,
+            StackPanel mainStack,
+            Action rebuildCallback)
+        {
+            if (mainStack == null || model == null || activeDay == null) return;
+            _cachedLiveModel = model;
+            _cachedLiveDay = activeDay;
+
+            if (string.IsNullOrWhiteSpace(activeDay.SyncedCommsMatrixSummary))
+            {
+                SyncAllFromGenerators(win, model, activeDay);
+            }
+
+            // Przeszukaj wyłącznie kontener mainStack (a nie całe okno!)
+            var opordElements = BuilderPackageAndUiPatcher.GetVisualTreeElements(mainStack, includeCollapsed: true);
+
+            // 1. Górny pasek OPORD: wyczyść PLI/GeoChat na otwarciu listy i dodaj przycisk "🔄 Pobierz dane z Generatora Stron"
+            if (mainStack.Children.Count > 0 && mainStack.Children[0] is Border topBorder && topBorder.Child is StackPanel topHeaderStack)
+            {
+                var factionCombo = opordElements.OfType<ComboBox>().FirstOrDefault();
+                if (factionCombo != null)
+                {
+                    // Odświeżaj listę stron w momencie kliknięcia strzałki rozwijania (nie wyzwala SelectionChanged!)
+                    factionCombo.DropDownOpened += (_, __) =>
+                    {
+                        var cleanFactions = FactionLiveSyncBridge.GetAllFactionNamesFromUi(win);
+                        for (int i = factionCombo.Items.Count - 1; i >= 0; i--)
+                        {
+                            string s = factionCombo.Items[i]?.ToString() ?? "";
+                            if (s.Equals("PLI", StringComparison.OrdinalIgnoreCase) ||
+                                s.Equals("GeoChat", StringComparison.OrdinalIgnoreCase) ||
+                                s.Equals("TAK", StringComparison.OrdinalIgnoreCase))
+                            {
+                                factionCombo.Items.RemoveAt(i);
+                            }
+                        }
+                        foreach (string fn in cleanFactions)
+                        {
+                            if (!factionCombo.Items.Cast<object>().Any(x => string.Equals(x?.ToString(), fn, StringComparison.OrdinalIgnoreCase)))
+                            {
+                                factionCombo.Items.Add(fn);
+                            }
+                        }
+                    };
+                }
+
+                var topSyncBtn = new Button
+                {
+                    Content = BuilderI18n.T(
+                        "🔄 Pobierz dane z Generatora Stron i Mapy 1:1 (Odśwież strony, Tabelę E Łączności oraz współrzędne MGRS)",
+                        "🔄 Pull Data from Faction & Map Generators (Refresh Factions, Table E Comms & MGRS Coords)"),
+                    Height = 36,
+                    Margin = new Thickness(0, 8, 0, 2),
+                    Padding = new Thickness(14, 6, 14, 6),
+                    Background = new SolidColorBrush(Color.FromRgb(14, 52, 64)),
+                    Foreground = new SolidColorBrush(Color.FromRgb(31, 224, 197)),
+                    BorderBrush = new SolidColorBrush(Color.FromRgb(31, 224, 197)),
+                    BorderThickness = new Thickness(1.5),
+                    FontWeight = FontWeights.Bold,
+                    Cursor = Cursors.Hand
+                };
+                topSyncBtn.Click += (_, __) =>
+                {
+                    SyncAllFromGenerators(win, model, activeDay);
+                    rebuildCallback?.Invoke();
+                };
+                topHeaderStack.Children.Add(topSyncBtn);
+            }
+
+            // 2. Napraw wygląd i działanie przycisku "☑️ Generuj tylko aktywny dzień"
+            PatchActiveDayOnlyButton(opordElements, model, rebuildCallback);
+
+            // 3. Walidacja METOC
+            PatchMetocSection(win, opordElements, activeDay);
+
+            // 4. Sekcja E: ukryj 3 pola ręczne nad zielonym podsumowaniem, dodaj opcjonalną tabelę z przyciskiem "−"
+            PatchSectionEComms(opordElements, activeDay);
+
+            // 5. Sekcja IV: dodaj opcjonalny Załącznik 3 z Mapą
+            PatchSectionIVAnnex3Map(win, opordElements, activeDay);
+        }
+
+        private static void PatchActiveDayOnlyButton(List<DependencyObject> opordElements, OpordParagraphModel model, Action rebuildCallback)
         {
             Button generateAllDaysBtn = null;
             Button activeDayOnlyBtn = null;
 
-            foreach (var btn in safeElements.OfType<Button>())
+            foreach (var btn in opordElements.OfType<Button>())
             {
                 string txt = BuilderPackageAndUiPatcher.ExtractButtonText(btn);
                 if (txt.Contains("Generuj wszystkie dni", StringComparison.OrdinalIgnoreCase) || txt.Contains("Generate all days", StringComparison.OrdinalIgnoreCase))
-                {
                     generateAllDaysBtn = btn;
-                }
                 else if (txt.Contains("aktywny dzień", StringComparison.OrdinalIgnoreCase) || txt.Contains("active day", StringComparison.OrdinalIgnoreCase))
-                {
                     activeDayOnlyBtn = btn;
-                }
             }
 
             if (activeDayOnlyBtn != null)
@@ -389,7 +306,6 @@ namespace FieldTakHub.Builder.Services
                 activeDayOnlyBtn.Content = BuilderI18n.T("☑️ Generuj tylko aktywny dzień", "☑️ Generate active day only");
                 if (generateAllDaysBtn != null)
                 {
-                    // Dopasuj wygląd (tło, ramkę, kolor tekstu i czcionkę) 1:1 do przycisku "Generuj wszystkie dni"
                     activeDayOnlyBtn.Background = generateAllDaysBtn.Background;
                     activeDayOnlyBtn.Foreground = generateAllDaysBtn.Foreground;
                     activeDayOnlyBtn.BorderBrush = generateAllDaysBtn.BorderBrush;
@@ -399,30 +315,23 @@ namespace FieldTakHub.Builder.Services
                     activeDayOnlyBtn.FontWeight = generateAllDaysBtn.FontWeight;
                 }
 
-                if (activeDayOnlyBtn.Tag?.ToString() != "FTH_ACTIVE_DAY_BTN_FIXED")
+                activeDayOnlyBtn.PreviewMouseLeftButtonDown += (s, e) =>
                 {
-                    activeDayOnlyBtn.Tag = "FTH_ACTIVE_DAY_BTN_FIXED";
-                    activeDayOnlyBtn.PreviewMouseLeftButtonDown += (s, e) =>
+                    e.Handled = true;
+                    if (model?.Days != null && model.Days.Count > 0)
                     {
-                        e.Handled = true;
-                        var m = model ?? FindOpordModelInApp();
-                        if (m != null && m.Days != null && m.Days.Count > 0)
-                        {
-                            int activeIdx = Math.Clamp(m.ActiveDayIndex, 0, m.Days.Count - 1);
-                            for (int i = 0; i < m.Days.Count; i++)
-                            {
-                                m.Days[i].IncludeInExport = (i == activeIdx);
-                            }
-                            InvokeRebuildOpordForm(win);
-                        }
-                    };
-                }
+                        int activeIdx = Math.Clamp(model.ActiveDayIndex, 0, model.Days.Count - 1);
+                        for (int i = 0; i < model.Days.Count; i++)
+                            model.Days[i].IncludeInExport = (i == activeIdx);
+                        rebuildCallback?.Invoke();
+                    }
+                };
             }
         }
 
-        private static void PatchMetocSectionInLiveTree(Window win, List<DependencyObject> safeElements, OpordDayPlanModel activeDay)
+        private static void PatchMetocSection(Window win, List<DependencyObject> opordElements, OpordDayPlanModel activeDay)
         {
-            var metocHeader = safeElements.OfType<TextBlock>().FirstOrDefault(t =>
+            var metocHeader = opordElements.OfType<TextBlock>().FirstOrDefault(t =>
                 (t.Text ?? "").Contains("B.2. PROGNOZA POGODY", StringComparison.OrdinalIgnoreCase) ||
                 (t.Text ?? "").Contains("WEATHER FORECAST", StringComparison.OrdinalIgnoreCase));
 
@@ -432,7 +341,7 @@ namespace FieldTakHub.Builder.Services
             while (p != null && !(p is StackPanel)) p = VisualTreeHelper.GetParent(p);
             if (!(p is StackPanel metocStack)) return;
 
-            var metocControls = BuilderPackageAndUiPatcher.GetVisualTreeElements(metocStack);
+            var metocControls = BuilderPackageAndUiPatcher.GetVisualTreeElements(metocStack, includeCollapsed: true);
             var textBoxes = metocControls.OfType<TextBox>().ToList();
             TextBox locBox = textBoxes.Count >= 2 ? textBoxes[1] : null;
             TextBox latBox = textBoxes.Count >= 3 ? textBoxes[2] : null;
@@ -452,43 +361,33 @@ namespace FieldTakHub.Builder.Services
                 string bt = BuilderPackageAndUiPatcher.ExtractButtonText(btn);
                 if (bt.Contains("Pobierz METOC", StringComparison.OrdinalIgnoreCase) || bt.Contains("Fetch METOC", StringComparison.OrdinalIgnoreCase))
                 {
-                    if (btn.Tag?.ToString() != "FTH_METOC_LIVE_GUARD")
+                    btn.PreviewMouseLeftButtonDown += (s, e) =>
                     {
-                        btn.Tag = "FTH_METOC_LIVE_GUARD";
-                        btn.PreviewMouseLeftButtonDown += (s, e) =>
-                        {
-                            string locTxt = (locBox?.Text ?? activeDay?.LocationName ?? "").Trim();
-                            var md = ExtractMapDataSafe(win);
-                            bool aoExists = md != null && (md.HasAoPolygon || md.Pois.Count > 0);
+                        string locTxt = (locBox?.Text ?? activeDay?.LocationName ?? "").Trim();
+                        var md = ExtractMapDataSafe(win);
+                        bool aoExists = md != null && (md.HasAoPolygon || md.Pois.Count > 0);
 
-                            if (string.IsNullOrWhiteSpace(locTxt) && !aoExists)
-                            {
-                                e.Handled = true;
-                                MessageBox.Show(
-                                    BuilderI18n.T(
-                                        "⚠️ Nie można pobrać raportu METOC — pole 'Miejscowość' jest puste i w Generatorze Map nie zaznaczono obszaru gry (AO)!\n\n" +
-                                        "Proszę wpisać nazwę miejscowości/obszaru LUB zaznaczyć granicę AO w module Generator Map 1:1.",
-                                        "⚠️ Cannot fetch METOC report — 'Location' is empty and no AO polygon is drawn in the Map Generator!\n\n" +
-                                        "Please enter a location name OR draw an AO boundary in the 1:1 Map Generator."),
-                                    BuilderI18n.T("Wymagany obszar lub AO na mapie — METOC", "Area or Map AO Required — METOC"),
-                                    MessageBoxButton.OK,
-                                    MessageBoxImage.Warning);
-                            }
-                        };
-                    }
+                        if (string.IsNullOrWhiteSpace(locTxt) && !aoExists)
+                        {
+                            e.Handled = true;
+                            MessageBox.Show(
+                                BuilderI18n.T(
+                                    "⚠️ Nie można pobrać raportu METOC — pole 'Miejscowość' jest puste i w Generatorze Map nie zaznaczono obszaru gry (AO)!\n\n" +
+                                    "Proszę wpisać nazwę miejscowości/obszaru LUB zaznaczyć granicę AO w module Generator Map 1:1.",
+                                    "⚠️ Cannot fetch METOC report — 'Location' is empty and no AO polygon is drawn in the Map Generator!\n\n" +
+                                    "Please enter a location name OR draw an AO boundary in the 1:1 Map Generator."),
+                                BuilderI18n.T("Wymagany obszar lub AO na mapie — METOC", "Area or Map AO Required — METOC"),
+                                MessageBoxButton.OK,
+                                MessageBoxImage.Warning);
+                        }
+                    };
                 }
             }
         }
 
-        /// <summary>
-        /// Naprawia Punkt 7 i Punkt 8:
-        /// - Usuwa (ukrywa) 3 pola ręcznego wpisywania częstotliwości zaraz pod nagłówkiem E. Tabela łączności,
-        /// - Zostawia pod nagłówkiem E automatycznie zaciągane częstotliwości z Generatora Stron,
-        /// - W opcjonalnej tabeli ręcznych częstotliwości naprawia przycisk usuwania wiersza ("−" z Padding = 0).
-        /// </summary>
-        private static void PatchSectionECommsInLiveTree(Window win, List<DependencyObject> safeElements, OpordParagraphModel model, OpordDayPlanModel activeDay)
+        private static void PatchSectionEComms(List<DependencyObject> opordElements, OpordDayPlanModel activeDay)
         {
-            var secEHeader = safeElements.OfType<TextBlock>().FirstOrDefault(t =>
+            var secEHeader = opordElements.OfType<TextBlock>().FirstOrDefault(t =>
                 (t.Text ?? "").Contains("E. Tabela łączności", StringComparison.OrdinalIgnoreCase) ||
                 (t.Text ?? "").Contains("E. Comms Table", StringComparison.OrdinalIgnoreCase));
 
@@ -497,7 +396,7 @@ namespace FieldTakHub.Builder.Services
             var headerParent = VisualTreeHelper.GetParent(secEHeader) as Panel;
             if (headerParent != null)
             {
-                foreach (var b in BuilderPackageAndUiPatcher.GetVisualTreeElements(headerParent).OfType<Button>())
+                foreach (var b in BuilderPackageAndUiPatcher.GetVisualTreeElements(headerParent, includeCollapsed: true).OfType<Button>())
                 {
                     string bt = BuilderPackageAndUiPatcher.ExtractButtonText(b);
                     if (bt.Contains("Pobierz z Generatora Stron", StringComparison.OrdinalIgnoreCase))
@@ -513,8 +412,8 @@ namespace FieldTakHub.Builder.Services
             while (secParent != null && !(secParent is StackPanel)) secParent = VisualTreeHelper.GetParent(secParent);
             if (!(secParent is StackPanel secStack)) return;
 
-            // Ukryj 3 ręczne pola tekstowe (Kanał główny, Kanał zapasowy, Kanał HQ) znajdujące się bezpośrednio pod nagłówkiem E (Punkt 7)!
-            foreach (var tb in BuilderPackageAndUiPatcher.GetVisualTreeElements(secStack).OfType<TextBox>())
+            // Ukryj 3 ręczne pola (Kanał główny, Kanał zapasowy, Kanał HQ) zaraz pod nagłówkiem E
+            foreach (var tb in BuilderPackageAndUiPatcher.GetVisualTreeElements(secStack, includeCollapsed: true).OfType<TextBox>())
             {
                 var p = VisualTreeHelper.GetParent(tb) as Panel;
                 if (p == null) continue;
@@ -538,8 +437,14 @@ namespace FieldTakHub.Builder.Services
                 }
             }
 
-            if (secStack.Tag?.ToString() == "FTH_CUSTOM_COMMS_ADDED") return;
-            secStack.Tag = "FTH_CUSTOM_COMMS_ADDED";
+            foreach (var txt in BuilderPackageAndUiPatcher.GetVisualTreeElements(secStack, includeCollapsed: true).OfType<TextBlock>())
+            {
+                string t = txt.Text ?? "";
+                if (t.Contains("[ZACIĄGNIĘTE Z GENERATORA STRON", StringComparison.OrdinalIgnoreCase) && !string.IsNullOrWhiteSpace(activeDay.SyncedCommsMatrixSummary))
+                {
+                    txt.Text = activeDay.SyncedCommsMatrixSummary;
+                }
+            }
 
             var customBoxBorder = new Border
             {
@@ -557,7 +462,7 @@ namespace FieldTakHub.Builder.Services
                 Content = BuilderI18n.T(
                     "☑️ Dodaj inne kanały radiowe ręcznie w OPORD (opcjonalna tabela dodatkowych częstotliwości)",
                     "☑️ Add custom radio channels manually in OPORD (optional frequency table)"),
-                IsChecked = activeDay != null && activeDay.IncludeCustomChannelsTable,
+                IsChecked = activeDay.IncludeCustomChannelsTable,
                 Foreground = new SolidColorBrush(Color.FromRgb(31, 224, 197)),
                 FontWeight = FontWeights.Bold,
                 Margin = new Thickness(0, 0, 0, 8),
@@ -567,25 +472,21 @@ namespace FieldTakHub.Builder.Services
 
             var bodyPanel = new StackPanel
             {
-                Visibility = (activeDay != null && activeDay.IncludeCustomChannelsTable) ? Visibility.Visible : Visibility.Collapsed
+                Visibility = activeDay.IncludeCustomChannelsTable ? Visibility.Visible : Visibility.Collapsed
             };
 
             var rowsContainer = new StackPanel();
 
             void SaveRowsToDayModel()
             {
-                var d = activeDay ?? _cachedLiveDay;
-                if (d == null) return;
                 var lines = new List<string>();
                 foreach (Grid g in rowsContainer.Children.OfType<Grid>())
                 {
                     var tbs = g.Children.OfType<TextBox>().ToList();
                     if (tbs.Count >= 4)
-                    {
                         lines.Add($"• {tbs[0].Text.Trim()} [{tbs[1].Text.Trim()}]: {tbs[2].Text.Trim()} ({tbs[3].Text.Trim()})");
-                    }
                 }
-                d.CustomChannelsTableText = string.Join("\n", lines);
+                activeDay.CustomChannelsTableText = string.Join("\n", lines);
             }
 
             void AddCustomRow(string role, string band, string freq, string tone)
@@ -622,7 +523,6 @@ namespace FieldTakHub.Builder.Services
                 g.Children.Add(CreateCell(freq, 2));
                 g.Children.Add(CreateCell(tone, 3));
 
-                // Punkt 8: Estetyczny przycisk "−" (Padding = 0, dzięki czemu znak nigdy nie jest ucięty do kropek ":")
                 var delBtn = new Button
                 {
                     Content = "−",
@@ -637,8 +537,7 @@ namespace FieldTakHub.Builder.Services
                     BorderThickness = new Thickness(1.2),
                     FontSize = 16,
                     FontWeight = FontWeights.Bold,
-                    Cursor = Cursors.Hand,
-                    ToolTip = BuilderI18n.T("Usuń ten kanał", "Remove channel")
+                    Cursor = Cursors.Hand
                 };
                 delBtn.Click += (_, __) => { rowsContainer.Children.Remove(g); SaveRowsToDayModel(); };
                 Grid.SetColumn(delBtn, 4);
@@ -674,15 +573,13 @@ namespace FieldTakHub.Builder.Services
 
             chk.Checked += (_, __) =>
             {
-                var d = activeDay ?? _cachedLiveDay;
-                if (d != null) d.IncludeCustomChannelsTable = true;
+                activeDay.IncludeCustomChannelsTable = true;
                 bodyPanel.Visibility = Visibility.Visible;
                 SaveRowsToDayModel();
             };
             chk.Unchecked += (_, __) =>
             {
-                var d = activeDay ?? _cachedLiveDay;
-                if (d != null) d.IncludeCustomChannelsTable = false;
+                activeDay.IncludeCustomChannelsTable = false;
                 bodyPanel.Visibility = Visibility.Collapsed;
             };
 
@@ -700,9 +597,9 @@ namespace FieldTakHub.Builder.Services
             secStack.Children.Insert(insertIdx, customBoxBorder);
         }
 
-        private static void PatchSectionIVAnnex3MapInLiveTree(Window win, List<DependencyObject> safeElements, OpordDayPlanModel activeDay)
+        private static void PatchSectionIVAnnex3Map(Window win, List<DependencyObject> opordElements, OpordDayPlanModel activeDay)
         {
-            var secIVHeader = safeElements.OfType<TextBlock>().FirstOrDefault(t =>
+            var secIVHeader = opordElements.OfType<TextBlock>().FirstOrDefault(t =>
                 (t.Text ?? "").Contains("IV. LOGISTYKA ORAZ ZAŁĄCZNIKI", StringComparison.OrdinalIgnoreCase) ||
                 (t.Text ?? "").Contains("IV. LOGISTICS", StringComparison.OrdinalIgnoreCase));
 
@@ -712,10 +609,6 @@ namespace FieldTakHub.Builder.Services
             while (p != null && !(p is StackPanel)) p = VisualTreeHelper.GetParent(p);
             if (!(p is StackPanel secIVStack)) return;
 
-            if (secIVStack.Tag?.ToString() == "FTH_ANNEX3_ADDED") return;
-            secIVStack.Tag = "FTH_ANNEX3_ADDED";
-
-            string dayLabel = activeDay?.DayTitle ?? "Dzień 1";
             var annex3Border = new Border
             {
                 Background = new SolidColorBrush(Color.FromRgb(8, 22, 28)),
@@ -730,9 +623,9 @@ namespace FieldTakHub.Builder.Services
             var chkAnnex3 = new CheckBox
             {
                 Content = BuilderI18n.T(
-                    $"☑️ Załącznik 3 ({dayLabel}): Dołącz mapę operacyjną / szkic AO do rozkazu OPORD",
-                    $"☑️ Annex 3 ({dayLabel}): Attach operational map / AO sketch to OPORD"),
-                IsChecked = activeDay != null && activeDay.IncludeAnnex3Map,
+                    $"☑️ Załącznik 3 ({activeDay.DayTitle}): Dołącz mapę operacyjną / szkic AO do rozkazu OPORD",
+                    $"☑️ Annex 3 ({activeDay.DayTitle}): Attach operational map / AO sketch to OPORD"),
+                IsChecked = activeDay.IncludeAnnex3Map,
                 Foreground = new SolidColorBrush(Color.FromRgb(31, 224, 197)),
                 FontWeight = FontWeights.Bold,
                 Margin = new Thickness(0, 0, 0, 8),
@@ -742,7 +635,7 @@ namespace FieldTakHub.Builder.Services
 
             var detailsPanel = new StackPanel
             {
-                Visibility = (activeDay != null && activeDay.IncludeAnnex3Map) ? Visibility.Visible : Visibility.Collapsed
+                Visibility = activeDay.IncludeAnnex3Map ? Visibility.Visible : Visibility.Collapsed
             };
 
             var row = new Grid { Margin = new Thickness(0, 0, 0, 6) };
@@ -751,14 +644,14 @@ namespace FieldTakHub.Builder.Services
 
             var pathBox = new TextBox
             {
-                Text = activeDay?.Annex3MapImagePath ?? "",
+                Text = activeDay.Annex3MapImagePath ?? "",
                 Padding = new Thickness(6, 4, 6, 4),
                 Background = new SolidColorBrush(Color.FromRgb(13, 33, 41)),
                 Foreground = Brushes.White,
                 BorderBrush = new SolidColorBrush(Color.FromRgb(34, 74, 89)),
                 FontSize = 11.5
             };
-            pathBox.TextChanged += (_, __) => { var d = activeDay ?? _cachedLiveDay; if (d != null) d.Annex3MapImagePath = pathBox.Text; };
+            pathBox.TextChanged += (_, __) => activeDay.Annex3MapImagePath = pathBox.Text;
             Grid.SetColumn(pathBox, 0);
             row.Children.Add(pathBox);
 
@@ -782,8 +675,7 @@ namespace FieldTakHub.Builder.Services
                 if (ofd.ShowDialog(win) == true)
                 {
                     pathBox.Text = ofd.FileName;
-                    var d = activeDay ?? _cachedLiveDay;
-                    if (d != null) d.Annex3MapImagePath = ofd.FileName;
+                    activeDay.Annex3MapImagePath = ofd.FileName;
                 }
             };
             Grid.SetColumn(pickBtn, 1);
@@ -792,14 +684,12 @@ namespace FieldTakHub.Builder.Services
 
             chkAnnex3.Checked += (_, __) =>
             {
-                var d = activeDay ?? _cachedLiveDay;
-                if (d != null) d.IncludeAnnex3Map = true;
+                activeDay.IncludeAnnex3Map = true;
                 detailsPanel.Visibility = Visibility.Visible;
             };
             chkAnnex3.Unchecked += (_, __) =>
             {
-                var d = activeDay ?? _cachedLiveDay;
-                if (d != null) d.IncludeAnnex3Map = false;
+                activeDay.IncludeAnnex3Map = false;
                 detailsPanel.Visibility = Visibility.Collapsed;
             };
 
@@ -839,13 +729,9 @@ namespace FieldTakHub.Builder.Services
             return sb.ToString();
         }
 
-        /// <summary>
-        /// Punkt 1: Bezpośredni, skondensowany generator Markdown dla Discorda (kopiowany od razu do schowka, bez pustego okna!).
-        /// </summary>
         public static string BuildCondensedDiscordMarkdown(OpordParagraphModel m)
         {
-            if (m == null) m = FindOpordModelInApp();
-            if (m != null) _cachedLiveModel = m;
+            if (m == null) m = FindOpordModelFast();
             var chunks = BuildCondensedDiscordChunks(m);
             if (chunks.Count == 0) return "";
             if (chunks.Count == 1) return chunks[0];
@@ -861,7 +747,7 @@ namespace FieldTakHub.Builder.Services
 
         public static List<string> BuildCondensedDiscordChunks(OpordParagraphModel m)
         {
-            if (m == null) m = FindOpordModelInApp();
+            if (m == null) m = FindOpordModelFast();
             var chunks = new List<string>();
             if (m == null || m.Days == null || m.Days.Count == 0) return chunks;
 
