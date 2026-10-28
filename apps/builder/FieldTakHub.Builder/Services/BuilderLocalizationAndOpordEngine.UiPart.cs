@@ -21,7 +21,7 @@ namespace FieldTakHub.Builder.Services
     internal static partial class OpordBuilderManager
     {
         // =========================================================================
-        // 6. WIDOK GENERATORA OPORD v3.3 — KAŻDA ZAKŁADKA DNIA POSIADA WŁASNY,
+        // 6. WIDOK GENERATORA OPORD v3.5 — KAŻDA ZAKŁADKA DNIA POSIADA WŁASNY,
         //    CAŁKOWICIE NIEZALEŻNY STAN WSZYSTKICH SEKCJI (0, I, II, III, IV, ZAŁ. 1 i 2)
         // =========================================================================
         public static Border CreateOrGetOpordOverlayView(Window win)
@@ -72,7 +72,7 @@ namespace FieldTakHub.Builder.Services
                 string eventName = TacticalConfigPanel.GetEventNameFromWindow(win);
                 SyncDayRadioChannelsFromFactionGenerator(win, _activeOpordFaction, activeDay);
 
-                // PASEK NAGŁÓWKOWY GENERATORA OPORD v3.3
+                // PASEK NAGŁÓWKOWY GENERATORA OPORD v3.5
                 var topCard = new Border
                 {
                     Background = TacticalConfigPanel.BrushCardBg,
@@ -87,8 +87,8 @@ namespace FieldTakHub.Builder.Services
                 topStack.Children.Add(new TextBlock
                 {
                     Text = BuilderI18n.T(
-                        "📋 GENERATOR ROZKAZU BOJOWEGO MILSIM / NATO (OPORD v3.3 — PEŁNA NIEZALEŻNOŚĆ DNI) — " + eventName,
-                        "📋 MILSIM / NATO OPORD v3.3 BUILDER (FULLY INDEPENDENT DAY TABS) — " + eventName),
+                        "📋 GENERATOR ROZKAZU BOJOWEGO MILSIM / NATO (OPORD v3.5 — PEŁNA NIEZALEŻNOŚĆ DNI) — " + eventName,
+                        "📋 MILSIM / NATO OPORD v3.5 BUILDER (FULLY INDEPENDENT DAY TABS) — " + eventName),
                     Foreground = TacticalConfigPanel.BrushAccent,
                     FontWeight = FontWeights.Bold,
                     FontSize = 14.5,
@@ -561,7 +561,7 @@ namespace FieldTakHub.Builder.Services
                 metocInputsGrid.Children.Add(dateBoxPanel);
 
                 var cityBoxPanel = CreateLabeledTextBox(
-                    BuilderI18n.T("Miejscowość (" + activeDay.DayTitle + " — puste = AO z Mapy)", "Town (" + activeDay.DayTitle + " — blank = Map AO)"),
+                    BuilderI18n.T("Miejscowość (" + activeDay.DayTitle + " — wymagany obszar lub AO z Mapy)", "Town (" + activeDay.DayTitle + " — blank = Map AO)"),
                     activeDay.LocationName,
                     v => { activeDay.LocationName = v; PersistModelToAppData(model); });
                 var cityTextBox = FindFirstDescendant<TextBox>(cityBoxPanel);

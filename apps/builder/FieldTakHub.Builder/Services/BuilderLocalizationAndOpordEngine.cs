@@ -968,8 +968,8 @@ namespace FieldTakHub.Builder.Services
 
         // I. Sytuacja i METOC dnia
         public string LocationName { get; set; } = "";
-        public string LocationLat { get; set; } = "49.8494";
-        public string LocationLon { get; set; } = "18.8127";
+        public string LocationLat { get; set; } = "";
+        public string LocationLon { get; set; } = "";
         public string AreaOfInterestPoiDesc { get; set; } = "Punkty kluczowe (FOB, Respawn, OBJ ALPHA, LZ) zdefiniowane w załączonym pliku .KMZ (ATAK) oraz .GPX (Garmin/Suunto).";
         public string TerrainAndWeather { get; set; } = "Wielkość AO: ok. 2x2 km. Rodzaj: las mieszany, polany, zabudowania leśne. Ukształtowanie: pagórkowate ze skarpami.";
         public string MetocCondition { get; set; } = "Brak pobranego raportu (kliknij przycisk METOC dla tego dnia)";
@@ -1045,8 +1045,8 @@ namespace FieldTakHub.Builder.Services
         public string OperationNumber { get; set; } = "OPORD 01-2026";
         public string OperationDateIso { get; set; } = DateTime.Today.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
         public string LocationName { get; set; } = "";
-        public string LocationLat { get; set; } = "49.8494";
-        public string LocationLon { get; set; } = "18.8127";
+        public string LocationLat { get; set; } = "";
+        public string LocationLon { get; set; } = "";
         public string DtgIssued { get; set; } = DateTime.Now.ToString("ddHHmm'Z' MMM yyyy", CultureInfo.InvariantCulture).ToUpperInvariant();
         public string IssuingHq { get; set; } = "TOC / SZTAB DRUŻYNY";
         public string MapReferences { get; set; } = "Mapa Taktyczna MGRS 1:5000 (W załączeniu .FTAK / .KMZ / .GPX)";

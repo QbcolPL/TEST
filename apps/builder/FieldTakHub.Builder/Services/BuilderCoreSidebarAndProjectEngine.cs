@@ -1029,6 +1029,11 @@ namespace FieldTakHub.Builder.Services
         
         private static void CollapseObsoleteBuilderModeSelector(List<DependencyObject> allElements)
         {
+            BuilderPackageAndUiPatcher.CollapseLegacyTopModeBarPrecisely(allElements);
+            CollapseObsoleteBuilderModeSelector_Orig(allElements);
+        }
+        private static void CollapseObsoleteBuilderModeSelector_Orig(List<DependencyObject> allElements)
+        {
             try
             {
                 foreach (var tb in allElements.OfType<TextBlock>())

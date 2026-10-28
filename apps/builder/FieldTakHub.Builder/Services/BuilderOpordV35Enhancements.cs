@@ -2,7 +2,6 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Linq;
@@ -33,22 +32,11 @@ namespace FieldTakHub.Builder.Services
         public List<ExtractedMapPoiItem> Pois { get; set; } = new List<ExtractedMapPoiItem>();
     }
 
-    internal sealed class CustomOpordChannelRow
-    {
-        public string Role { get; set; } = "Sekcja / Zwiad";
-        public string Band { get; set; } = "PMR";
-        public string Freq { get; set; } = "CH 2 (446.01875 MHz)";
-        public string Tone { get; set; } = "CTCSS 77.0 Hz";
-    }
-
     internal static class BuilderOpordV35Enhancements
     {
         private static readonly string[] ColSets = { "ABCDEFGH", "JKLMNPQR", "STUVWXYZ" };
         private static readonly string[] RowSets = { "ABCDEFGHJKLMNPQRSTUV", "FGHJKLMNPQRSTUVABCDE" };
 
-        // =====================================================================
-        // 1. POBIERANIE DANYCH Z GENERATORA MAP ORAZ SYSTEMU WSPÓŁRZĘDNYCH
-        // =====================================================================
         public static ExtractedMapSnapshot ExtractMapDataSafe(Window win)
         {
             var snap = new ExtractedMapSnapshot();
@@ -98,20 +86,11 @@ namespace FieldTakHub.Builder.Services
                     if (s.Contains("MGRS", StringComparison.OrdinalIgnoreCase)) return "MGRS";
                     if (s.Contains("UTM", StringComparison.OrdinalIgnoreCase)) return "UTM";
                     if (s.Contains("DMS", StringComparison.OrdinalIgnoreCase) || s.Contains("Stopnie", StringComparison.OrdinalIgnoreCase)) return "DMS";
-                    if (s.Contains("WGS84", StringComparison.OrdinalIgnoreCase) || s.Contains("DD", StringComparison.OrdinalIgnoreCase)) return "WGS84";
+                    if (s.Contains("WGS84", StringComparison.OrdinalIgnoreCase)) return "WGS84";
                 }
             }
             catch { }
             return "MGRS";
-        }
-
-        public static string FormatCoordBySystem(double lat, double lon, string coordSys)
-        {
-            string sys = (coordSys ?? "MGRS").ToUpperInvariant();
-            if (sys.Contains("MGRS")) return LatLonToMgrs(lat, lon);
-            if (sys.Contains("UTM")) return LatLonToUtm(lat, lon);
-            if (sys.Contains("DMS")) return LatLonToDms(lat, lon);
-            return string.Format(CultureInfo.InvariantCulture, "{0:F5}°N, {1:F5}°E", lat, lon);
         }
 
         public static string LatLonToMgrs(double lat, double lon)
@@ -144,43 +123,33 @@ namespace FieldTakHub.Builder.Services
             catch { return string.Format(CultureInfo.InvariantCulture, "{0:F5}, {1:F5}", lat, lon); }
         }
 
-        private static string LatLonToUtm(double lat, double lon)
+        private static OpordParagraphModel GetActiveOpordModelViaReflection()
         {
-            double cLat = Math.Clamp(lat, -80.0, 84.0);
-            double nLon = ((lon + 180.0) % 360.0 + 360.0) % 360.0 - 180.0;
-            int zone = (int)Math.Floor((nLon + 180.0) / 6.0) + 1;
-            double latRad = cLat * Math.PI / 180.0, lonRad = nLon * Math.PI / 180.0;
-            double lonOrig = ((zone - 1) * 6 - 180 + 3) * Math.PI / 180.0;
-            double a = 6378137.0, eccSq = 0.00669438, k0 = 0.9996;
-            double n = a / Math.Sqrt(1.0 - eccSq * Math.Sin(latRad) * Math.Sin(latRad));
-            double A = Math.Cos(latRad) * (lonRad - lonOrig);
-            double M = a * ((1.0 - eccSq / 4.0) * latRad - (3.0 * eccSq / 8.0) * Math.Sin(2.0 * latRad));
-            double east = k0 * n * A + 500000.0;
-            double north = k0 * (M + n * Math.Tan(latRad) * (A * A / 2.0));
-            return string.Format(CultureInfo.InvariantCulture, "UTM {0}N {1:0}E {2:0}N", zone, east, north);
+            try
+            {
+                var flags = BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic;
+                foreach (var f in typeof(OpordBuilderManager).GetFields(flags))
+                {
+                    if (typeof(OpordParagraphModel).IsAssignableFrom(f.FieldType))
+                        return f.GetValue(null) as OpordParagraphModel;
+                }
+                foreach (var p in typeof(OpordBuilderManager).GetProperties(flags))
+                {
+                    if (typeof(OpordParagraphModel).IsAssignableFrom(p.PropertyType))
+                        return p.GetValue(null) as OpordParagraphModel;
+                }
+            }
+            catch { }
+            return null;
         }
 
-        private static string LatLonToDms(double lat, double lon)
-        {
-            return ToDmsPart(lat, lat >= 0 ? 'N' : 'S') + " " + ToDmsPart(lon, lon >= 0 ? 'E' : 'W');
-        }
-
-        private static string ToDmsPart(double v, char h)
-        {
-            double a = Math.Abs(v);
-            int d = (int)Math.Floor(a);
-            double mf = (a - d) * 60.0;
-            int m = (int)Math.Floor(mf);
-            double s = (mf - m) * 60.0;
-            return string.Format(CultureInfo.InvariantCulture, "{0}°{1:00}'{2:00.0}\"{3}", d, m, s, h);
-        }
-
-        // =====================================================================
-        // 2. PEŁNA SYNCHRONIZACJA Z GENERATORA STRON I GENERATORA MAP
-        // =====================================================================
         public static void SyncAllFromGenerators(Window win, OpordParagraphModel model, OpordDayPlanModel activeDay)
         {
-            if (model == null || activeDay == null) return;
+            if (model == null) model = GetActiveOpordModelViaReflection();
+            if (model == null) return;
+            if (activeDay == null && model.Days != null && model.Days.Count > 0)
+                activeDay = model.Days[Math.Clamp(model.ActiveDayIndex, 0, model.Days.Count - 1)];
+            if (activeDay == null) return;
 
             var snap = FactionLiveSyncBridge.CaptureCurrentFactionSnapshot(win, model.TargetFaction);
             if (!string.IsNullOrWhiteSpace(snap.FactionName)) model.TargetFaction = snap.FactionName;
@@ -195,19 +164,10 @@ namespace FieldTakHub.Builder.Services
                     var c1 = snap.VoiceChannels[1];
                     activeDay.AlternateChannel = $"{c1.Role}: {c1.Freq} [{c1.Band}] ({c1.Tone})";
                 }
-                else
-                {
-                    activeDay.AlternateChannel = activeDay.PrimaryChannel;
-                }
-
                 if (snap.VoiceChannels.Count > 2)
                 {
                     var c2 = snap.VoiceChannels[2];
                     activeDay.HqChannel = $"{c2.Role}: {c2.Freq} [{c2.Band}] ({c2.Tone})";
-                }
-                else
-                {
-                    activeDay.HqChannel = activeDay.PrimaryChannel;
                 }
             }
 
@@ -221,277 +181,288 @@ namespace FieldTakHub.Builder.Services
                 sb.AppendLine($"   - {vc.Role} [{vc.Band}]: {vc.Freq} ({vc.Tone})");
             activeDay.SyncedCommsMatrixSummary = sb.ToString().TrimEnd();
 
-            // Zsynchronizuj wszystkie właściwości tekstowe łączności w klasie OpordDayPlanModel (przez refleksję)
-            foreach (var prop in activeDay.GetType().GetProperties(BindingFlags.Instance | BindingFlags.Public))
-            {
-                if (prop.PropertyType != typeof(string) || !prop.CanWrite) continue;
-                string pn = prop.Name;
-                if (pn.Contains("Primary", StringComparison.OrdinalIgnoreCase) && (pn.Contains("Chan", StringComparison.OrdinalIgnoreCase) || pn.Contains("Freq", StringComparison.OrdinalIgnoreCase)))
-                    prop.SetValue(activeDay, activeDay.PrimaryChannel);
-                else if ((pn.Contains("Alternate", StringComparison.OrdinalIgnoreCase) || pn.Contains("Backup", StringComparison.OrdinalIgnoreCase)) && (pn.Contains("Chan", StringComparison.OrdinalIgnoreCase) || pn.Contains("Freq", StringComparison.OrdinalIgnoreCase)))
-                    prop.SetValue(activeDay, activeDay.AlternateChannel);
-                else if (pn.Contains("Hq", StringComparison.OrdinalIgnoreCase) && (pn.Contains("Chan", StringComparison.OrdinalIgnoreCase) || pn.Contains("Freq", StringComparison.OrdinalIgnoreCase)))
-                    prop.SetValue(activeDay, activeDay.HqChannel);
-                else if (pn.Contains("Synced", StringComparison.OrdinalIgnoreCase) && pn.Contains("Comms", StringComparison.OrdinalIgnoreCase))
-                    prop.SetValue(activeDay, activeDay.SyncedCommsMatrixSummary);
-            }
-
-            // Współrzędne z Generatora Map w wybranym układzie (np. MGRS)
-            string coordSys = DetectActiveMapCoordinateSystem(win);
+            string sys = DetectActiveMapCoordinateSystem(win);
             var md = ExtractMapDataSafe(win);
             if (md != null && (md.HasAoPolygon || md.Pois.Count > 0))
             {
                 activeDay.LocationLat = md.CenterLat.ToString("F6", CultureInfo.InvariantCulture);
                 activeDay.LocationLon = md.CenterLon.ToString("F6", CultureInfo.InvariantCulture);
-                string centerCoord = FormatCoordBySystem(md.CenterLat, md.CenterLon, coordSys);
-
+                string mgrs = LatLonToMgrs(md.CenterLat, md.CenterLon);
                 if (string.IsNullOrWhiteSpace(activeDay.LocationName))
-                {
-                    activeDay.LocationName = $"Rejon AO ({coordSys}: {centerCoord})";
-                }
+                    activeDay.LocationName = $"Rejon AO ({sys}: {mgrs})";
 
                 var psb = new StringBuilder();
-                psb.AppendLine($"Układ współrzędnych z Generatora Map: {coordSys} | Środek AO: {centerCoord}");
+                psb.AppendLine($"Układ współrzędnych mapy: {sys} | Środek AO: {mgrs}");
                 foreach (var p in md.Pois)
-                {
-                    psb.AppendLine($"• {p.Name} [{p.Type}]: {FormatCoordBySystem(p.Lat, p.Lon, coordSys)}");
-                }
+                    psb.AppendLine($"• {p.Name} [{p.Type}]: {LatLonToMgrs(p.Lat, p.Lon)}");
                 activeDay.AreaOfInterestPoiDesc = psb.ToString().TrimEnd();
             }
         }
 
-        // =====================================================================
-        // 3. PRZEBUDOWA INTERFEJSU FORMULARZA OPORD NA ŻYWO
-        // =====================================================================
-        public static void AttachOpordUiExtensions(
-            Window win,
-            OpordParagraphModel model,
-            OpordDayPlanModel activeDay,
-            StackPanel mainStack,
-            Action rebuildCallback)
+        public static void AttachOpordUiExtensions(Window win, OpordParagraphModel model, OpordDayPlanModel activeDay, StackPanel mainStack, Action rebuildCallback)
         {
-            if (mainStack == null || model == null || activeDay == null) return;
+            EnhanceLiveOpordTree(win, BuilderPackageAndUiPatcher.GetVisualTreeElements(win));
+        }
 
-            // Zawsze odświeżaj dane z Generatora Stron na żywo przy budowaniu widoku OPORD!
-            SyncAllFromGenerators(win, model, activeDay);
+        /// <summary>
+        /// Bezpośrednio modyfikuje żywe drzewo wizualne zakładki Generator OPORD (widoczne na zrzutach ekranu),
+        /// dzięki czemu wszystkie 6 punktów z listy zmian działa w 100% niezawodnie!
+        /// </summary>
+        public static void EnhanceLiveOpordTree(Window win, List<DependencyObject> safeElements = null)
+        {
+            if (win == null) return;
+            if (safeElements == null) safeElements = BuilderPackageAndUiPatcher.GetVisualTreeElements(win);
 
-            var all = BuilderPackageAndUiPatcher.GetVisualTreeElements(mainStack);
+            // Znajdź główny nagłówek OPORD: "GENERATOR ROZKAZU BOJOWEGO MILSIM / NATO"
+            var opordTitleTb = safeElements.OfType<TextBlock>().FirstOrDefault(t =>
+                (t.Text ?? "").Contains("GENERATOR ROZKAZU BOJOWEGO", StringComparison.OrdinalIgnoreCase));
 
-            // A. Odśwież listę wyboru strony konfliktu (ComboBox) bez konieczności rozwijania menu
-            var liveFactionNames = FactionLiveSyncBridge.GetAllFactionNamesFromUi(win);
-            foreach (var cb in all.OfType<ComboBox>())
+            if (opordTitleTb == null) return; // Zakładka OPORD nie jest obecnie na ekranie
+
+            var model = GetActiveOpordModelViaReflection();
+            OpordDayPlanModel activeDay = null;
+            if (model != null && model.Days != null && model.Days.Count > 0)
             {
-                bool isFacCombo = cb.Items.Cast<object>().Any(x =>
-                    x?.ToString()?.Contains("BLUFOR", StringComparison.OrdinalIgnoreCase) == true ||
-                    x?.ToString()?.Contains("OPFOR", StringComparison.OrdinalIgnoreCase) == true ||
-                    string.Equals(x?.ToString(), model.TargetFaction, StringComparison.OrdinalIgnoreCase));
+                activeDay = model.Days[Math.Clamp(model.ActiveDayIndex, 0, model.Days.Count - 1)];
+            }
 
-                if (isFacCombo)
+            // 1. Dodaj przycisk "🔄 Pobierz z Generatora Stron" na samą górę do karty "GENERATOR ROZKAZU BOJOWEGO"
+            //    oraz odśwież listę wyboru strony konfliktu (ComboBox)
+            DependencyObject topParent = VisualTreeHelper.GetParent(opordTitleTb);
+            while (topParent != null && !(topParent is StackPanel)) topParent = VisualTreeHelper.GetParent(topParent);
+            if (topParent is StackPanel topHeaderStack)
+            {
+                var topScope = BuilderPackageAndUiPatcher.GetVisualTreeElements(topHeaderStack);
+                var factionCombo = topScope.OfType<ComboBox>().FirstOrDefault();
+                if (factionCombo != null)
                 {
-                    string currentSel = model.TargetFaction;
-                    cb.Items.Clear();
-                    foreach (string fn in liveFactionNames)
+                    var liveFactions = FactionLiveSyncBridge.GetAllFactionNamesFromUi(win);
+                    foreach (string fn in liveFactions)
                     {
-                        cb.Items.Add(fn);
-                    }
-                    if (!string.IsNullOrWhiteSpace(currentSel) && !liveFactionNames.Contains(currentSel, StringComparer.OrdinalIgnoreCase))
-                    {
-                        cb.Items.Insert(0, currentSel);
-                    }
-                    cb.SelectedItem = currentSel;
-                    cb.SelectionChanged += (_, __) =>
-                    {
-                        if (cb.SelectedItem != null)
+                        if (!factionCombo.Items.Cast<object>().Any(x => string.Equals(x?.ToString(), fn, StringComparison.OrdinalIgnoreCase)))
                         {
-                            model.TargetFaction = cb.SelectedItem.ToString();
-                            SyncAllFromGenerators(win, model, activeDay);
-                            UpdateSectionEControlsInPlace(mainStack, activeDay);
+                            factionCombo.Items.Add(fn);
                         }
+                    }
+                }
+
+                if (topHeaderStack.Tag?.ToString() != "FTH_OPORD_TOP_SYNC_ADDED")
+                {
+                    topHeaderStack.Tag = "FTH_OPORD_TOP_SYNC_ADDED";
+                    var topSyncBtn = new Button
+                    {
+                        Content = BuilderI18n.T(
+                            "🔄 Pobierz dane z Generatora Stron i Mapy 1:1 (Odśwież strony, Tabelę E Łączności oraz współrzędne MGRS)",
+                            "🔄 Pull Data from Faction & Map Generators (Refresh Factions, Table E Comms & MGRS Coords)"),
+                        Height = 36,
+                        Margin = new Thickness(0, 8, 0, 2),
+                        Padding = new Thickness(14, 6, 14, 6),
+                        Background = new SolidColorBrush(Color.FromRgb(14, 52, 64)),
+                        Foreground = new SolidColorBrush(Color.FromRgb(31, 224, 197)),
+                        BorderBrush = new SolidColorBrush(Color.FromRgb(31, 224, 197)),
+                        BorderThickness = new Thickness(1.5),
+                        FontWeight = FontWeights.Bold,
+                        Cursor = Cursors.Hand
                     };
-                    break;
-                }
-            }
-
-            // B. Dodaj przycisk "🔄 Pobierz z Generatora Stron" na samą górę do karty "GENERATOR ROZKAZU BOJOWEGO (OPORD)"
-            if (mainStack.Children.Count > 0 && mainStack.Children[0] is Border topCard && topCard.Child is StackPanel topStack)
-            {
-                var topSyncBtn = new Button
-                {
-                    Content = BuilderI18n.T(
-                        "🔄 Pobierz z Generatora Stron i Mapy 1:1 (Odśwież nazwy stron, Tabelę E Łączności i współrzędne MGRS)",
-                        "🔄 Pull from Faction & Map Generators (Refresh Factions, Table E Comms & MGRS Coords)"),
-                    Height = 36,
-                    Margin = new Thickness(0, 10, 0, 2),
-                    Padding = new Thickness(16, 6, 16, 6),
-                    Background = new SolidColorBrush(Color.FromRgb(14, 52, 64)),
-                    Foreground = new SolidColorBrush(Color.FromRgb(31, 224, 197)),
-                    BorderBrush = new SolidColorBrush(Color.FromRgb(31, 224, 197)),
-                    BorderThickness = new Thickness(1.5),
-                    FontWeight = FontWeights.Bold,
-                    Cursor = Cursors.Hand
-                };
-                topSyncBtn.Click += (_, __) =>
-                {
-                    SyncAllFromGenerators(win, model, activeDay);
-                    rebuildCallback?.Invoke();
-                };
-                topStack.Children.Add(topSyncBtn);
-            }
-
-            // C. Zaktualizuj kontrolki w Sekcji E (Kanał główny, zapasowy, HQ + zielone podsumowanie),
-            //    ukryj stary przycisk "Pobierz z Generatora Stron" z Sekcji E i wstaw pod Tabelą E opcjonalną tabelę własnych kanałów ("na ptaszek")!
-            UpdateSectionEControlsInPlace(mainStack, activeDay);
-            InjectCustomCommsTableIntoSectionE(mainStack, activeDay);
-
-            // D. Podłącz twardą walidację METOC (zdejmujemy stary Click i nakładamy walidację pustego pola + braku AO)
-            //    oraz podłącz nowe okno skondensowanego eksportu Discord
-            PatchMetocAndDiscordButtons(win, model, activeDay, all);
-
-            // E. Wstaw opcjonalny Załącznik nr 3 — Mapa Taktyczna / Szkic AO ("na ptaszek")
-            InjectAnnex3MapCard(win, activeDay, mainStack);
-        }
-
-        private static void UpdateSectionEControlsInPlace(StackPanel mainStack, OpordDayPlanModel activeDay)
-        {
-            var all = BuilderPackageAndUiPatcher.GetVisualTreeElements(mainStack);
-
-            foreach (var tb in all.OfType<TextBox>())
-            {
-                var parent = VisualTreeHelper.GetParent(tb) as Panel;
-                if (parent == null) continue;
-                string lbl = string.Join(" ", parent.Children.OfType<TextBlock>().Select(x => x.Text ?? ""));
-                if (lbl.Contains("Kanał główny", StringComparison.OrdinalIgnoreCase) || lbl.Contains("Primary channel", StringComparison.OrdinalIgnoreCase))
-                {
-                    tb.Text = activeDay.PrimaryChannel;
-                }
-                else if (lbl.Contains("Kanał zapasowy", StringComparison.OrdinalIgnoreCase) || lbl.Contains("Alternate channel", StringComparison.OrdinalIgnoreCase))
-                {
-                    tb.Text = activeDay.AlternateChannel;
-                }
-                else if (lbl.Contains("Kanał HQ", StringComparison.OrdinalIgnoreCase) || lbl.Contains("HQ channel", StringComparison.OrdinalIgnoreCase))
-                {
-                    tb.Text = activeDay.HqChannel;
-                }
-            }
-
-            foreach (var txtBlock in all.OfType<TextBlock>())
-            {
-                string t = txtBlock.Text ?? "";
-                if (t.Contains("[ZACIĄGNIĘTE Z GENERATORA STRON", StringComparison.OrdinalIgnoreCase) ||
-                    t.Contains("Meshtastic LoRa:", StringComparison.OrdinalIgnoreCase))
-                {
-                    txtBlock.Text = activeDay.SyncedCommsMatrixSummary;
-                }
-            }
-
-            // Ukryj stary przycisk "Pobierz z Generatora Stron" znajdujący się w Sekcji E (ponieważ został przeniesiony na samą górę)
-            bool firstTopSyncSeen = false;
-            foreach (var btn in all.OfType<Button>())
-            {
-                string bt = (btn.Content ?? "").ToString();
-                if (bt.Contains("Pobierz z Generatora Stron", StringComparison.OrdinalIgnoreCase) ||
-                    bt.Contains("Pull from Faction", StringComparison.OrdinalIgnoreCase))
-                {
-                    if (!firstTopSyncSeen)
+                    topSyncBtn.Click += (_, __) =>
                     {
-                        firstTopSyncSeen = true; // Pierwszy to nasz nowy przycisk na samej górze
-                    }
-                    else
+                        SyncAllFromGenerators(win, model, activeDay);
+                        RefreshSectionEAndCoordinatesInLiveTree(win, model, activeDay);
+                    };
+                    topHeaderStack.Children.Add(topSyncBtn);
+                }
+            }
+
+            // 2. Zabezpiecz sekcję B.2 METOC: wyczyść domyślne 49.8494 / 18.8127 gdy brak AO i zablokuj przycisk "Pobierz METOC", gdy Miejscowość jest pusta i brak AO!
+            PatchMetocSectionInLiveTree(win, safeElements, activeDay);
+
+            // 3. Sekcja E. Tabela łączności: ukryj stary przycisk "Pobierz z Generatora Stron", wypełnij zakresy częstotliwości i dodaj tabelę własnych kanałów ("na ptaszek")
+            PatchSectionECommsInLiveTree(win, safeElements, model, activeDay);
+
+            // 4. Sekcja IV. Logistyka oraz Załączniki: dodaj opcjonalny Załącznik 3 z Mapą ("na ptaszek")
+            PatchSectionIVAnnex3MapInLiveTree(win, safeElements, activeDay);
+
+            // 5. Przycisk "Kopiuj na Discorda": podłącz okno skondensowanego eksportu z podziałem na wiadomości
+            foreach (var btn in safeElements.OfType<Button>())
+            {
+                string bt = BuilderPackageAndUiPatcher.ExtractButtonText(btn);
+                if (bt.Contains("Kopiuj na Discorda", StringComparison.OrdinalIgnoreCase) || bt.Contains("Copy for Discord", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (btn.Tag?.ToString() != "FTH_DISCORD_MODAL_HOOKED")
                     {
-                        btn.Visibility = Visibility.Collapsed;
-                        btn.Width = 0;
-                        btn.Height = 0;
+                        btn.Tag = "FTH_DISCORD_MODAL_HOOKED";
+                        btn.PreviewMouseLeftButtonDown += (s, e) =>
+                        {
+                            e.Handled = true;
+                            SyncAllFromGenerators(win, model, activeDay);
+                            ShowCondensedDiscordModal(win, model);
+                        };
                     }
                 }
             }
         }
 
-        private static void InjectCustomCommsTableIntoSectionE(StackPanel mainStack, OpordDayPlanModel activeDay)
+        private static void PatchMetocSectionInLiveTree(Window win, List<DependencyObject> safeElements, OpordDayPlanModel activeDay)
         {
-            var all = BuilderPackageAndUiPatcher.GetVisualTreeElements(mainStack);
-            TextBlock sectionEHeader = all.OfType<TextBlock>().FirstOrDefault(t =>
+            var metocHeader = safeElements.OfType<TextBlock>().FirstOrDefault(t =>
+                (t.Text ?? "").Contains("B.2. PROGNOZA POGODY", StringComparison.OrdinalIgnoreCase) ||
+                (t.Text ?? "").Contains("WEATHER FORECAST", StringComparison.OrdinalIgnoreCase));
+
+            if (metocHeader == null) return;
+
+            DependencyObject p = VisualTreeHelper.GetParent(metocHeader);
+            while (p != null && !(p is StackPanel)) p = VisualTreeHelper.GetParent(p);
+            if (!(p is StackPanel metocStack)) return;
+
+            var metocControls = BuilderPackageAndUiPatcher.GetVisualTreeElements(metocStack);
+            var textBoxes = metocControls.OfType<TextBox>().ToList();
+            // W sekcji B.2 są 4 pola TextBox: [0]=Data, [1]=Miejscowość, [2]=Lat, [3]=Lon
+            TextBox locBox = textBoxes.Count >= 2 ? textBoxes[1] : null;
+            TextBox latBox = textBoxes.Count >= 3 ? textBoxes[2] : null;
+            TextBox lonBox = textBoxes.Count >= 4 ? textBoxes[3] : null;
+
+            var mapData = ExtractMapDataSafe(win);
+            bool hasAo = mapData != null && (mapData.HasAoPolygon || mapData.Pois.Count > 0);
+
+            // Jeśli Miejscowość jest pusta i brak AO na mapie, wyczyść domyślne współrzędne arkusza (49.8494 / 18.8127)
+            if (!hasAo && locBox != null && string.IsNullOrWhiteSpace(locBox.Text))
+            {
+                if (latBox != null && (latBox.Text.StartsWith("49.84") || latBox.Text.StartsWith("49.85"))) latBox.Text = "";
+                if (lonBox != null && (lonBox.Text.StartsWith("18.81") || lonBox.Text.StartsWith("18.82"))) lonBox.Text = "";
+            }
+
+            foreach (var btn in metocControls.OfType<Button>())
+            {
+                string bt = BuilderPackageAndUiPatcher.ExtractButtonText(btn);
+                if (bt.Contains("Pobierz METOC", StringComparison.OrdinalIgnoreCase) || bt.Contains("Fetch METOC", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (btn.Tag?.ToString() != "FTH_METOC_LIVE_GUARD")
+                    {
+                        btn.Tag = "FTH_METOC_LIVE_GUARD";
+                        btn.PreviewMouseLeftButtonDown += (s, e) =>
+                        {
+                            string locTxt = (locBox?.Text ?? activeDay?.LocationName ?? "").Trim();
+                            var md = ExtractMapDataSafe(win);
+                            bool aoExists = md != null && (md.HasAoPolygon || md.Pois.Count > 0);
+
+                            if (string.IsNullOrWhiteSpace(locTxt) && !aoExists)
+                            {
+                                e.Handled = true;
+                                MessageBox.Show(
+                                    BuilderI18n.T(
+                                        "⚠️ Nie można pobrać raportu METOC — pole 'Miejscowość' jest puste i w Generatorze Map nie zaznaczono obszaru gry (AO)!\n\n" +
+                                        "Proszę wpisać nazwę miejscowości/obszaru LUB zaznaczyć granicę AO w module Generator Map 1:1.",
+                                        "⚠️ Cannot fetch METOC report — 'Location' is empty and no AO polygon is drawn in the Map Generator!\n\n" +
+                                        "Please enter a location name OR draw an AO boundary in the 1:1 Map Generator."),
+                                    BuilderI18n.T("Wymagany obszar lub AO na mapie — METOC", "Area or Map AO Required — METOC"),
+                                    MessageBoxButton.OK,
+                                    MessageBoxImage.Warning);
+                            }
+                        };
+                    }
+                }
+            }
+        }
+
+        private static void PatchSectionECommsInLiveTree(Window win, List<DependencyObject> safeElements, OpordParagraphModel model, OpordDayPlanModel activeDay)
+        {
+            var secEHeader = safeElements.OfType<TextBlock>().FirstOrDefault(t =>
                 (t.Text ?? "").Contains("E. Tabela łączności", StringComparison.OrdinalIgnoreCase) ||
                 (t.Text ?? "").Contains("E. Comms Table", StringComparison.OrdinalIgnoreCase));
 
-            Panel targetPanel = null;
-            if (sectionEHeader != null)
-            {
-                DependencyObject p = VisualTreeHelper.GetParent(sectionEHeader);
-                while (p != null && !(p is StackPanel)) p = VisualTreeHelper.GetParent(p);
-                targetPanel = p as StackPanel;
-            }
-            if (targetPanel == null) return;
-            if (targetPanel.Tag?.ToString() == "FTH_SEC_E_EXTENDED") return;
-            targetPanel.Tag = "FTH_SEC_E_EXTENDED";
+            if (secEHeader == null) return;
 
-            var customCommsContainer = new Border
+            // Ukryj stary przycisk "Pobierz z Generatora Stron" obok nagłówka E. Tabela łączności (bo jest już na samej górze)
+            var headerParent = VisualTreeHelper.GetParent(secEHeader) as Panel;
+            if (headerParent != null)
+            {
+                foreach (var b in BuilderPackageAndUiPatcher.GetVisualTreeElements(headerParent).OfType<Button>())
+                {
+                    string bt = BuilderPackageAndUiPatcher.ExtractButtonText(b);
+                    if (bt.Contains("Pobierz z Generatora Stron", StringComparison.OrdinalIgnoreCase))
+                    {
+                        b.Visibility = Visibility.Collapsed;
+                        b.Width = 0;
+                        b.Height = 0;
+                    }
+                }
+            }
+
+            DependencyObject secParent = VisualTreeHelper.GetParent(secEHeader);
+            while (secParent != null && !(secParent is StackPanel)) secParent = VisualTreeHelper.GetParent(secParent);
+            if (!(secParent is StackPanel secStack)) return;
+
+            if (activeDay != null && string.IsNullOrWhiteSpace(activeDay.SyncedCommsMatrixSummary))
+            {
+                SyncAllFromGenerators(win, model, activeDay);
+            }
+
+            RefreshSectionEAndCoordinatesInLiveTree(win, model, activeDay);
+
+            if (secStack.Tag?.ToString() == "FTH_CUSTOM_COMMS_ADDED") return;
+            secStack.Tag = "FTH_CUSTOM_COMMS_ADDED";
+
+            // Dodaj opcjonalną tabelkę na inne kanały ("na ptaszek") w Sekcji E
+            var customBoxBorder = new Border
             {
                 Background = new SolidColorBrush(Color.FromRgb(8, 22, 28)),
                 BorderBrush = new SolidColorBrush(Color.FromRgb(31, 224, 197)),
-                BorderThickness = new Thickness(1),
+                BorderThickness = new Thickness(1.2),
                 CornerRadius = new CornerRadius(6),
-                Padding = new Thickness(10),
-                Margin = new Thickness(0, 8, 0, 10)
+                Padding = new Thickness(12),
+                Margin = new Thickness(0, 8, 0, 12)
             };
 
             var st = new StackPanel();
-            var chkCustom = new CheckBox
+            var chk = new CheckBox
             {
                 Content = BuilderI18n.T(
-                    "☑️ Dodaj inne kanały ręcznie (opcjonalna tabela dodatkowych kanałów w OPORD)",
-                    "☑️ Add other channels manually (optional custom channels table in OPORD)"),
-                IsChecked = activeDay.IncludeCustomChannelsTable,
+                    "☑️ Dodaj inne kanały radiowe ręcznie w OPORD (opcjonalna tabela dodatkowych częstotliwości)",
+                    "☑️ Add custom radio channels manually in OPORD (optional frequency table)"),
+                IsChecked = activeDay != null && activeDay.IncludeCustomChannelsTable,
                 Foreground = new SolidColorBrush(Color.FromRgb(31, 224, 197)),
                 FontWeight = FontWeights.Bold,
                 Margin = new Thickness(0, 0, 0, 8),
                 Cursor = Cursors.Hand
             };
-            st.Children.Add(chkCustom);
+            st.Children.Add(chk);
 
-            var tableBodyPanel = new StackPanel
+            var bodyPanel = new StackPanel
             {
-                Visibility = activeDay.IncludeCustomChannelsTable ? Visibility.Visible : Visibility.Collapsed
+                Visibility = (activeDay != null && activeDay.IncludeCustomChannelsTable) ? Visibility.Visible : Visibility.Collapsed
             };
 
-            var rowsHost = new StackPanel();
-            var parsedRows = ParseCustomChannelRows(activeDay.CustomChannelsTableText);
+            var rowsContainer = new StackPanel();
 
-            void SyncRowsBackToModel()
+            void SaveRowsToDayModel()
             {
+                if (activeDay == null) return;
                 var lines = new List<string>();
-                foreach (Grid rowGrid in rowsHost.Children.OfType<Grid>())
+                foreach (Grid g in rowsContainer.Children.OfType<Grid>())
                 {
-                    var boxes = rowGrid.Children.OfType<TextBox>().ToList();
-                    if (boxes.Count >= 4)
+                    var tbs = g.Children.OfType<TextBox>().ToList();
+                    if (tbs.Count >= 4)
                     {
-                        string r = boxes[0].Text.Trim();
-                        string b = boxes[1].Text.Trim();
-                        string f = boxes[2].Text.Trim();
-                        string tn = boxes[3].Text.Trim();
-                        if (!string.IsNullOrWhiteSpace(r) || !string.IsNullOrWhiteSpace(f))
-                        {
-                            lines.Add($"• {r} [{b}]: {f} ({tn})");
-                        }
+                        lines.Add($"• {tbs[0].Text.Trim()} [{tbs[1].Text.Trim()}]: {tbs[2].Text.Trim()} ({tbs[3].Text.Trim()})");
                     }
                 }
                 activeDay.CustomChannelsTableText = string.Join("\n", lines);
             }
 
-            void AddVisualChannelRow(CustomOpordChannelRow rowData)
+            void AddCustomRow(string role, string band, string freq, string tone)
             {
                 var g = new Grid { Margin = new Thickness(0, 0, 0, 4) };
-                g.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1.3, GridUnitType.Star) });
-                g.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(0.8, GridUnitType.Star) });
+                g.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1.2, GridUnitType.Star) });
+                g.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(0.7, GridUnitType.Star) });
                 g.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1.4, GridUnitType.Star) });
-                g.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1.1, GridUnitType.Star) });
+                g.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1.0, GridUnitType.Star) });
                 g.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
 
-                TextBox MakeCell(string text, int col, string tip)
+                TextBox CreateCell(string val, int col)
                 {
-                    var tb = new TextBox
+                    var t = new TextBox
                     {
-                        Text = text,
-                        ToolTip = tip,
+                        Text = val,
                         Padding = new Thickness(6, 4, 6, 4),
                         Margin = new Thickness(0, 0, 6, 0),
                         Background = new SolidColorBrush(Color.FromRgb(13, 33, 41)),
@@ -500,42 +471,39 @@ namespace FieldTakHub.Builder.Services
                         FontFamily = new FontFamily("Consolas"),
                         FontSize = 11.5
                     };
-                    tb.TextChanged += (_, __) => SyncRowsBackToModel();
-                    Grid.SetColumn(tb, col);
-                    return tb;
+                    t.TextChanged += (_, __) => SaveRowsToDayModel();
+                    Grid.SetColumn(t, col);
+                    return t;
                 }
 
-                g.Children.Add(MakeCell(rowData.Role, 0, "Rola / Przeznaczenie kanału (np. Zwiad / Alfa)"));
-                g.Children.Add(MakeCell(rowData.Band, 1, "Pasmo (np. PMR / VHF / UHF / DMR)"));
-                g.Children.Add(MakeCell(rowData.Freq, 2, "Częstotliwość / Kanał (np. CH 2 / 446.01875 MHz)"));
-                g.Children.Add(MakeCell(rowData.Tone, 3, "Ton CTCSS / Kod DMR"));
+                g.Children.Add(CreateCell(role, 0));
+                g.Children.Add(CreateCell(band, 1));
+                g.Children.Add(CreateCell(freq, 2));
+                g.Children.Add(CreateCell(tone, 3));
 
-                var btnDel = new Button
+                var delBtn = new Button
                 {
                     Content = "✕",
                     Width = 28,
                     Height = 26,
-                    Background = new SolidColorBrush(Color.FromRgb(64, 18, 18)),
+                    Background = new SolidColorBrush(Color.FromRgb(70, 20, 20)),
                     Foreground = Brushes.White,
                     FontWeight = FontWeights.Bold,
                     Cursor = Cursors.Hand
                 };
-                btnDel.Click += (_, __) =>
-                {
-                    rowsHost.Children.Remove(g);
-                    SyncRowsBackToModel();
-                };
-                Grid.SetColumn(btnDel, 4);
-                g.Children.Add(btnDel);
+                delBtn.Click += (_, __) => { rowsContainer.Children.Remove(g); SaveRowsToDayModel(); };
+                Grid.SetColumn(delBtn, 4);
+                g.Children.Add(delBtn);
 
-                rowsHost.Children.Add(g);
+                rowsContainer.Children.Add(g);
             }
 
-            foreach (var r in parsedRows) AddVisualChannelRow(r);
+            AddCustomRow("Kanał Sekcji Alfa", "PMR", "CH 2 (446.01875 MHz)", "CTCSS 77.0 Hz");
+            AddCustomRow("Kanał Zwiadu / Snajper", "VHF/UHF", "446.05625 MHz (PMR CH 5)", "CTCSS 110.9 Hz");
 
-            var btnAddRow = new Button
+            var addRowBtn = new Button
             {
-                Content = BuilderI18n.T("➕ Dodaj kolejny kanał do tabeli", "➕ Add Custom Channel Row"),
+                Content = BuilderI18n.T("➕ Dodaj kolejny kanał własny", "➕ Add Custom Channel Row"),
                 HorizontalAlignment = HorizontalAlignment.Left,
                 Padding = new Thickness(12, 4, 12, 4),
                 Margin = new Thickness(0, 4, 0, 0),
@@ -545,250 +513,132 @@ namespace FieldTakHub.Builder.Services
                 FontWeight = FontWeights.Bold,
                 Cursor = Cursors.Hand
             };
-            btnAddRow.Click += (_, __) =>
+            addRowBtn.Click += (_, __) =>
             {
-                AddVisualChannelRow(new CustomOpordChannelRow { Role = "Kanał dodatkowy", Band = "PMR", Freq = "CH 5 (446.05625 MHz)", Tone = "CTCSS 110.9 Hz" });
-                SyncRowsBackToModel();
+                AddCustomRow("Kanał dodatkowy", "PMR", "CH 6 (446.06875 MHz)", "CTCSS 123.0 Hz");
+                SaveRowsToDayModel();
             };
 
-            tableBodyPanel.Children.Add(rowsHost);
-            tableBodyPanel.Children.Add(btnAddRow);
-            st.Children.Add(tableBodyPanel);
+            bodyPanel.Children.Add(rowsContainer);
+            bodyPanel.Children.Add(addRowBtn);
+            st.Children.Add(bodyPanel);
 
-            chkCustom.Checked += (_, __) =>
+            chk.Checked += (_, __) =>
             {
-                activeDay.IncludeCustomChannelsTable = true;
-                tableBodyPanel.Visibility = Visibility.Visible;
-                SyncRowsBackToModel();
+                if (activeDay != null) activeDay.IncludeCustomChannelsTable = true;
+                bodyPanel.Visibility = Visibility.Visible;
+                SaveRowsToDayModel();
             };
-            chkCustom.Unchecked += (_, __) =>
+            chk.Unchecked += (_, __) =>
             {
-                activeDay.IncludeCustomChannelsTable = false;
-                tableBodyPanel.Visibility = Visibility.Collapsed;
+                if (activeDay != null) activeDay.IncludeCustomChannelsTable = false;
+                bodyPanel.Visibility = Visibility.Collapsed;
             };
 
-            customCommsContainer.Child = st;
+            customBoxBorder.Child = st;
 
-            // Wstaw kontener zaraz pod zielonym podsumowaniem łączności w Sekcji E
-            int insertPos = targetPanel.Children.Count;
-            for (int i = 0; i < targetPanel.Children.Count; i++)
+            int insertIdx = secStack.Children.Count;
+            for (int i = 0; i < secStack.Children.Count; i++)
             {
-                if (targetPanel.Children[i] is TextBlock tb && (tb.Text ?? "").Contains("F.1.", StringComparison.OrdinalIgnoreCase))
+                if (secStack.Children[i] is TextBlock tb && (tb.Text ?? "").Contains("F.1.", StringComparison.OrdinalIgnoreCase))
                 {
-                    insertPos = i;
+                    insertIdx = i;
                     break;
                 }
             }
-            targetPanel.Children.Insert(insertPos, customCommsContainer);
+            secStack.Children.Insert(insertIdx, customBoxBorder);
         }
 
-        private static List<CustomOpordChannelRow> ParseCustomChannelRows(string rawText)
+        private static void RefreshSectionEAndCoordinatesInLiveTree(Window win, OpordParagraphModel model, OpordDayPlanModel activeDay)
         {
-            var list = new List<CustomOpordChannelRow>();
-            if (!string.IsNullOrWhiteSpace(rawText))
-            {
-                var lines = rawText.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
-                foreach (string line in lines)
-                {
-                    string clean = line.Trim().TrimStart('•', '-', '*').Trim();
-                    if (string.IsNullOrWhiteSpace(clean)) continue;
-                    list.Add(new CustomOpordChannelRow
-                    {
-                        Role = clean,
-                        Band = "PMR/UHF",
-                        Freq = "Wg ustaleń",
-                        Tone = "-"
-                    });
-                }
-            }
-            if (list.Count == 0)
-            {
-                list.Add(new CustomOpordChannelRow { Role = "Kanał Sekcji Alfa", Band = "PMR", Freq = "CH 2 (446.01875 MHz)", Tone = "CTCSS 77.0 Hz" });
-                list.Add(new CustomOpordChannelRow { Role = "Kanał Zwiadu / Snajper", Band = "PMR", Freq = "CH 5 (446.05625 MHz)", Tone = "CTCSS 110.9 Hz" });
-            }
-            return list;
-        }
+            if (win == null || activeDay == null) return;
+            var all = BuilderPackageAndUiPatcher.GetVisualTreeElements(win);
 
-        private static void PatchMetocAndDiscordButtons(
-            Window win,
-            OpordParagraphModel model,
-            OpordDayPlanModel activeDay,
-            List<DependencyObject> allElements)
-        {
-            // Znajdź pole tekstowe lokalizacji w I. SYTUACJA, aby sprawdzać na żywo co wpisał użytkownik
-            TextBox locationTextBox = null;
-            foreach (var tb in allElements.OfType<TextBox>())
+            foreach (var tb in all.OfType<TextBox>())
             {
                 var p = VisualTreeHelper.GetParent(tb) as Panel;
-                if (p != null && p.Children.OfType<TextBlock>().Any(l =>
-                    (l.Text ?? "").Contains("Lokalizacja", StringComparison.OrdinalIgnoreCase) ||
-                    (l.Text ?? "").Contains("Obszar gry", StringComparison.OrdinalIgnoreCase)))
-                {
-                    locationTextBox = tb;
-                    break;
-                }
+                if (p == null) continue;
+                string lbl = string.Join(" ", p.Children.OfType<TextBlock>().Select(x => x.Text ?? ""));
+                if (lbl.Contains("Kanał główny", StringComparison.OrdinalIgnoreCase)) tb.Text = activeDay.PrimaryChannel;
+                else if (lbl.Contains("Kanał zapasowy", StringComparison.OrdinalIgnoreCase)) tb.Text = activeDay.AlternateChannel;
+                else if (lbl.Contains("Kanał HQ", StringComparison.OrdinalIgnoreCase)) tb.Text = activeDay.HqChannel;
+                else if (lbl.Contains("A. Obszar zainteresowania", StringComparison.OrdinalIgnoreCase) && !string.IsNullOrWhiteSpace(activeDay.AreaOfInterestPoiDesc))
+                    tb.Text = activeDay.AreaOfInterestPoiDesc;
             }
 
-            foreach (var btn in allElements.OfType<Button>())
+            foreach (var txt in all.OfType<TextBlock>())
             {
-                string bt = (btn.Content ?? "").ToString();
-
-                // 1. Przycisk METOC — zastąp zachowanie, gdy pole lokalizacji jest puste i brak AO w Generatorze Map
-                if (bt.Contains("METOC", StringComparison.OrdinalIgnoreCase))
+                string t = txt.Text ?? "";
+                if (t.Contains("[ZACIĄGNIĘTE Z GENERATORA STRON", StringComparison.OrdinalIgnoreCase))
                 {
-                    // Zastąp przycisk w drzewie wizualnym klonem kontrolowanym przez walidator
-                    var parent = VisualTreeHelper.GetParent(btn) as Panel;
-                    if (parent != null && btn.Tag?.ToString() != "FTH_METOC_GUARDED")
-                    {
-                        btn.Tag = "FTH_METOC_GUARDED";
-                        Button origMetocBtn = btn;
-
-                        var guardedBtn = new Button
-                        {
-                            Content = origMetocBtn.Content,
-                            Height = origMetocBtn.Height,
-                            Margin = origMetocBtn.Margin,
-                            Padding = origMetocBtn.Padding,
-                            Background = origMetocBtn.Background,
-                            Foreground = origMetocBtn.Foreground,
-                            BorderBrush = origMetocBtn.BorderBrush,
-                            BorderThickness = origMetocBtn.BorderThickness,
-                            FontWeight = origMetocBtn.FontWeight,
-                            Cursor = Cursors.Hand,
-                            Tag = "FTH_METOC_GUARDED"
-                        };
-
-                        if (parent is Grid)
-                        {
-                            Grid.SetRow(guardedBtn, Grid.GetRow(origMetocBtn));
-                            Grid.SetColumn(guardedBtn, Grid.GetColumn(origMetocBtn));
-                        }
-
-                        origMetocBtn.Visibility = Visibility.Collapsed;
-                        origMetocBtn.Width = 0;
-
-                        guardedBtn.Click += (_, __) =>
-                        {
-                            string currentLocText = (locationTextBox != null ? locationTextBox.Text : activeDay.LocationName) ?? "";
-                            currentLocText = currentLocText.Trim();
-
-                            var mapData = ExtractMapDataSafe(win);
-                            bool hasMapAo = mapData != null && (mapData.HasAoPolygon || mapData.Pois.Count > 0);
-
-                            bool isLocEmptyOrDefault =
-                                string.IsNullOrWhiteSpace(currentLocText) ||
-                                currentLocText.Equals("Czechowice-Dziedzice / Rejon AO", StringComparison.OrdinalIgnoreCase) ||
-                                currentLocText.Equals("Rejon AO", StringComparison.OrdinalIgnoreCase);
-
-                            if (isLocEmptyOrDefault && !hasMapAo)
-                            {
-                                MessageBox.Show(
-                                    BuilderI18n.T(
-                                        "⚠️ Nie można pobrać prognozy METOC z pustego obszaru!\n\n" +
-                                        "Proszę wpisać nazwę obszaru/miejscowości w polu 'Lokalizacja / Obszar gry (AO)' LUB zaznaczyć granicę terenu gry (AO) w module Generator Map 1:1.",
-                                        "⚠️ Cannot fetch METOC report without a defined area!\n\n" +
-                                        "Please enter an area name in the 'Location / Game Area (AO)' field OR draw an AO polygon in the 1:1 Map Generator."),
-                                    BuilderI18n.T("Błąd METOC — Brak wpisanego obszaru i brak AO na mapie", "METOC Error — Missing Area & Map AO"),
-                                    MessageBoxButton.OK,
-                                    MessageBoxImage.Error);
-                                return;
-                            }
-
-                            origMetocBtn.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
-                        };
-
-                        parent.Children.Add(guardedBtn);
-                    }
-                }
-
-                // 2. Przycisk Kopiuj na Discorda — otwórz okno ze skondensowanym formatem i podziałem na wiadomości
-                if (bt.Contains("Discord", StringComparison.OrdinalIgnoreCase))
-                {
-                    var parent = VisualTreeHelper.GetParent(btn) as Panel;
-                    if (parent != null && btn.Tag?.ToString() != "FTH_DISCORD_GUARDED")
-                    {
-                        btn.Tag = "FTH_DISCORD_GUARDED";
-                        Button origDiscordBtn = btn;
-
-                        var newDiscordBtn = new Button
-                        {
-                            Content = BuilderI18n.T("💬 Kopiuj na Discorda (Skondensowany + Podział)", "💬 Copy for Discord (Condensed + Split)"),
-                            Height = origDiscordBtn.Height,
-                            Margin = origDiscordBtn.Margin,
-                            Padding = origDiscordBtn.Padding,
-                            Background = origDiscordBtn.Background,
-                            Foreground = origDiscordBtn.Foreground,
-                            BorderBrush = origDiscordBtn.BorderBrush,
-                            BorderThickness = origDiscordBtn.BorderThickness,
-                            FontWeight = origDiscordBtn.FontWeight,
-                            Cursor = Cursors.Hand,
-                            Tag = "FTH_DISCORD_GUARDED"
-                        };
-
-                        origDiscordBtn.Visibility = Visibility.Collapsed;
-                        origDiscordBtn.Width = 0;
-
-                        newDiscordBtn.Click += (_, __) =>
-                        {
-                            SyncAllFromGenerators(win, model, activeDay);
-                            ShowCondensedDiscordModal(win, model);
-                        };
-
-                        parent.Children.Add(newDiscordBtn);
-                    }
+                    txt.Text = activeDay.SyncedCommsMatrixSummary;
                 }
             }
         }
 
-        private static void InjectAnnex3MapCard(Window win, OpordDayPlanModel d, StackPanel mainStack)
+        private static void PatchSectionIVAnnex3MapInLiveTree(Window win, List<DependencyObject> safeElements, OpordDayPlanModel activeDay)
         {
-            var card = new Border
+            var secIVHeader = safeElements.OfType<TextBlock>().FirstOrDefault(t =>
+                (t.Text ?? "").Contains("IV. LOGISTYKA ORAZ ZAŁĄCZNIKI", StringComparison.OrdinalIgnoreCase) ||
+                (t.Text ?? "").Contains("IV. LOGISTICS", StringComparison.OrdinalIgnoreCase));
+
+            if (secIVHeader == null) return;
+
+            DependencyObject p = VisualTreeHelper.GetParent(secIVHeader);
+            while (p != null && !(p is StackPanel)) p = VisualTreeHelper.GetParent(p);
+            if (!(p is StackPanel secIVStack)) return;
+
+            if (secIVStack.Tag?.ToString() == "FTH_ANNEX3_ADDED") return;
+            secIVStack.Tag = "FTH_ANNEX3_ADDED";
+
+            string dayLabel = activeDay?.DayTitle ?? "Dzień 1";
+            var annex3Border = new Border
             {
-                Background = new SolidColorBrush(Color.FromRgb(10, 24, 30)),
-                BorderBrush = new SolidColorBrush(Color.FromRgb(250, 208, 44)),
-                BorderThickness = new Thickness(1.5),
-                CornerRadius = new CornerRadius(8),
-                Padding = new Thickness(14),
-                Margin = new Thickness(0, 0, 0, 12)
+                Background = new SolidColorBrush(Color.FromRgb(8, 22, 28)),
+                BorderBrush = new SolidColorBrush(Color.FromRgb(31, 224, 197)),
+                BorderThickness = new Thickness(1.2),
+                CornerRadius = new CornerRadius(6),
+                Padding = new Thickness(12),
+                Margin = new Thickness(0, 10, 0, 4)
             };
 
             var st = new StackPanel();
-            var cbMap = new CheckBox
+            var chkAnnex3 = new CheckBox
             {
                 Content = BuilderI18n.T(
-                    $"🗺️ Dołącz ZAŁĄCZNIK 3 — Mapa Operacyjna / Szkic AO do rozkazu OPORD ({d.DayTitle})",
-                    $"🗺️ Include ANNEX 3 — Operational Map / AO Sketch in OPORD ({d.DayTitle})"),
-                IsChecked = d.IncludeAnnex3Map,
-                Foreground = new SolidColorBrush(Color.FromRgb(250, 208, 44)),
+                    $"☑️ Załącznik 3 ({dayLabel}): Dołącz mapę operacyjną / szkic AO do rozkazu OPORD",
+                    $"☑️ Annex 3 ({dayLabel}): Attach operational map / AO sketch to OPORD"),
+                IsChecked = activeDay != null && activeDay.IncludeAnnex3Map,
+                Foreground = new SolidColorBrush(Color.FromRgb(31, 224, 197)),
                 FontWeight = FontWeights.Bold,
-                Margin = new Thickness(0, 0, 0, 6),
+                Margin = new Thickness(0, 0, 0, 8),
                 Cursor = Cursors.Hand
             };
-            st.Children.Add(cbMap);
+            st.Children.Add(chkAnnex3);
 
             var detailsPanel = new StackPanel
             {
-                Visibility = d.IncludeAnnex3Map ? Visibility.Visible : Visibility.Collapsed
+                Visibility = (activeDay != null && activeDay.IncludeAnnex3Map) ? Visibility.Visible : Visibility.Collapsed
             };
 
-            var pathGrid = new Grid { Margin = new Thickness(0, 4, 0, 6) };
-            pathGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-            pathGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            var row = new Grid { Margin = new Thickness(0, 0, 0, 6) };
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
 
             var pathBox = new TextBox
             {
-                Text = d.Annex3MapImagePath,
-                Padding = new Thickness(6),
+                Text = activeDay?.Annex3MapImagePath ?? "",
+                Padding = new Thickness(6, 4, 6, 4),
                 Background = new SolidColorBrush(Color.FromRgb(13, 33, 41)),
                 Foreground = Brushes.White,
                 BorderBrush = new SolidColorBrush(Color.FromRgb(34, 74, 89)),
                 FontSize = 11.5
             };
-            pathBox.TextChanged += (_, __) => d.Annex3MapImagePath = pathBox.Text;
+            pathBox.TextChanged += (_, __) => { if (activeDay != null) activeDay.Annex3MapImagePath = pathBox.Text; };
             Grid.SetColumn(pathBox, 0);
-            pathGrid.Children.Add(pathBox);
+            row.Children.Add(pathBox);
 
-            var btnPick = new Button
+            var pickBtn = new Button
             {
                 Content = BuilderI18n.T("📂 Wybierz plik mapy (.PNG / .JPG)", "📂 Select Map Image (.PNG / .JPG)"),
                 Padding = new Thickness(12, 4, 12, 4),
@@ -799,7 +649,7 @@ namespace FieldTakHub.Builder.Services
                 FontWeight = FontWeights.Bold,
                 Cursor = Cursors.Hand
             };
-            btnPick.Click += (_, __) =>
+            pickBtn.Click += (_, __) =>
             {
                 var ofd = new OpenFileDialog
                 {
@@ -807,37 +657,28 @@ namespace FieldTakHub.Builder.Services
                 };
                 if (ofd.ShowDialog(win) == true)
                 {
-                    d.Annex3MapImagePath = ofd.FileName;
                     pathBox.Text = ofd.FileName;
+                    if (activeDay != null) activeDay.Annex3MapImagePath = ofd.FileName;
                 }
             };
-            Grid.SetColumn(btnPick, 1);
-            pathGrid.Children.Add(btnPick);
-            detailsPanel.Children.Add(pathGrid);
+            Grid.SetColumn(pickBtn, 1);
+            row.Children.Add(pickBtn);
+            detailsPanel.Children.Add(row);
 
-            var notesBox = new TextBox
+            chkAnnex3.Checked += (_, __) =>
             {
-                Text = d.Annex3MapNotes,
-                AcceptsReturn = true,
-                TextWrapping = TextWrapping.Wrap,
-                MinHeight = 44,
-                Padding = new Thickness(6),
-                Background = new SolidColorBrush(Color.FromRgb(13, 33, 41)),
-                Foreground = Brushes.White,
-                BorderBrush = new SolidColorBrush(Color.FromRgb(34, 74, 89)),
-                FontSize = 11.5
+                if (activeDay != null) activeDay.IncludeAnnex3Map = true;
+                detailsPanel.Visibility = Visibility.Visible;
             };
-            notesBox.TextChanged += (_, __) => d.Annex3MapNotes = notesBox.Text;
-            detailsPanel.Children.Add(notesBox);
-
-            cbMap.Checked += (_, __) => { d.IncludeAnnex3Map = true; detailsPanel.Visibility = Visibility.Visible; };
-            cbMap.Unchecked += (_, __) => { d.IncludeAnnex3Map = false; detailsPanel.Visibility = Visibility.Collapsed; };
+            chkAnnex3.Unchecked += (_, __) =>
+            {
+                if (activeDay != null) activeDay.IncludeAnnex3Map = false;
+                detailsPanel.Visibility = Visibility.Collapsed;
+            };
 
             st.Children.Add(detailsPanel);
-            card.Child = st;
-
-            int insertIdx = Math.Max(0, mainStack.Children.Count - 1);
-            mainStack.Children.Insert(insertIdx, card);
+            annex3Border.Child = st;
+            secIVStack.Children.Add(annex3Border);
         }
 
         public static string BuildAnnex3AndCustomCommsHtml(OpordDayPlanModel d)
@@ -852,7 +693,6 @@ namespace FieldTakHub.Builder.Services
             if (d.IncludeAnnex3Map)
             {
                 sb.AppendLine($"<div class='sec'>ZAŁĄCZNIK 3 — MAPA OPERACYJNA / SZKIC AO ({WebUtility.HtmlEncode(d.DayTitle)})</div>");
-                sb.AppendLine($"<div class='box'>{WebUtility.HtmlEncode(d.Annex3MapNotes)}</div>");
                 if (!string.IsNullOrWhiteSpace(d.Annex3MapImagePath) && File.Exists(d.Annex3MapImagePath))
                 {
                     try
@@ -872,9 +712,6 @@ namespace FieldTakHub.Builder.Services
             return sb.ToString();
         }
 
-        // =====================================================================
-        // 4. SKONDENSOWANY EKSPORT NA DISCORDA Z PODZIAŁEM NA CZĘŚCI (<1900 ZN.)
-        // =====================================================================
         public static string BuildCondensedDiscordMarkdown(OpordParagraphModel m)
         {
             var chunks = BuildCondensedDiscordChunks(m);
@@ -892,6 +729,7 @@ namespace FieldTakHub.Builder.Services
 
         public static List<string> BuildCondensedDiscordChunks(OpordParagraphModel m)
         {
+            if (m == null) m = GetActiveOpordModelViaReflection();
             var chunks = new List<string>();
             if (m == null || m.Days == null || m.Days.Count == 0) return chunks;
 

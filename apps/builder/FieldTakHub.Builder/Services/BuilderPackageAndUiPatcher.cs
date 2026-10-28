@@ -11,6 +11,7 @@ using System.Reflection;
 using System.Text;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
 
@@ -23,16 +24,29 @@ namespace FieldTakHub.Builder.Services
         private static int _hotspotPort = 8769;
         public static string LatestHotspotJsonPayload = "{}";
 
+        /// <summary>
+        /// Przeszukuje drzewo wizualne, ZATRZYMUJĄC SIĘ na granicach kontrolek wejściowych
+        /// (TextBox, ComboBox, Slider, Button, CheckBox, DataGrid, PasswordBox, ScrollBar).
+        /// Nigdy nie wchodzi do wnętrza ich szablonów (ControlTemplate), dzięki czemu suwaki,
+        /// pola tekstowe i rozwijane menu zachowują 100% swojego wyglądu i działania.
+        /// </summary>
         public static List<DependencyObject> GetVisualTreeElements(DependencyObject root)
         {
             var result = new List<DependencyObject>();
             if (root == null) return result;
+
             var q = new Queue<DependencyObject>();
             q.Enqueue(root);
             while (q.Count > 0)
             {
                 var cur = q.Dequeue();
                 result.Add(cur);
+
+                if (cur != root && (cur is TextBoxBase || cur is ComboBox || cur is Slider || cur is ButtonBase || cur is DataGrid || cur is PasswordBox || cur is ScrollBar))
+                {
+                    continue;
+                }
+
                 int cnt = 0;
                 try { cnt = VisualTreeHelper.GetChildrenCount(cur); } catch { }
                 for (int i = 0; i < cnt; i++)
@@ -43,6 +57,20 @@ namespace FieldTakHub.Builder.Services
                 }
             }
             return result;
+        }
+
+        public static bool IsInsideControlTemplate(DependencyObject element)
+        {
+            DependencyObject cur = element != null ? VisualTreeHelper.GetParent(element) : null;
+            while (cur != null)
+            {
+                if (cur is TextBoxBase || cur is ComboBox || cur is Slider || cur is ButtonBase || cur is ListBoxItem || cur is ComboBoxItem || cur is DataGrid || cur is ScrollBar)
+                    return true;
+                if (cur is Window)
+                    break;
+                cur = VisualTreeHelper.GetParent(cur);
+            }
+            return false;
         }
 
         public static string GetWorkspaceRootDir()
@@ -97,147 +125,196 @@ namespace FieldTakHub.Builder.Services
 
         public static void ApplyEnhancements(Window win, List<DependencyObject> allElements)
         {
-            if (win == null || allElements == null) return;
+            if (win == null) return;
             EnsureSharedFolderStructure();
             try
             {
                 if (win.MinWidth > 900) win.MinWidth = 900;
                 if (win.MinHeight > 580) win.MinHeight = 580;
 
-                RemoveUnsightlyTopGapAndLegacyBars(win, allElements);
-                PatchZeroExpirationInputs(allElements);
-                PatchFactionFilesAndPosterButtons(win, allElements);
-                PatchFtakGeneratorCardToThreeButtons(win, allElements);
+                var safeElements = GetVisualTreeElements(win);
+                CollapseLegacyTopModeBarPrecisely(safeElements);
+                PolishLeftSidebarAppearance(win, safeElements);
+                PatchZeroExpirationInputs(safeElements);
+                PatchFactionFilesAndPosterButtons(win, safeElements);
+                PatchFtakGeneratorCardToThreeButtons(win, safeElements);
+
+                // Zawsze uruchamiaj ulepszenia widoku OPORD na żywym drzewie wizualnym
+                BuilderOpordV35Enhancements.EnhanceLiveOpordTree(win, safeElements);
             }
             catch { }
         }
 
-        private static void RemoveUnsightlyTopGapAndLegacyBars(Window win, List<DependencyObject> allElements)
+        /// <summary>
+        /// Usuwa wyłącznie puste ramki po starym górnym pasku trybów (dwie linie cyjanowe nad ScrollViewerem),
+        /// sprawdzając dwa przebiegi (wewnętrzny i zewnętrzny Border), bez dotykania jakichkolwiek kontrolek.
+        /// </summary>
+        public static void CollapseLegacyTopModeBarPrecisely(List<DependencyObject> elements)
         {
-            // 1. Znajdź nagłówek "BUILDER v..." lub "Twórz i zarządzaj paczkami .ftak" i usuń pustą przestrzeń nad nim
-            foreach (var tb in allElements.OfType<TextBlock>())
+            if (elements == null) return;
+
+            for (int pass = 0; pass < 2; pass++)
             {
-                string txt = (tb.Text ?? "").Trim();
-                if (txt.StartsWith("BUILDER v", StringComparison.OrdinalIgnoreCase) ||
-                    txt.Contains("Twórz i zarządzaj paczkami .ftak", StringComparison.OrdinalIgnoreCase) ||
-                    txt.Contains("Paczka .FTAK", StringComparison.OrdinalIgnoreCase))
+                foreach (var el in elements)
                 {
-                    if (txt.StartsWith("BUILDER v2.", StringComparison.OrdinalIgnoreCase))
+                    if (IsInsideControlTemplate(el)) continue;
+
+                    if (el is TextBlock tb)
                     {
-                        tb.Text = "BUILDER v3.5";
+                        string txt = (tb.Text ?? "").Trim();
+                        if (txt.Contains("TRYB PRACY BUILDERA", StringComparison.OrdinalIgnoreCase) ||
+                            txt.Contains("BUILDER MODE", StringComparison.OrdinalIgnoreCase) ||
+                            txt.Contains("Wybierz moduł operacyjny", StringComparison.OrdinalIgnoreCase))
+                        {
+                            tb.Visibility = Visibility.Collapsed;
+                            CollapseParentBarBorder(tb);
+                        }
+                        else if (txt.StartsWith("BUILDER v2.", StringComparison.OrdinalIgnoreCase))
+                        {
+                            tb.Text = "BUILDER v3.5";
+                        }
                     }
 
-                    DependencyObject cur = tb;
-                    while (cur != null && cur != win)
+                    if (el is Border b && b.Visibility == Visibility.Visible)
                     {
-                        if (cur is FrameworkElement fe)
+                        // Sprawdź czy ten Border leży PONAD głównym ScrollViewerem (nie wewnątrz ScrollViewera)
+                        if (IsInsideScrollViewer(b)) continue;
+                        // Nie ruszaj lewego paska bocznego (Sidebar w kolumnie 0 o szerokości <= 280)
+                        if (Grid.GetColumn(b) == 0 && b.ActualWidth > 0 && b.ActualWidth <= 280) continue;
+
+                        if (b.Child == null)
                         {
-                            // Zredukuj nadmierny górny Margin lub Padding, który tworzył pustą przerwę
-                            if (fe.Margin.Top > 14)
+                            if (b.ActualHeight < 90)
                             {
-                                fe.Margin = new Thickness(fe.Margin.Left, 2, fe.Margin.Right, fe.Margin.Bottom);
-                            }
-                            if (fe is Border b && b.Padding.Top > 14)
-                            {
-                                b.Padding = new Thickness(b.Padding.Left, 6, b.Padding.Right, b.Padding.Bottom);
-                            }
-                            if (fe is Control ctrl && ctrl.Padding.Top > 14)
-                            {
-                                ctrl.Padding = new Thickness(ctrl.Padding.Left, 6, ctrl.Padding.Right, ctrl.Padding.Bottom);
+                                CollapseSingleBorderAndRow(b);
                             }
                         }
-
-                        var parent = VisualTreeHelper.GetParent(cur);
-                        if (parent is Grid parentGrid)
+                        else if (b.Child is UIElement childEl)
                         {
-                            int myRow = Grid.GetRow((UIElement)cur);
-                            // Jeśli element jest w wierszu > 0, sprawdź czy wiersze powyżej (np. Row 0 po starym pasku) są puste i wyzeruj ich wysokość!
-                            for (int r = 0; r < myRow && r < parentGrid.RowDefinitions.Count; r++)
+                            if (childEl.Visibility == Visibility.Collapsed)
                             {
-                                bool rowHasVisibleContent = false;
-                                foreach (UIElement child in parentGrid.Children)
-                                {
-                                    if (Grid.GetRow(child) == r && child.Visibility == Visibility.Visible)
-                                    {
-                                        if (HasMeaningfulVisibleContent(child))
-                                        {
-                                            rowHasVisibleContent = true;
-                                            break;
-                                        }
-                                        else
-                                        {
-                                            child.Visibility = Visibility.Collapsed;
-                                        }
-                                    }
-                                }
+                                CollapseSingleBorderAndRow(b);
+                            }
+                            else if (childEl is Panel p && p.Children.Count > 0)
+                            {
+                                bool allHidden = p.Children.Cast<UIElement>().All(c =>
+                                    c.Visibility == Visibility.Collapsed ||
+                                    (c is Panel sp && sp.Children.Count > 0 && sp.Children.Cast<UIElement>().All(x => x.Visibility == Visibility.Collapsed)) ||
+                                    (c is Border sb && (sb.Visibility == Visibility.Collapsed || (sb.Child != null && sb.Child.Visibility == Visibility.Collapsed))));
 
-                                if (!rowHasVisibleContent)
+                                if (allHidden)
                                 {
-                                    parentGrid.RowDefinitions[r].Height = new GridLength(0);
-                                    parentGrid.RowDefinitions[r].MinHeight = 0;
+                                    CollapseSingleBorderAndRow(b);
                                 }
                             }
                         }
-                        else if (parent is StackPanel sp)
-                        {
-                            // Ukryj wszystkie puste kontenery znajdujące się nad bieżącym elementem w StackPanelu
-                            foreach (UIElement sibling in sp.Children)
-                            {
-                                if (sibling == cur) break;
-                                if (sibling.Visibility == Visibility.Visible && !HasMeaningfulVisibleContent(sibling))
-                                {
-                                    sibling.Visibility = Visibility.Collapsed;
-                                }
-                            }
-                        }
-
-                        cur = parent;
-                    }
-                }
-            }
-
-            // 2. Ukryj wszystkie puste ramki (Border) o małej wysokości i dużej szerokości (pozostałości po starym pasku)
-            foreach (var border in allElements.OfType<Border>())
-            {
-                if (border.Visibility != Visibility.Visible) continue;
-                if (!HasMeaningfulVisibleContent(border))
-                {
-                    if (border.ActualWidth > 250 && border.ActualHeight < 120)
-                    {
-                        border.Visibility = Visibility.Collapsed;
-                        border.Height = 0;
-                        border.MinHeight = 0;
-                        border.Margin = new Thickness(0);
-                        border.Padding = new Thickness(0);
-                        border.BorderThickness = new Thickness(0);
                     }
                 }
             }
         }
 
-        private static bool HasMeaningfulVisibleContent(DependencyObject root)
+        private static bool IsInsideScrollViewer(DependencyObject el)
         {
-            if (root == null) return false;
-            if (root is UIElement uie && uie.Visibility != Visibility.Visible) return false;
-
-            var descendants = GetVisualTreeElements(root);
-            foreach (var d in descendants)
+            DependencyObject cur = el != null ? VisualTreeHelper.GetParent(el) : null;
+            while (cur != null)
             {
-                if (d is UIElement el && el.Visibility != Visibility.Visible) continue;
-                if (d is TextBlock tb && !string.IsNullOrWhiteSpace(tb.Text)) return true;
-                if (d is TextBox tbx && tbx.Visibility == Visibility.Visible) return true;
-                if (d is Button btn && btn.Visibility == Visibility.Visible) return true;
-                if (d is ComboBox cb && cb.Visibility == Visibility.Visible) return true;
-                if (d is CheckBox chk && chk.Visibility == Visibility.Visible) return true;
-                if (d is Image img && img.Visibility == Visibility.Visible && img.Source != null) return true;
+                if (cur is ScrollViewer) return true;
+                if (cur is Window) break;
+                cur = VisualTreeHelper.GetParent(cur);
             }
             return false;
         }
 
-        private static void PatchZeroExpirationInputs(List<DependencyObject> allElements)
+        private static void CollapseParentBarBorder(DependencyObject child)
         {
-            foreach (var tb in allElements.OfType<TextBlock>())
+            DependencyObject cur = child;
+            while (cur != null && !(cur is Window))
             {
+                if (cur is Border b && !IsInsideScrollViewer(b))
+                {
+                    CollapseSingleBorderAndRow(b);
+                    break;
+                }
+                cur = VisualTreeHelper.GetParent(cur);
+            }
+        }
+
+        private static void CollapseSingleBorderAndRow(Border b)
+        {
+            b.Visibility = Visibility.Collapsed;
+            b.Height = 0;
+            b.MinHeight = 0;
+            b.Margin = new Thickness(0);
+            b.Padding = new Thickness(0);
+            b.BorderThickness = new Thickness(0);
+
+            var parent = VisualTreeHelper.GetParent(b);
+            if (parent is Grid g)
+            {
+                int r = Grid.GetRow(b);
+                if (r >= 0 && r < g.RowDefinitions.Count)
+                {
+                    bool otherVisibleInRow = false;
+                    foreach (UIElement ch in g.Children)
+                    {
+                        if (ch != b && Grid.GetRow(ch) == r && ch.Visibility == Visibility.Visible)
+                        {
+                            if (!(Grid.GetColumn(ch) == 0 && Grid.GetRowSpan(ch) > 1))
+                            {
+                                otherVisibleInRow = true;
+                                break;
+                            }
+                        }
+                    }
+                    if (!otherVisibleInRow)
+                    {
+                        g.RowDefinitions[r].Height = new GridLength(0);
+                        g.RowDefinitions[r].MinHeight = 0;
+                    }
+                }
+            }
+        }
+
+        private static void PolishLeftSidebarAppearance(Window win, List<DependencyObject> safeElements)
+        {
+            try
+            {
+                foreach (var border in safeElements.OfType<Border>())
+                {
+                    if (IsInsideControlTemplate(border)) continue;
+                    if (Grid.GetColumn(border) == 0 && border.ActualWidth >= 48 && border.ActualWidth <= 280)
+                    {
+                        if (border.Child is Panel sidePanel)
+                        {
+                            bool isCollapsed = border.ActualWidth < 90;
+                            foreach (var btn in GetVisualTreeElements(sidePanel).OfType<Button>())
+                            {
+                                string txt = ExtractButtonText(btn);
+                                if (txt == "<" || txt == ">" || txt == "«" || txt == "»" || txt == "☰")
+                                {
+                                    btn.Width = 30;
+                                    btn.Height = 30;
+                                    btn.Padding = new Thickness(0);
+                                    continue;
+                                }
+                                btn.MinHeight = 38;
+                                btn.Margin = isCollapsed ? new Thickness(4, 3, 4, 3) : new Thickness(0, 3, 0, 3);
+                                btn.Padding = isCollapsed ? new Thickness(0, 6, 0, 6) : new Thickness(12, 7, 12, 7);
+                                btn.HorizontalContentAlignment = isCollapsed ? HorizontalAlignment.Center : HorizontalAlignment.Left;
+                                btn.VerticalContentAlignment = VerticalAlignment.Center;
+                            }
+                        }
+                    }
+                }
+            }
+            catch { }
+        }
+
+        private static void PatchZeroExpirationInputs(List<DependencyObject> safeElements)
+        {
+            foreach (var tb in safeElements.OfType<TextBlock>())
+            {
+                if (IsInsideControlTemplate(tb)) continue;
                 string txt = (tb.Text ?? "").Trim();
                 if ((txt.Contains("Ważność", StringComparison.OrdinalIgnoreCase) || txt.Contains("Expiration", StringComparison.OrdinalIgnoreCase)) &&
                     !txt.Contains("0 = bezterminowo", StringComparison.OrdinalIgnoreCase))
@@ -247,9 +324,9 @@ namespace FieldTakHub.Builder.Services
             }
         }
 
-        private static void PatchFactionFilesAndPosterButtons(Window win, List<DependencyObject> allElements)
+        private static void PatchFactionFilesAndPosterButtons(Window win, List<DependencyObject> safeElements)
         {
-            foreach (var btn in allElements.OfType<Button>())
+            foreach (var btn in safeElements.OfType<Button>())
             {
                 string txt = ExtractButtonText(btn);
                 string name = btn.Name ?? "";
@@ -265,7 +342,6 @@ namespace FieldTakHub.Builder.Services
 
                 if (isFactionFilesBtn)
                 {
-                    // Zawsze wymuszaj aktywność przycisku Pliki strony!
                     btn.IsEnabled = true;
                     btn.Visibility = Visibility.Visible;
                     btn.Opacity = 1.0;
@@ -279,19 +355,10 @@ namespace FieldTakHub.Builder.Services
                     {
                         btn.Tag = "FTH_FAC_FILES_ACTIVE";
                         btn.Cursor = Cursors.Hand;
-                        btn.ToolTip = BuilderI18n.T(
-                            "Otwiera folder wyjściowy out\\<STRONA>\\ dla tej strony konfliktu",
-                            "Opens the out\\<FACTION>\\ output folder for this faction");
-
-                        // Jeśli coś w kodzie próbuje zablokować przycisk (IsEnabled = false), natychmiast go odblokuj
                         btn.IsEnabledChanged += (sender, args) =>
                         {
-                            if (sender is Button b && !b.IsEnabled)
-                            {
-                                b.IsEnabled = true;
-                            }
+                            if (sender is Button b && !b.IsEnabled) b.IsEnabled = true;
                         };
-
                         btn.PreviewMouseLeftButtonDown += (s, e) =>
                         {
                             e.Handled = true;
@@ -341,10 +408,11 @@ namespace FieldTakHub.Builder.Services
             return null;
         }
 
-        private static void PatchFtakGeneratorCardToThreeButtons(Window win, List<DependencyObject> allElements)
+        private static void PatchFtakGeneratorCardToThreeButtons(Window win, List<DependencyObject> safeElements)
         {
-            foreach (var tb in allElements.OfType<TextBlock>())
+            foreach (var tb in safeElements.OfType<TextBlock>())
             {
+                if (IsInsideControlTemplate(tb)) continue;
                 string t = (tb.Text ?? "").Trim();
                 if (t.Contains("GENERATOR PACZEK .FTAK", StringComparison.OrdinalIgnoreCase) || t.Contains("PACKAGE BUILDER .FTAK", StringComparison.OrdinalIgnoreCase))
                 {
@@ -516,7 +584,7 @@ namespace FieldTakHub.Builder.Services
             catch { }
         }
 
-        private static string ExtractButtonText(Button btn)
+        public static string ExtractButtonText(Button btn)
         {
             if (btn.Content is string s) return s;
             if (btn.Content is TextBlock tb) return tb.Text ?? "";
@@ -568,10 +636,9 @@ namespace FieldTakHub.Builder.Services
         public static List<string> GetAllFactionNamesFromUi(Window win)
         {
             var res = new List<string>();
-            if (win == null) return new List<string> { "BLUFOR", "OPFOR" };
+            if (win == null) return new List<string> { "ORGA", "BLUFOR", "OPFOR" };
             try
             {
-                // 1. Zczytaj z kolekcji Factions w pamięci okna MainWindow (przez refleksję)
                 foreach (var facObj in EnumerateFactionObjectsFromWindow(win))
                 {
                     string n = GetPropStr(facObj, "Name", "FactionName", "SideName");
@@ -579,7 +646,6 @@ namespace FieldTakHub.Builder.Services
                         res.Add(n.Trim());
                 }
 
-                // 2. Zczytaj z kontrolek UI
                 var all = BuilderPackageAndUiPatcher.GetVisualTreeElements(win);
                 foreach (var lb in all.OfType<ListBox>())
                 {
@@ -589,18 +655,18 @@ namespace FieldTakHub.Builder.Services
                         if (!string.IsNullOrWhiteSpace(n) && !res.Contains(n, StringComparer.OrdinalIgnoreCase)) res.Add(n.Trim());
                     }
                 }
-                foreach (var tb in all.OfType<TextBox>())
+                foreach (var cb in all.OfType<CheckBox>())
                 {
-                    var p = VisualTreeHelper.GetParent(tb) as Panel;
-                    if (p != null && p.Children.OfType<TextBlock>().Any(l => (l.Text ?? "").Contains("Nazwa strony", StringComparison.OrdinalIgnoreCase)))
+                    // Zczytaj również nazwy stron z modułu Generator Map 1:1 (np. ORGA, STRONA-2)
+                    string c = cb.Content?.ToString() ?? "";
+                    if (!string.IsNullOrWhiteSpace(c) && c.Length <= 24 && !c.Contains(" ") && !res.Contains(c, StringComparer.OrdinalIgnoreCase))
                     {
-                        string v = (tb.Text ?? "").Trim();
-                        if (!string.IsNullOrWhiteSpace(v) && !res.Contains(v, StringComparer.OrdinalIgnoreCase)) res.Insert(0, v);
+                        res.Add(c.Trim());
                     }
                 }
             }
             catch { }
-            if (res.Count == 0) { res.Add("BLUFOR"); res.Add("OPFOR"); }
+            if (res.Count == 0) { res.Add("ORGA"); res.Add("BLUFOR"); res.Add("OPFOR"); }
             return res;
         }
 
@@ -701,40 +767,6 @@ namespace FieldTakHub.Builder.Services
                             string f = GetPropStr(vi, "FreqMhz", "Frequency", "Freq", "Channel") ?? "";
                             string tn = GetPropStr(vi, "ToneOrCode", "Tone", "Ctcss") ?? "-";
                             if (!string.IsNullOrWhiteSpace(f) || !string.IsNullOrWhiteSpace(r))
-                                snap.VoiceChannels.Add(new FactionVoiceRowData { Role = r, Band = b, Freq = f, Tone = tn });
-                        }
-                    }
-                }
-
-                var all = BuilderPackageAndUiPatcher.GetVisualTreeElements(win);
-                foreach (var tb in all.OfType<TextBox>())
-                {
-                    string val = (tb.Text ?? "").Trim();
-                    var p = VisualTreeHelper.GetParent(tb) as Panel;
-                    string lbl = p != null ? string.Join(" ", p.Children.OfType<TextBlock>().Select(x => x.Text)) : "";
-                    if (string.IsNullOrWhiteSpace(lbl)) continue;
-
-                    if (lbl.Contains("wydarzenia", StringComparison.OrdinalIgnoreCase) && !string.IsNullOrWhiteSpace(val)) snap.EventName = val;
-                    else if (lbl.Contains("Nazwa strony", StringComparison.OrdinalIgnoreCase) && string.IsNullOrWhiteSpace(preferredFactionName) && !string.IsNullOrWhiteSpace(val)) snap.FactionName = val;
-                    else if (lbl.Contains("kanału Meshtastic", StringComparison.OrdinalIgnoreCase) && !string.IsNullOrWhiteSpace(val)) snap.ChannelName = val;
-                    else if (lbl.Contains("OpenTAK", StringComparison.OrdinalIgnoreCase)) snap.OtsHost = val;
-                    else if (lbl.Contains("alarmowy", StringComparison.OrdinalIgnoreCase) && !string.IsNullOrWhiteSpace(val)) snap.EmergencyPhone = val;
-                    else if ((lbl.Contains("Ważność", StringComparison.OrdinalIgnoreCase) || lbl.Contains("bezterminowo", StringComparison.OrdinalIgnoreCase)) && int.TryParse(val, out int h))
-                        snap.ExpirationHours = h <= 0 ? 0 : h;
-                }
-
-                if (snap.VoiceChannels.Count == 0)
-                {
-                    foreach (var dg in all.OfType<DataGrid>())
-                    {
-                        foreach (var row in dg.Items)
-                        {
-                            if (row == null) continue;
-                            string r = GetPropStr(row, "Role", "RoleName", "Name") ?? "";
-                            string b = GetPropStr(row, "Band", "BandType") ?? "PMR";
-                            string f = GetPropStr(row, "Frequency", "FreqMhz", "Freq") ?? "";
-                            string tn = GetPropStr(row, "Tone", "ToneOrCode") ?? "-";
-                            if (!string.IsNullOrWhiteSpace(r) || !string.IsNullOrWhiteSpace(f))
                                 snap.VoiceChannels.Add(new FactionVoiceRowData { Role = r, Band = b, Freq = f, Tone = tn });
                         }
                     }
