@@ -14,6 +14,7 @@ using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Threading;
 
 namespace FieldTakHub.Builder.Services
 {
@@ -21,15 +22,46 @@ namespace FieldTakHub.Builder.Services
     {
         private static bool _sharedFoldersInitialized;
         private static bool _isApplying;
-        private static int _pendingLayoutPasses = 2;
+        private static int _pendingLayoutPasses = 3;
         private static DateTime _lastApplyUtc = DateTime.MinValue;
         private static HttpListener _hotspotListener;
         private static int _hotspotPort = 8769;
         public static string LatestHotspotJsonPayload = "{}";
 
+        private static readonly string[] DistinctTacticalPalette = new[]
+        {
+            "#2684FF", // Niebieski (BLUFOR)
+            "#EB4034", // Czerwony (OPFOR)
+            "#2ECC71", // Zielony (GREENFOR)
+            "#FAD02C", // Złoty / Żółty
+            "#9B59B6", // Fioletowy (ORGA / SPEC)
+            "#FF9F43", // Pomarańczowy
+            "#1FE0C5", // Cyjan Taktyczny
+            "#E84393", // Karmazynowy / Magenta
+            "#A3CB38", // Oliwkowy / Limonkowy
+            "#00CEC9", // Turkusowy
+            "#F368E0", // Jasny Fiolet
+            "#FF6B6B"  // Koralowy
+        };
+
+        // Odtworzenie oryginalnych ikon modułów na wypadek, gdyby poprzedni skrypt nadpisał je znakiem '<'
+        private static readonly Dictionary<string, Tuple<string, string>> KnownSidebarModules = new Dictionary<string, Tuple<string, string>>(StringComparer.OrdinalIgnoreCase)
+        {
+            { "Paczek", Tuple.Create("🛡️", "Generator Paczek (.ftak)") },
+            { "Map", Tuple.Create("🗺️", "Generator Map 1:1") },
+            { "OPORD", Tuple.Create("📋", "Generator OPORD") },
+            { "Płytek", Tuple.Create("📟", "Programator Płytek USB") },
+            { "Nowy projekt", Tuple.Create("➕", "Nowy projekt (Stan zerowy)") },
+            { "Otwórz projekt", Tuple.Create("📂", "Otwórz projekt (.fthproj)") },
+            { "Zapisz projekt", Tuple.Create("💾", "Zapisz projekt (.fthproj)") },
+            { "Folder Source", Tuple.Create("📁", "Folder Source (APK / Mapy)") },
+            { "Wesprzyj", Tuple.Create("☕", "Wesprzyj twórcę") },
+            { "Język", Tuple.Create("🌐", "Język UI: PL / ENG") }
+        };
+
         public static void RequestSingleLayoutPass()
         {
-            _pendingLayoutPasses = 1;
+            _pendingLayoutPasses = 2;
         }
 
         public static bool AllowSingleLayoutPass()
@@ -37,7 +69,7 @@ namespace FieldTakHub.Builder.Services
             if (_isApplying) return false;
             if (_pendingLayoutPasses <= 0) return false;
             var now = DateTime.UtcNow;
-            if ((now - _lastApplyUtc).TotalMilliseconds < 250) return false;
+            if ((now - _lastApplyUtc).TotalMilliseconds < 180) return false;
             _pendingLayoutPasses--;
             _lastApplyUtc = now;
             return true;
@@ -50,11 +82,6 @@ namespace FieldTakHub.Builder.Services
             ApplyEnhancements(win, null);
         }
 
-        /// <summary>
-        /// Szybkie przeszukiwanie drzewa wizualnego:
-        /// - Pomija gałęzie ukryte (Visibility == Collapsed), co przyspiesza działanie o ~90% przy zmianie zakładek,
-        /// - Nie wchodzi do wnętrza szablonów kontrolek (TextBox, ComboBox, Slider, Button, DataGrid, WebView2).
-        /// </summary>
         public static List<DependencyObject> GetVisualTreeElements(DependencyObject root, bool includeCollapsed = false)
         {
             var result = new List<DependencyObject>(128);
@@ -77,7 +104,6 @@ namespace FieldTakHub.Builder.Services
                     continue;
                 }
 
-                // Pomiń wchodzenie w głąb kontrolki mapy WebView2
                 string typeName = cur.GetType().Name;
                 if (typeName.Contains("WebView", StringComparison.OrdinalIgnoreCase))
                 {
@@ -128,15 +154,6 @@ namespace FieldTakHub.Builder.Services
                 Directory.CreateDirectory(Path.Combine(wspolne, "plugins"));
                 Directory.CreateDirectory(Path.Combine(wspolne, "maps"));
                 Directory.CreateDirectory(Path.Combine(root, "out"));
-                string readme = Path.Combine(wspolne, "INSTRUKCJA_FOLDERU_WSPOLNE.txt");
-                if (!File.Exists(readme))
-                {
-                    File.WriteAllText(readme,
-                        "=== WSPÓLNY FOLDER ZASOBÓW FIELD TAK HUB ===\r\n" +
-                        "1. apk\\     -> Instalatory .apk aplikacji ATAK-CIV oraz Meshtastic.\r\n" +
-                        "2. plugins\\ -> Wtyczki .apk do aplikacji ATAK.\r\n" +
-                        "3. maps\\    -> Wspólne mapy (.kmz, .gpx, .mbtiles, .sqlitedb).\r\n", Encoding.UTF8);
-                }
             }
             return wspolne;
         }
@@ -174,7 +191,7 @@ namespace FieldTakHub.Builder.Services
                 CollapseLegacyTopModeBarPrecisely(visibleElements);
                 FixSidebarCollapseButtonAndIcons(win, visibleElements);
                 PatchZeroExpirationInputs(visibleElements);
-                PatchFactionFilesAndPosterButtons(win, visibleElements);
+                PatchFactionFilesPosterAndAddFactionColor(win, visibleElements);
                 PatchFtakGeneratorCardToThreeButtons(win, visibleElements);
             }
             catch { }
@@ -184,6 +201,11 @@ namespace FieldTakHub.Builder.Services
             }
         }
 
+        /// <summary>
+        /// Naprawia pasek boczny (Sidebar):
+        /// - Przycisk zwijania rozpoznawany jest wyłącznie po tym, że leży w górnym boksie obok napisu "FIELD TAK HUB" (nigdy nie nadpisuje przycisków modułów!).
+        /// - Przyciski modułów po zwinięciu paska mają Padding = 0 i wyśrodkowaną ikonę, dzięki czemu żadna ikona nie jest ucięta ani zamieniona na '<'.
+        /// </summary>
         private static void FixSidebarCollapseButtonAndIcons(Window win, List<DependencyObject> visibleElements)
         {
             try
@@ -194,20 +216,13 @@ namespace FieldTakHub.Builder.Services
                     if (Grid.GetColumn(border) == 0 && border.ActualWidth >= 44 && border.ActualWidth <= 290)
                     {
                         bool isCollapsed = border.ActualWidth < 95;
-                        string stateTag = isCollapsed ? "SIDEBAR_COLLAPSED" : "SIDEBAR_EXPANDED";
-                        if (border.Tag?.ToString() == stateTag) return; // Już zaktualizowano dla tego stanu — nie wywołuj ponownego Layoutu!
-                        border.Tag = stateTag;
-
                         var sideButtons = GetVisualTreeElements(border, includeCollapsed: true).OfType<Button>().ToList();
-                        foreach (var btn in sideButtons)
-                        {
-                            string txt = ExtractButtonText(btn);
-                            bool isCollapseToggle =
-                                (btn.Width >= 22 && btn.Width <= 42) ||
-                                (btn.ActualWidth >= 22 && btn.ActualWidth <= 42) ||
-                                txt == "<" || txt == ">" || txt == "❮" || txt == "❯" || txt == "«" || txt == "»";
 
-                            if (isCollapseToggle)
+                        for (int idx = 0; idx < sideButtons.Count; idx++)
+                        {
+                            var btn = sideButtons[idx];
+                            // Tylko PIERWSZY przycisk na pasku bocznym (w nagłówku obok logo FIELD TAK HUB) jest przyciskiem zwijania!
+                            if (idx == 0 && !(btn.Content is Panel))
                             {
                                 btn.Padding = new Thickness(0);
                                 btn.HorizontalContentAlignment = HorizontalAlignment.Center;
@@ -217,33 +232,41 @@ namespace FieldTakHub.Builder.Services
                                 btn.FontWeight = FontWeights.Bold;
                                 btn.Content = isCollapsed ? "❯" : "❮";
 
-                                if (btn.Tag?.ToString() != "FTH_TOGGLE_HOOKED")
+                                if (btn.Tag?.ToString() != "FTH_SIDEBAR_TOGGLE_BTN")
                                 {
-                                    btn.Tag = "FTH_TOGGLE_HOOKED";
+                                    btn.Tag = "FTH_SIDEBAR_TOGGLE_BTN";
                                     btn.Click += (_, __) =>
                                     {
-                                        border.Tag = null;
-                                        RequestSingleLayoutPass();
+                                        win.Dispatcher.BeginInvoke(new Action(() =>
+                                        {
+                                            RequestSingleLayoutPass();
+                                            ApplyEnhancements(win, null);
+                                        }), DispatcherPriority.Loaded);
                                     };
                                 }
                                 continue;
                             }
 
-                            if (isCollapsed)
+                            // Wszystkie pozostałe przyciski to przyciski modułów operacyjnych i projektu!
+                            if (btn.Content is Panel p)
                             {
-                                btn.Padding = new Thickness(0);
-                                btn.HorizontalContentAlignment = HorizontalAlignment.Center;
-                                btn.VerticalContentAlignment = VerticalAlignment.Center;
-
-                                if (btn.Content is Panel p)
+                                var tbs = p.Children.OfType<TextBlock>().ToList();
+                                if (isCollapsed)
                                 {
+                                    btn.Padding = new Thickness(0);
+                                    btn.HorizontalContentAlignment = HorizontalAlignment.Center;
+                                    btn.VerticalContentAlignment = VerticalAlignment.Center;
                                     p.HorizontalAlignment = HorizontalAlignment.Center;
-                                    var tbs = p.Children.OfType<TextBlock>().ToList();
+                                    p.Margin = new Thickness(0);
+
                                     if (tbs.Count >= 1)
                                     {
                                         tbs[0].Margin = new Thickness(0);
-                                        tbs[0].HorizontalAlignment = HorizontalAlignment.Center;
+                                        tbs[0].Padding = new Thickness(0);
+                                        tbs[0].Width = double.NaN;
+                                        tbs[0].FontSize = 16;
                                         tbs[0].TextAlignment = TextAlignment.Center;
+                                        tbs[0].HorizontalAlignment = HorizontalAlignment.Center;
                                         tbs[0].Visibility = Visibility.Visible;
                                     }
                                     for (int i = 1; i < tbs.Count; i++)
@@ -251,25 +274,51 @@ namespace FieldTakHub.Builder.Services
                                         tbs[i].Visibility = Visibility.Collapsed;
                                     }
                                 }
-                            }
-                            else
-                            {
-                                btn.Padding = new Thickness(10, 6, 10, 6);
-                                btn.HorizontalContentAlignment = HorizontalAlignment.Left;
-                                btn.VerticalContentAlignment = VerticalAlignment.Center;
-
-                                if (btn.Content is Panel p)
+                                else
                                 {
+                                    btn.Padding = new Thickness(10, 6, 10, 6);
+                                    btn.HorizontalContentAlignment = HorizontalAlignment.Left;
+                                    btn.VerticalContentAlignment = VerticalAlignment.Center;
                                     p.HorizontalAlignment = HorizontalAlignment.Left;
-                                    var tbs = p.Children.OfType<TextBlock>().ToList();
+
                                     if (tbs.Count >= 1)
                                     {
                                         tbs[0].Margin = new Thickness(0, 0, 8, 0);
+                                        tbs[0].FontSize = 14;
                                         tbs[0].Visibility = Visibility.Visible;
                                     }
                                     for (int i = 1; i < tbs.Count; i++)
                                     {
                                         tbs[i].Visibility = Visibility.Visible;
+                                    }
+                                }
+                            }
+                            else if (btn.Content is string sContent)
+                            {
+                                // Jeśli przycisk ma tekst (np. "🛡️ Generator Paczek (.ftak)"), w trybie zwiniętym pokaż samą ikonę!
+                                string fullLabel = btn.ToolTip as string;
+                                if (string.IsNullOrWhiteSpace(fullLabel) && sContent.Length > 3)
+                                {
+                                    fullLabel = sContent;
+                                    btn.ToolTip = fullLabel;
+                                }
+
+                                if (!string.IsNullOrWhiteSpace(fullLabel))
+                                {
+                                    string iconOnly = ExtractLeadingIcon(fullLabel);
+                                    if (isCollapsed)
+                                    {
+                                        btn.Padding = new Thickness(0);
+                                        btn.HorizontalContentAlignment = HorizontalAlignment.Center;
+                                        btn.FontSize = 16;
+                                        btn.Content = iconOnly;
+                                    }
+                                    else
+                                    {
+                                        btn.Padding = new Thickness(10, 6, 10, 6);
+                                        btn.HorizontalContentAlignment = HorizontalAlignment.Left;
+                                        btn.FontSize = 12;
+                                        btn.Content = fullLabel;
                                     }
                                 }
                             }
@@ -279,6 +328,18 @@ namespace FieldTakHub.Builder.Services
                 }
             }
             catch { }
+        }
+
+        private static string ExtractLeadingIcon(string label)
+        {
+            foreach (var kv in KnownSidebarModules)
+            {
+                if (label.Contains(kv.Key, StringComparison.OrdinalIgnoreCase))
+                    return kv.Value.Item1;
+            }
+            int spaceIdx = label.IndexOf(' ');
+            if (spaceIdx > 0 && spaceIdx <= 4) return label.Substring(0, spaceIdx);
+            return "🔹";
         }
 
         public static void CollapseLegacyTopModeBarPrecisely(List<DependencyObject> elements)
@@ -396,22 +457,43 @@ namespace FieldTakHub.Builder.Services
             }
         }
 
-        private static void PatchFactionFilesAndPosterButtons(Window win, List<DependencyObject> safeElements)
+        /// <summary>
+        /// Obsługuje:
+        /// - Przycisk "📂 Pliki strony",
+        /// - Przycisk "Plakat stron + QR",
+        /// - Przycisk "➕ Dodaj stronę" -> automatycznie losuje unikalny kolor RGB (inny niż pozostałe strony) z możliwością zmiany!
+        /// </summary>
+        private static void PatchFactionFilesPosterAndAddFactionColor(Window win, List<DependencyObject> safeElements)
         {
             foreach (var btn in safeElements.OfType<Button>())
             {
-                if (btn.Tag?.ToString() == "FTH_FAC_FILES_ACTIVE" || btn.Tag?.ToString() == "FTH_POSTER_OK") continue;
-
                 string txt = ExtractButtonText(btn);
                 string name = btn.Name ?? "";
 
+                // 1. Automatyczne losowanie unikalnego koloru RGB dla nowej strony konfliktu przy kliknięciu "Dodaj stronę"
+                if ((txt.Contains("Dodaj stronę", StringComparison.OrdinalIgnoreCase) ||
+                     txt.Contains("Add Faction", StringComparison.OrdinalIgnoreCase) ||
+                     txt.Contains("Nowa strona", StringComparison.OrdinalIgnoreCase)) &&
+                    btn.Tag?.ToString() != "FTH_ADD_FACTION_COLOR_HOOKED")
+                {
+                    btn.Tag = "FTH_ADD_FACTION_COLOR_HOOKED";
+                    btn.Click += (_, __) =>
+                    {
+                        win.Dispatcher.BeginInvoke(new Action(() =>
+                        {
+                            AssignDistinctColorToNewestFaction(win);
+                        }), DispatcherPriority.Loaded);
+                    };
+                }
+
+                // 2. Odblokowanie przycisku "Pliki strony"
                 bool isFactionFilesBtn =
                     txt.Contains("Pliki str", StringComparison.OrdinalIgnoreCase) ||
                     txt.Contains("Faction files", StringComparison.OrdinalIgnoreCase) ||
                     name.Contains("FactionFiles", StringComparison.OrdinalIgnoreCase) ||
                     name.Contains("PlikiStrony", StringComparison.OrdinalIgnoreCase);
 
-                if (isFactionFilesBtn)
+                if (isFactionFilesBtn && btn.Tag?.ToString() != "FTH_FAC_FILES_ACTIVE")
                 {
                     btn.Tag = "FTH_FAC_FILES_ACTIVE";
                     btn.IsEnabled = true;
@@ -439,7 +521,8 @@ namespace FieldTakHub.Builder.Services
                         }
                     };
                 }
-                else if (txt.Contains("Plakat", StringComparison.OrdinalIgnoreCase) || txt.Contains("Safezone", StringComparison.OrdinalIgnoreCase))
+                else if ((txt.Contains("Plakat", StringComparison.OrdinalIgnoreCase) || txt.Contains("Safezone", StringComparison.OrdinalIgnoreCase)) &&
+                         btn.Tag?.ToString() != "FTH_POSTER_OK")
                 {
                     btn.Tag = "FTH_POSTER_OK";
                     btn.IsEnabled = true;
@@ -450,6 +533,70 @@ namespace FieldTakHub.Builder.Services
                     };
                 }
             }
+        }
+
+        private static void AssignDistinctColorToNewestFaction(Window win)
+        {
+            try
+            {
+                var factions = FactionLiveSyncBridge.EnumerateAllInMemoryFactions(win);
+                if (factions.Count == 0) return;
+
+                var usedColors = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                for (int i = 0; i < factions.Count - 1; i++)
+                {
+                    string c = FactionLiveSyncBridge.GetPropStr(factions[i], "ColorHex", "Color", "HexColor");
+                    if (!string.IsNullOrWhiteSpace(c)) usedColors.Add(c.Trim());
+                }
+
+                // Wybierz pierwszy wolny kolor z palety taktycznej lub wylosuj nowy kontrastowy kolor RGB
+                string chosenHex = null;
+                var rng = new Random(Guid.NewGuid().GetHashCode());
+                var shuffledPalette = DistinctTacticalPalette.Skip(2).OrderBy(_ => rng.Next()).Concat(DistinctTacticalPalette.Take(2));
+                foreach (string candidate in shuffledPalette)
+                {
+                    if (!usedColors.Contains(candidate))
+                    {
+                        chosenHex = candidate;
+                        break;
+                    }
+                }
+
+                if (string.IsNullOrWhiteSpace(chosenHex))
+                {
+                    chosenHex = string.Format("#{0:X2}{1:X2}{2:X2}", rng.Next(40, 245), rng.Next(60, 245), rng.Next(50, 245));
+                }
+
+                object newestFaction = factions[factions.Count - 1];
+                var t = newestFaction.GetType();
+                var pColor = t.GetProperty("ColorHex", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.IgnoreCase)
+                          ?? t.GetProperty("Color", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.IgnoreCase);
+                if (pColor != null && pColor.CanWrite)
+                {
+                    pColor.SetValue(newestFaction, chosenHex);
+                }
+
+                // Zaktualizuj również pole tekstowe koloru HEX w aktywnym widoku Generatora Stron (aby użytkownik widział kolor i mógł go zmienić)
+                var all = GetVisualTreeElements(win, includeCollapsed: false);
+                foreach (var tb in all.OfType<TextBox>())
+                {
+                    string val = (tb.Text ?? "").Trim();
+                    if (val.StartsWith("#") && (val.Length == 7 || val.Length == 4))
+                    {
+                        var parent = VisualTreeHelper.GetParent(tb) as Panel;
+                        bool isFactionColorBox = parent != null && GetVisualTreeElements(parent, true).OfType<TextBlock>().Any(l =>
+                            (l.Text ?? "").Contains("Kolor", StringComparison.OrdinalIgnoreCase) ||
+                            (l.Text ?? "").Contains("HEX", StringComparison.OrdinalIgnoreCase) ||
+                            (l.Text ?? "").Contains("RGB", StringComparison.OrdinalIgnoreCase));
+
+                        if (isFactionColorBox)
+                        {
+                            tb.Text = chosenHex;
+                        }
+                    }
+                }
+            }
+            catch { }
         }
 
         private static string TryExtractFactionNameFromDataContext(FrameworkElement el)
@@ -693,6 +840,8 @@ namespace FieldTakHub.Builder.Services
 
     internal static class FactionLiveSyncBridge
     {
+        private static List<FieldInfo> _cachedStaticCollectionFields;
+
         private static readonly HashSet<string> InvalidFactionTokens = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
             "PLI", "GeoChat", "TAK", "TAK_Tracker", "Router", "Client", "Auto",
@@ -718,7 +867,7 @@ namespace FieldTakHub.Builder.Services
 
             try
             {
-                foreach (var facObj in EnumerateFactionObjectsFast(win))
+                foreach (var facObj in EnumerateAllInMemoryFactions(win))
                 {
                     string n = GetPropStr(facObj, "Name", "FactionName", "SideName");
                     if (IsValidFactionName(n) && !res.Contains(n.Trim(), StringComparer.OrdinalIgnoreCase))
@@ -736,29 +885,57 @@ namespace FieldTakHub.Builder.Services
         }
 
         /// <summary>
-        /// Szybkie pobieranie obiektów stron konfliktu wyłącznie z pól/właściwości MainWindow i jego DataContext (bez skanowania Assembly.GetTypes()!).
+        /// Pobiera obiekty stron konfliktu ze statycznych pól serwisów (np. BuilderCoreSidebarAndProjectEngine)
+        /// oraz z MainWindow — ze zbuforowaną listą FieldInfo (czas wykonania < 0.1 ms!).
         /// </summary>
-        private static List<object> EnumerateFactionObjectsFast(Window win)
+        public static List<object> EnumerateAllInMemoryFactions(Window win)
         {
             var list = new List<object>();
             if (win == null) return list;
-            var roots = new List<object> { win };
-            if (win.DataContext != null) roots.Add(win.DataContext);
 
-            var flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static;
-            foreach (var r in roots)
+            try
             {
-                var t = r.GetType();
-                foreach (var f in t.GetFields(flags))
+                if (_cachedStaticCollectionFields == null)
                 {
-                    try { CollectFactions(f.GetValue(r), list); } catch { }
+                    _cachedStaticCollectionFields = new List<FieldInfo>();
+                    var flags = BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic;
+                    foreach (var t in typeof(BuilderPackageAndUiPatcher).Assembly.GetTypes())
+                    {
+                        if (t.Namespace == null || !t.Namespace.StartsWith("FieldTakHub.Builder")) continue;
+                        foreach (var sf in t.GetFields(flags))
+                        {
+                            if (typeof(IEnumerable).IsAssignableFrom(sf.FieldType) && sf.FieldType != typeof(string))
+                            {
+                                _cachedStaticCollectionFields.Add(sf);
+                            }
+                        }
+                    }
                 }
-                foreach (var p in t.GetProperties(flags))
+
+                foreach (var sf in _cachedStaticCollectionFields)
                 {
-                    if (p.GetIndexParameters().Length > 0) continue;
-                    try { CollectFactions(p.GetValue(r), list); } catch { }
+                    try { CollectFactions(sf.GetValue(null), list); } catch { }
+                }
+
+                var roots = new List<object> { win };
+                if (win.DataContext != null) roots.Add(win.DataContext);
+                var instFlags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+                foreach (var r in roots)
+                {
+                    var rt = r.GetType();
+                    foreach (var f in rt.GetFields(instFlags))
+                    {
+                        try { CollectFactions(f.GetValue(r), list); } catch { }
+                    }
+                    foreach (var p in rt.GetProperties(instFlags))
+                    {
+                        if (p.GetIndexParameters().Length > 0) continue;
+                        try { CollectFactions(p.GetValue(r), list); } catch { }
+                    }
                 }
             }
+            catch { }
+
             return list;
         }
 
@@ -771,7 +948,7 @@ namespace FieldTakHub.Builder.Services
                 {
                     if (item == null || item is string) continue;
                     var it = item.GetType();
-                    if ((it.GetProperty("ChannelName") != null || it.GetProperty("VoiceChannels") != null || it.GetProperty("Psk") != null) &&
+                    if ((it.GetProperty("ChannelName") != null || it.GetProperty("VoiceChannels") != null || it.GetProperty("Psk") != null || it.GetProperty("ColorHex") != null) &&
                         (it.GetProperty("Name") != null || it.GetProperty("FactionName") != null))
                     {
                         if (!list.Contains(item)) list.Add(item);
@@ -780,7 +957,7 @@ namespace FieldTakHub.Builder.Services
             }
         }
 
-        private static string GetPropStr(object obj, params string[] names)
+        public static string GetPropStr(object obj, params string[] names)
         {
             if (obj == null) return null;
             var t = obj.GetType();
@@ -790,6 +967,12 @@ namespace FieldTakHub.Builder.Services
                 if (p != null)
                 {
                     string v = p.GetValue(obj)?.ToString();
+                    if (!string.IsNullOrWhiteSpace(v)) return v;
+                }
+                var f = t.GetField(n, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.IgnoreCase);
+                if (f != null)
+                {
+                    string v = f.GetValue(obj)?.ToString();
                     if (!string.IsNullOrWhiteSpace(v)) return v;
                 }
             }
@@ -804,7 +987,7 @@ namespace FieldTakHub.Builder.Services
 
             try
             {
-                var memFactions = EnumerateFactionObjectsFast(win);
+                var memFactions = EnumerateAllInMemoryFactions(win);
                 object matched = null;
                 if (!string.IsNullOrWhiteSpace(preferredFactionName))
                 {
@@ -817,25 +1000,40 @@ namespace FieldTakHub.Builder.Services
                 {
                     snap.FactionName = GetPropStr(matched, "Name", "FactionName") ?? snap.FactionName;
                     snap.ColorHex = GetPropStr(matched, "ColorHex", "Color") ?? snap.ColorHex;
-                    snap.ChannelName = GetPropStr(matched, "ChannelName", "MeshChannel") ?? snap.ChannelName;
+                    snap.ChannelName = GetPropStr(matched, "ChannelName", "MeshChannel", "PrimaryChannel") ?? snap.ChannelName;
                     snap.Psk = GetPropStr(matched, "Psk", "PskBase64") ?? snap.Psk;
                     snap.Region = GetPropStr(matched, "LoraRegion", "Region") ?? snap.Region;
-                    snap.ModemPreset = GetPropStr(matched, "LoraModemPreset", "ModemPreset") ?? snap.ModemPreset;
+                    snap.ModemPreset = GetPropStr(matched, "LoraModemPreset", "ModemPreset", "Preset") ?? snap.ModemPreset;
                     snap.OtsHost = GetPropStr(matched, "OtsHost", "ServerHost") ?? snap.OtsHost;
                     snap.EmergencyPhone = GetPropStr(matched, "EmergencyPhone", "SosPhone") ?? snap.EmergencyPhone;
 
-                    var vcProp = matched.GetType().GetProperty("VoiceChannels", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.IgnoreCase);
-                    if (vcProp?.GetValue(matched) is IEnumerable vcList)
+                    // Odczytaj wszystkie kolekcje kanałów głosowych wewnątrz obiektu strony
+                    var flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.IgnoreCase;
+                    foreach (var prop in matched.GetType().GetProperties(flags))
                     {
-                        foreach (var vi in vcList)
+                        if (typeof(IEnumerable).IsAssignableFrom(prop.PropertyType) && prop.PropertyType != typeof(string))
                         {
-                            if (vi == null) continue;
-                            string r = GetPropStr(vi, "RoleName", "Role", "Name") ?? "Kanał";
-                            string b = GetPropStr(vi, "BandType", "Band") ?? "PMR";
-                            string f = GetPropStr(vi, "FreqMhz", "Frequency", "Freq", "Channel") ?? "";
-                            string tn = GetPropStr(vi, "ToneOrCode", "Tone", "Ctcss") ?? "-";
-                            if (!string.IsNullOrWhiteSpace(f) || !string.IsNullOrWhiteSpace(r))
-                                snap.VoiceChannels.Add(new FactionVoiceRowData { Role = r, Band = b, Freq = f, Tone = tn });
+                            if (prop.GetValue(matched) is IEnumerable vcList)
+                            {
+                                foreach (var vi in vcList)
+                                {
+                                    if (vi == null || vi is string) continue;
+                                    string r = GetPropStr(vi, "RoleName", "Role", "Name", "Title", "ChannelName");
+                                    string b = GetPropStr(vi, "BandType", "Band", "Type", "Modulation") ?? "PMR";
+                                    string f = GetPropStr(vi, "FreqMhz", "Frequency", "Freq", "Channel", "Value");
+                                    string tn = GetPropStr(vi, "ToneOrCode", "Tone", "Ctcss", "Subtone", "Code") ?? "-";
+                                    if (!string.IsNullOrWhiteSpace(f) || !string.IsNullOrWhiteSpace(r))
+                                    {
+                                        snap.VoiceChannels.Add(new FactionVoiceRowData
+                                        {
+                                            Role = string.IsNullOrWhiteSpace(r) ? "Kanał" : r,
+                                            Band = b,
+                                            Freq = string.IsNullOrWhiteSpace(f) ? "-" : f,
+                                            Tone = tn
+                                        });
+                                    }
+                                }
+                            }
                         }
                     }
                 }
