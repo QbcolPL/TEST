@@ -265,10 +265,6 @@ namespace FieldTakHub.Builder.Services
 
         public static List<DependencyObject> GetVisualTreeElements(DependencyObject root, bool includeCollapsed = false) => GetLogicalElements(root);
 
-        /// <summary>
-        /// Znajduje zewnętrzny kontener pojedynczej karty "Generator Stron — ...", który zawiera zarówno
-        /// pole "Nazwa strony:", przycisk "Kolor (RGB):", jak i tabelę "Kanały Głosowe (PMR / VHF / DMR) & SOS".
-        /// </summary>
         public static DependencyObject FindCompleteFactionCardContainer(TextBlock hdrTb)
         {
             if (hdrTb == null) return null;
@@ -283,7 +279,7 @@ namespace FieldTakHub.Builder.Services
                     var elems = GetLogicalElements(cur);
                     var texts = elems.OfType<TextBlock>().Select(t => t.Text ?? "").ToList();
                     int hdrCount = texts.Count(t => t.Contains("Generator Stron —", StringComparison.OrdinalIgnoreCase));
-                    if (hdrCount > 1) break; // Wyszliśmy za wysoko (do kontenera wszystkich kart)
+                    if (hdrCount > 1) break;
 
                     if (cur is Border b && b.BorderThickness.Top >= 1)
                         fallbackBorder = b;
@@ -431,7 +427,6 @@ namespace FieldTakHub.Builder.Services
             {
                 string txt = ExtractButtonText(btn).Trim();
 
-                // Napraw Padding małych przycisków ("+", "−", "-"), aby nigdy nie wyświetlały uciętych kropek ":"
                 if ((btn.Width >= 20 && btn.Width <= 42) || txt == "+" || txt == "-" || txt == "−" || txt == "✖")
                 {
                     btn.Padding = new Thickness(0);
@@ -777,7 +772,6 @@ namespace FieldTakHub.Builder.Services
                         }
                     }
 
-                    // Znajdź wszystkie wiersze kanałów głosowych wewnątrz sekcji "Kanały Głosowe (PMR / VHF / DMR) & SOS"
                     foreach (var panel in items.OfType<Panel>())
                     {
                         var directInputs = panel.Children.Cast<UIElement>().Where(x => x is TextBox || x is ComboBox).ToList();

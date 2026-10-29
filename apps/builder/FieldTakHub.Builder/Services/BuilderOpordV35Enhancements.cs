@@ -86,6 +86,38 @@ namespace FieldTakHub.Builder.Services
         public static string LatLonToMgrs(double lat, double lon)
             => BuilderTacticalMapAndUsbService.LatLonToMgrs(lat, lon);
 
+        public static bool CheckAndPrepareMetocBeforeFetch()
+        {
+            var win = Application.Current?.MainWindow;
+            var model = FindOpordModelFast();
+            if (model == null || model.Days == null || model.Days.Count == 0) return true;
+            var activeDay = model.Days[Math.Clamp(model.ActiveDayIndex, 0, model.Days.Count - 1)];
+
+            string locTyped = (activeDay.LocationName ?? "").Trim();
+            var mapState = BuilderTacticalMapAndUsbService.InspectLiveMapStudio(win);
+            bool hasExplicitAo = mapState != null && mapState.HasExplicitAoOrPois;
+
+            if (string.IsNullOrWhiteSpace(locTyped) && !hasExplicitAo)
+            {
+                activeDay.LocationLat = "";
+                activeDay.LocationLon = "";
+                MessageBox.Show(
+                    "⚠️ Nie można pobrać danych METOC dla samego arkusza mapy!\n\n" +
+                    "Proszę zaznaczyć obszar gry (AO) w Generatorze Map 1:1 LUB wpisać nazwę miejscowości w polu 'Miejscowość'.",
+                    "METOC — Zaznacz AO lub wpisz miejscowość",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Warning);
+                return false;
+            }
+
+            if (string.IsNullOrWhiteSpace(locTyped) && hasExplicitAo)
+            {
+                activeDay.LocationLat = mapState.AoCenterLat.ToString("F4", CultureInfo.InvariantCulture);
+                activeDay.LocationLon = mapState.AoCenterLon.ToString("F4", CultureInfo.InvariantCulture);
+            }
+            return true;
+        }
+
         public static void SyncAllFromGenerators(Window win, OpordParagraphModel model, OpordDayPlanModel activeDay)
         {
             var w = win ?? Application.Current?.MainWindow;
@@ -155,10 +187,6 @@ namespace FieldTakHub.Builder.Services
         public static void AttachOpordUiExtensions(Window win, OpordParagraphModel model, OpordDayPlanModel activeDay, StackPanel mainStack, Action rebuildCallback) => UpgradeOpordMainStack(mainStack);
         public static void TransformBuiltOpordStack(Window win, OpordParagraphModel model, OpordDayPlanModel activeDay, StackPanel mainStack, Action rebuildCallback) => UpgradeOpordMainStack(mainStack);
 
-        /// <summary>
-        /// Wywoływane automatycznie na końcu RebuildOpordForm(Window win).
-        /// Znajduje główny StackPanel formularza OPORD i przebudowuje go do standardu v4.0.
-        /// </summary>
         public static void EnhanceOpordDirectAfterBuild(Window win)
         {
             var w = win ?? Application.Current?.MainWindow;
@@ -204,7 +232,6 @@ namespace FieldTakHub.Builder.Services
 
             var opordElements = BuilderPackageAndUiPatcher.GetLogicalElements(mainStack);
 
-            // Napraw wszystkie małe przyciski usuwania wiersza ("−"), aby miały Padding = 0 i nigdy nie pokazywały ":"
             foreach (var b in opordElements.OfType<Button>())
             {
                 string bt = BuilderPackageAndUiPatcher.ExtractButtonText(b).Trim();
@@ -217,10 +244,6 @@ namespace FieldTakHub.Builder.Services
                 }
             }
 
-            // 1. GÓRNY BOKS NAGŁÓWKOWY OPORD:
-            //    - Wyczyść ComboBox stron konfliktu z pozycji PLI / GeoChat i dodaj strony z Generatora Stron
-            //    - Podłącz przycisk "🔄 Pobierz z Generatora Stron" na samej górze
-            //    - Podłącz bezpośrednie kopiowanie na Discorda bez pustego okna
             if (mainStack.Children.Count > 0 && mainStack.Children[0] is Border topBorder && topBorder.Child is StackPanel topHeaderStack)
             {
                 var topElems = BuilderPackageAndUiPatcher.GetLogicalElements(topHeaderStack);
@@ -253,7 +276,6 @@ namespace FieldTakHub.Builder.Services
                     }
                 }
 
-                // Podłącz bezpośredni eksport na Discorda (bez pustego okna!)
                 foreach (var btn in topElems.OfType<Button>())
                 {
                     string bt = BuilderPackageAndUiPatcher.ExtractButtonText(btn);
@@ -321,7 +343,6 @@ namespace FieldTakHub.Builder.Services
                 }
             }
 
-            // 2. PRZYCISK "☑️ Generuj tylko aktywny dzień":
             Button genAllDaysBtn = null;
             Button activeDayOnlyBtn = null;
             foreach (var btn in opordElements.OfType<Button>())
@@ -353,13 +374,9 @@ namespace FieldTakHub.Builder.Services
                 };
             }
 
-            // 3. SEKCJA B.2 (METOC): Pełna obsługa zaznaczonego AO z Mapy 1:1 i komunikat przy pustym polu
             UpgradeMetocSection(win, opordElements, activeDay);
-
-            // 4. SEKCJA E (TABELA ŁĄCZNOŚCI): Ukrycie 3 starych pól, automatyczne kanały z Generatora Stron + opcjonalna tabela na "ptaszek"
             UpgradeSectionEComms(opordElements, activeDay);
 
-            // 5. SEKCJA IV (LOGISTYKA I ZAŁĄCZNIKI): Dodanie Załącznika nr 3 — Mapa (na "ptaszek")
             var secIVHeader = opordElements.OfType<TextBlock>().FirstOrDefault(t => (t.Text ?? "").Contains("IV. LOGISTYKA ORAZ ZAŁĄCZNIKI", StringComparison.OrdinalIgnoreCase));
             if (secIVHeader != null)
             {
@@ -392,7 +409,7 @@ namespace FieldTakHub.Builder.Services
 
             TextBlock summaryTb = metocElems.OfType<TextBlock>().FirstOrDefault(t =>
                 (t.Text ?? "").Contains("BMNT", StringComparison.OrdinalIgnoreCase) ||
-                (t.Text ?? "").Contains("METOC", StringComparison.OrdinalIgnoreCase) && t != metocHeader);
+                ((t.Text ?? "").Contains("METOC", StringComparison.OrdinalIgnoreCase) && t != metocHeader));
 
             var mapState = BuilderTacticalMapAndUsbService.InspectLiveMapStudio(win);
             bool hasAo = mapState != null && mapState.HasExplicitAoOrPois;
@@ -544,7 +561,6 @@ namespace FieldTakHub.Builder.Services
                 string fullReport = "[METOC " + dateIso + " — " + resolvedLocation + "]\r\n" + summaryStr;
                 activeDay.TerrainAndWeather = fullReport;
 
-                // Zaktualizuj również pole tekstowe "B. Teren i Pogoda (METOC)" poniżej
                 if (opordElements != null)
                 {
                     foreach (var tb in opordElements.OfType<TextBox>())
