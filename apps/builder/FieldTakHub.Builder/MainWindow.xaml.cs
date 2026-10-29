@@ -43,16 +43,21 @@ namespace FieldTakHub.Builder
             ModuleHostGrid.Children.Add(_opordView);
             ModuleHostGrid.Children.Add(_usbView);
 
-            LocalizationManager.Instance.LanguageChanged += ApplyLocalizedLabels;
-            ApplyLocalizedLabels();
+            LocalizationManager.Instance.LanguageChanged += OnLanguageChangedEvent;
+            UpdateShellCaptionsOnly();
             SwitchToModule(0);
+        }
+
+        protected override void OnClosed(EventArgs e)
+        {
+            LocalizationManager.Instance.LanguageChanged -= OnLanguageChangedEvent;
+            base.OnClosed(e);
         }
 
         public void SwitchToModule(int moduleIndex)
         {
             _activeModuleIndex = moduleIndex;
 
-            // Przy przełączeniu na Generator OPORD (indeks 2) automatycznie odśwież dane z Generatora Stron i Mapy!
             if (moduleIndex == 2)
             {
                 ProjectStore.Instance.SyncGeneratorsToOpord();
@@ -114,7 +119,7 @@ namespace FieldTakHub.Builder
             LocalizationManager.Instance.ToggleLanguage();
         }
 
-        private void ApplyLocalizedLabels()
+        private void UpdateShellCaptionsOnly()
         {
             Title = LocalizationManager.Get("APP_TITLE");
             NavLblPackages.Text = LocalizationManager.Get("NAV_PACKAGES");
@@ -130,7 +135,11 @@ namespace FieldTakHub.Builder
             LangFlagIcon.Text = LocalizationManager.Instance.IsPolish ? "🇵🇱" : "🇬🇧";
             LangBtnText.Text = LocalizationManager.Instance.IsPolish ? "JĘZYK: PL (ZMIEŃ NA EN)" : "LANG: EN (SWITCH TO PL)";
             OpenSharedQuickText.Text = LocalizationManager.T("Folder wspolne/ i out/", "Shared & out/ Folders");
+        }
 
+        private void OnLanguageChangedEvent()
+        {
+            UpdateShellCaptionsOnly();
             _packagesView?.OnLanguageChanged();
             _mapView?.OnLanguageChanged();
             _opordView?.OnLanguageChanged();

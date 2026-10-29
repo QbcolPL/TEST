@@ -1,6 +1,7 @@
 #nullable disable
 using System;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using Xunit;
 using FieldTakHub.Builder.Core;
@@ -9,6 +10,40 @@ namespace FieldTakHub.Builder.Tests
 {
     public sealed class CleanArchitectureV4Tests
     {
+        [Fact]
+        public void MainWindow_AndAllFourModules_ShouldInstantiateAndSwitchOnStaThread()
+        {
+            Exception caughtEx = null;
+
+            var staThread = new Thread(() =>
+            {
+                try
+                {
+                    var win = new FieldTakHub.Builder.MainWindow();
+                    win.SwitchToModule(0);
+                    win.SwitchToModule(1);
+                    win.SwitchToModule(2);
+                    win.SwitchToModule(3);
+                    LocalizationManager.Instance.ToggleLanguage();
+                    LocalizationManager.Instance.ToggleLanguage();
+                    win.Close();
+                }
+                catch (Exception ex)
+                {
+                    caughtEx = ex;
+                }
+            });
+
+            staThread.SetApartmentState(ApartmentState.STA);
+            staThread.Start();
+            staThread.Join();
+
+            if (caughtEx != null)
+            {
+                throw new Exception("Blad podczas inicjalizacji MainWindow na watku STA: " + caughtEx, caughtEx);
+            }
+        }
+
         [Fact]
         public void UniqueFactionColors_ShouldAlwaysGenerateDistinctRgbHex()
         {
@@ -29,7 +64,6 @@ namespace FieldTakHub.Builder.Tests
         [Fact]
         public void GeoCoordinateEngine_ShouldConvertZbytkowToValidMgrsAndKeypad()
         {
-            // Zbytków / Strumień: 49°50'58.0"N 18°48'45.6"E
             double lat = 49.849444;
             double lon = 18.812667;
 
