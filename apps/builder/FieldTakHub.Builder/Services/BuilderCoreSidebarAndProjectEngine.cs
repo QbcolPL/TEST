@@ -1,4 +1,4 @@
-﻿#pragma warning disable CS0414, CS0649, CS8600, CS8601, CS8602, CS8603, CS8604, CS8618, CS8625
+#pragma warning disable CS0414, CS0649, CS8600, CS8601, CS8602, CS8603, CS8604, CS8618, CS8625
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -345,7 +345,7 @@ namespace FieldTakHub.Builder.Services
                 Margin = new Thickness(0, 0, 6, 0),
                 Background = new SolidColorBrush(Color.FromRgb(20, 88, 52)),
                 Foreground = Brushes.White,
-                BorderBrush = new SolidColorBrush(Color.FromRgb(46, 204, 113)),
+                BorderBrush = new SolidColorBrush(FieldTakHub.Builder.Services.TacticalSharedState.GetNextUniqueWpfColor()),
                 BorderThickness = new Thickness(1.5),
                 FontWeight = FontWeights.Bold,
                 FontSize = 11,
