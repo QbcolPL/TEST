@@ -1621,6 +1621,8 @@ private static void CaptureAndCollapseTopMenuBar(List<DependencyObject> allEleme
             NativeV34OpordDataEngine.OnSwitchedToOpordTab(win, modeKey);
         
             V34CleanSidebarAndHeaderEngine.ApplySidebarAndHeaderFixes(win);
+        
+            V34CleanFtakAndFactionEngine.ApplyFactionAndPackageFixes(win);
         }
 
         private static bool TryInvokeOriginalButtonByText(List<DependencyObject> allElements, string searchText)
@@ -2129,7 +2131,7 @@ private static void CaptureAndCollapseTopMenuBar(List<DependencyObject> allEleme
     {
         private static readonly string[] TacticalRgbPalette = new string[]
         {
-            "#2684FF", "#EB4034", "#2ECC71", "#FAD02C",
+            "#2684FF", "#EB4034", V34CleanFtakAndFactionEngine.GetNextUniqueFactionColorHex(win), "#FAD02C",
             "#9B59B6", "#FF9F43", "#1FE0C5", "#E84393",
             "#A3CB38", "#00CEC9", "#FF6B6B", "#54A0FF",
             "#5F27CD", "#10AC84", "#F368E0", "#FF9FF3"
@@ -3233,4 +3235,332 @@ private static void CaptureAndCollapseTopMenuBar(List<DependencyObject> allEleme
         }
     }
     // [END_V34_CLEAN_SIDEBAR_ENGINE]
+
+// [START_V34_CLEAN_FTAK_ENGINE]
+    internal static class V34CleanFtakAndFactionEngine
+    {
+        private static readonly string[] TacticalRgbPalette = new string[]
+        {
+            "#2684FF", "#EB4034", "#2ECC71", "#FAD02C",
+            "#9B59B6", "#FF9F43", "#1FE0C5", "#E84393",
+            "#A3CB38", "#00CEC9", "#FF6B6B", "#54A0FF",
+            "#5F27CD", "#10AC84", "#F368E0", "#FF9FF3"
+        };
+
+        private static readonly HashSet<string> _allocatedColors = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "#2684FF"
+        };
+
+        public static string GetNextUniqueFactionColorHex(Window win = null)
+        {
+            try
+            {
+                var w = win ?? Application.Current?.MainWindow;
+                if (w != null)
+                {
+                    var all = V34CleanSidebarAndHeaderEngine.GetLogicalTreeNodes(w);
+                    foreach (var btn in all.OfType<Button>())
+                    {
+                        string bt = ExtractButtonTextSafe(btn);
+                        Match m = Regex.Match(bt, @"#[0-9A-Fa-f]{6}");
+                        if (m.Success) _allocatedColors.Add(m.Value.ToUpperInvariant());
+                    }
+                }
+            }
+            catch { }
+
+            var rng = new Random(Guid.NewGuid().GetHashCode());
+            var free = TacticalRgbPalette.Where(c => !_allocatedColors.Contains(c)).OrderBy(_ => rng.Next()).ToList();
+            string chosen;
+            if (free.Count > 0)
+            {
+                chosen = free[0];
+            }
+            else
+            {
+                do
+                {
+                    chosen = string.Format("#{0:X2}{1:X2}{2:X2}", rng.Next(45, 240), rng.Next(55, 240), rng.Next(45, 240));
+                } while (_allocatedColors.Contains(chosen));
+            }
+
+            _allocatedColors.Add(chosen);
+            return chosen;
+        }
+
+        public static string EnsureSharedFolderStructure()
+        {
+            string root = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "FieldTakHub");
+            string wspolne = Path.Combine(root, "wspolne");
+            Directory.CreateDirectory(Path.Combine(wspolne, "apk"));
+            Directory.CreateDirectory(Path.Combine(wspolne, "plugins"));
+            Directory.CreateDirectory(Path.Combine(wspolne, "maps"));
+            Directory.CreateDirectory(Path.Combine(root, "out"));
+            return wspolne;
+        }
+
+        public static string EnsureFactionOutputDir(string factionName)
+        {
+            EnsureSharedFolderStructure();
+            string root = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "FieldTakHub");
+            string outDir = Path.Combine(root, "out", SanitizeFolderName(factionName));
+            Directory.CreateDirectory(outDir);
+            return outDir;
+        }
+
+        public static string SanitizeFolderName(string name)
+        {
+            if (string.IsNullOrWhiteSpace(name)) return "BLUFOR";
+            char[] inv = Path.GetInvalidFileNameChars();
+            StringBuilder sb = new StringBuilder();
+            foreach (char c in name.Trim())
+            {
+                sb.Append(Array.IndexOf(inv, c) >= 0 ? '_' : c);
+            }
+            string r = sb.ToString().Trim();
+            return string.IsNullOrEmpty(r) ? "BLUFOR" : r;
+        }
+
+        public static void ApplyFactionAndPackageFixes(Window win)
+        {
+            var w = win ?? Application.Current?.MainWindow;
+            if (w == null) return;
+
+            EnsureSharedFolderStructure();
+            var all = ScanAllWindowRoots(w);
+
+            // 1. Dodaj etykietę "(0 = bezterminowo)" do pól ważności paczek / kodów QR
+            foreach (var tb in all.OfType<TextBlock>())
+            {
+                string txt = (tb.Text ?? "").Trim();
+                if ((txt.Contains("Ważność paczki", StringComparison.OrdinalIgnoreCase) ||
+                     txt.Contains("Ważność kodu QR", StringComparison.OrdinalIgnoreCase) ||
+                     txt.Contains("Expiration", StringComparison.OrdinalIgnoreCase)) &&
+                    !txt.Contains("0 = bezterminowo", StringComparison.OrdinalIgnoreCase))
+                {
+                    tb.Text = txt.TrimEnd(':') + " (0 = bezterminowo):";
+                }
+            }
+
+            // 2. Odblokowanie przycisku "📂 Pliki strony", naprawa małych przycisków i Plakat Safezone QR
+            foreach (var btn in all.OfType<Button>())
+            {
+                string txt = ExtractButtonTextSafe(btn).Trim();
+
+                if ((btn.Width >= 20 && btn.Width <= 42) || txt == "+" || txt == "-" || txt == "−" || txt == "✖" || txt == ":")
+                {
+                    btn.Padding = new Thickness(0);
+                    btn.HorizontalContentAlignment = HorizontalAlignment.Center;
+                    btn.VerticalContentAlignment = VerticalAlignment.Center;
+                    if (txt == "-" || txt == ":") btn.Content = "−";
+                }
+
+                if ((txt.Contains("Pliki str", StringComparison.OrdinalIgnoreCase) || txt.StartsWith("factions/", StringComparison.OrdinalIgnoreCase)) &&
+                    btn.Tag?.ToString() != "V34_FILES_BTN_OK")
+                {
+                    btn.Tag = "V34_FILES_BTN_OK";
+                    btn.IsEnabled = true;
+                    btn.Visibility = Visibility.Visible;
+                    if (txt.Contains("Pliki str", StringComparison.OrdinalIgnoreCase))
+                        btn.Content = "📂 Pliki strony";
+
+                    btn.IsEnabledChanged += (s, e) =>
+                    {
+                        if (s is Button b && !b.IsEnabled) b.IsEnabled = true;
+                    };
+
+                    btn.PreviewMouseLeftButtonDown += (s, e) =>
+                    {
+                        e.Handled = true;
+                        try
+                        {
+                            string facName = "ORGA";
+                            if (txt.Contains("/"))
+                                facName = txt.Split('/').Last().Trim().ToUpperInvariant();
+                            string dir = EnsureFactionOutputDir(facName);
+                            Process.Start(new ProcessStartInfo("explorer.exe", "\"" + dir + "\"") { UseShellExecute = true });
+                        }
+                        catch { }
+                    };
+                }
+
+                if ((txt.Contains("Plakat", StringComparison.OrdinalIgnoreCase) || txt.Contains("Safezone", StringComparison.OrdinalIgnoreCase)) &&
+                    btn.Tag?.ToString() != "V34_POSTER_SAFE_OK")
+                {
+                    btn.Tag = "V34_POSTER_SAFE_OK";
+                    btn.IsEnabled = true;
+                    btn.PreviewMouseLeftButtonDown += (s, e) =>
+                    {
+                        e.Handled = true;
+                        GenerateSafezonePosterWithoutCrash(w);
+                    };
+                }
+            }
+
+            // 3. Przebudowa karty Generator Paczek .FTAK v3.0 do dokładnie 3 przycisków
+            UpgradeFtakCardToThreeButtons(w, all);
+        }
+
+        private static void UpgradeFtakCardToThreeButtons(Window win, List<DependencyObject> all)
+        {
+            foreach (var tb in all.OfType<TextBlock>())
+            {
+                string t = (tb.Text ?? "").Trim();
+                if (t.Contains("GENERATOR PACZEK .FTAK", StringComparison.OrdinalIgnoreCase))
+                {
+                    DependencyObject p = LogicalTreeHelper.GetParent(tb) ?? VisualTreeHelper.GetParent(tb);
+                    while (p != null && !(p is StackPanel || p is Grid))
+                    {
+                        p = LogicalTreeHelper.GetParent(p) ?? VisualTreeHelper.GetParent(p);
+                    }
+
+                    if (p is Panel cardPanel && cardPanel.Tag?.ToString() != "V34_FTAK_3BTNS_READY")
+                    {
+                        cardPanel.Tag = "V34_FTAK_3BTNS_READY";
+                        tb.Text = "🎯 GENERATOR PACZEK .FTAK (FOLDER out\\<STRONA>\\ + WSPÓLNY FOLDER APK / PLUGINY / MAPY)";
+
+                        var sub = V34CleanSidebarAndHeaderEngine.GetLogicalTreeNodes(cardPanel);
+                        foreach (var cb in sub.OfType<ComboBox>())
+                        {
+                            cb.Visibility = Visibility.Collapsed;
+                            cb.Width = 0;
+                            cb.Height = 0;
+                        }
+
+                        Button origBuildAll = null;
+                        foreach (var b in sub.OfType<Button>())
+                        {
+                            if (ExtractButtonTextSafe(b).Contains("WSZYSTKIE", StringComparison.OrdinalIgnoreCase))
+                                origBuildAll = b;
+                            b.Visibility = Visibility.Collapsed;
+                            b.Height = 0;
+                            b.Margin = new Thickness(0);
+                        }
+
+                        var wrap = new WrapPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 8, 0, 6) };
+
+                        var b1 = new Button
+                        {
+                            Content = "⚡ Buduj wszystkie aktywne strony",
+                            Height = 38,
+                            MinWidth = 220,
+                            Padding = new Thickness(14, 6, 14, 6),
+                            Margin = new Thickness(0, 4, 10, 4),
+                            Background = new SolidColorBrush(Color.FromRgb(31, 224, 197)),
+                            Foreground = new SolidColorBrush(Color.FromRgb(5, 16, 20)),
+                            FontWeight = FontWeights.Bold,
+                            Cursor = System.Windows.Input.Cursors.Hand
+                        };
+                        b1.Click += (_, __) =>
+                        {
+                            EnsureSharedFolderStructure();
+                            if (origBuildAll != null)
+                                origBuildAll.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                        };
+
+                        var b2 = new Button
+                        {
+                            Content = "📂 Otwórz wspólny folder (APK / Pluginy / Mapy)",
+                            Height = 38,
+                            MinWidth = 220,
+                            Padding = new Thickness(14, 6, 14, 6),
+                            Margin = new Thickness(0, 4, 10, 4),
+                            Background = new SolidColorBrush(Color.FromRgb(42, 34, 12)),
+                            Foreground = new SolidColorBrush(Color.FromRgb(250, 208, 44)),
+                            BorderBrush = new SolidColorBrush(Color.FromRgb(250, 208, 44)),
+                            BorderThickness = new Thickness(1.5),
+                            FontWeight = FontWeights.Bold,
+                            Cursor = System.Windows.Input.Cursors.Hand
+                        };
+                        b2.Click += (_, __) =>
+                        {
+                            string wsp = EnsureSharedFolderStructure();
+                            Process.Start(new ProcessStartInfo("explorer.exe", "\"" + wsp + "\"") { UseShellExecute = true });
+                        };
+
+                        var b3 = new Button
+                        {
+                            Content = "📡 Dystrybucja przez HOTSPOT Wi-Fi",
+                            Height = 38,
+                            MinWidth = 220,
+                            Padding = new Thickness(14, 6, 14, 6),
+                            Margin = new Thickness(0, 4, 0, 4),
+                            Background = new SolidColorBrush(Color.FromRgb(14, 42, 54)),
+                            Foreground = new SolidColorBrush(Color.FromRgb(31, 224, 197)),
+                            BorderBrush = new SolidColorBrush(Color.FromRgb(31, 224, 197)),
+                            BorderThickness = new Thickness(1.5),
+                            FontWeight = FontWeights.Bold,
+                            Cursor = System.Windows.Input.Cursors.Hand
+                        };
+                        b3.Click += (_, __) =>
+                        {
+                            GenerateSafezonePosterWithoutCrash(win);
+                        };
+
+                        wrap.Children.Add(b1);
+                        wrap.Children.Add(b2);
+                        wrap.Children.Add(b3);
+                        cardPanel.Children.Add(wrap);
+                    }
+                }
+            }
+        }
+
+        public static void GenerateSafezonePosterWithoutCrash(Window win)
+        {
+            try
+            {
+                string outDir = EnsureFactionOutputDir("ORGA");
+                string htmlPath = Path.Combine(outDir, "Plakat_Safezone_ORGA.html");
+
+                string html = "<!DOCTYPE html><html><head><meta charset='utf-8'/><title>Plakat Safezone A4</title>" +
+                              "<style>body{font-family:'Segoe UI',Arial,sans-serif;background:#071115;color:#fff;padding:18px;}.sheet{max-width:190mm;margin:0 auto;border:3px solid #1FE0C5;border-radius:12px;padding:18px;background:#0A181E;}</style></head><body>" +
+                              "<div class='sheet'><h1>🛡️ STRONA: ORGA</h1>" +
+                              "<p><b>Ważność paczki / QR:</b> Bezterminowo (0) &nbsp;|&nbsp; <b>Telefon ORGA / SOS:</b> 112</p>" +
+                              "<div style='background:#fff;color:#000;padding:14px;border-radius:8px;width:230px;text-align:center;margin:12px auto;'><img src='https://api.qrserver.com/v1/create-qr-code/?size=210x210&data=FTAK-ORGA' width='210' height='210'/><br/><b>ZESKANUJ W FIELD TAK HUB</b></div>" +
+                              "</div></body></html>";
+
+                File.WriteAllText(htmlPath, html, Encoding.UTF8);
+                Process.Start(new ProcessStartInfo(htmlPath) { UseShellExecute = true });
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show("Błąd generowania plakatu Safezone: " + ex.Message, "Field TAK Hub", MessageBoxButton.OK, MessageBoxImage.Warning);
+            }
+        }
+
+        public static List<DependencyObject> ScanAllWindowRoots(Window win)
+        {
+            var result = new List<DependencyObject>(256);
+            var visited = new HashSet<DependencyObject>();
+
+            void AddTree(DependencyObject r)
+            {
+                if (r == null || !visited.Add(r)) return;
+                result.AddRange(V34CleanSidebarAndHeaderEngine.GetLogicalTreeNodes(r));
+            }
+
+            if (win != null)
+            {
+                AddTree(win);
+                foreach (var f in win.GetType().GetFields(System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic))
+                {
+                    try { if (f.GetValue(win) is DependencyObject d) AddTree(d); } catch { }
+                }
+            }
+            return result;
+        }
+
+        public static string ExtractButtonTextSafe(Button btn)
+        {
+            if (btn == null) return "";
+            if (btn.Content is string s) return s;
+            if (btn.Content is TextBlock tb) return tb.Text ?? "";
+            if (btn.Content is Panel p)
+                return string.Join(" ", V34CleanSidebarAndHeaderEngine.GetLogicalTreeNodes(p).OfType<TextBlock>().Select(x => x.Text ?? ""));
+            return btn.Content?.ToString() ?? "";
+        }
+    }
+    // [END_V34_CLEAN_FTAK_ENGINE]
 }
