@@ -2641,4 +2641,543 @@ namespace FieldTakHub.Builder.Services
         }
     }
     // [END_NATIVE_V34_ANNEX3_DISCORD]
+
+// [START_V34_CLEAN_OPORD_UI_TRANSFORMER]
+    internal static class V34CleanOpordUiTransformer
+    {
+        public static event Action<Window, StackPanel, OpordParagraphModel, OpordDayPlanModel> OnExtendOpordSections;
+
+        public static void ApplyOpordUiRefinements(Window win)
+        {
+            try
+            {
+                var w = win ?? Application.Current?.MainWindow;
+                if (w == null) return;
+
+                var model = V34CleanOpordDataEngine.GetLiveOpordModel();
+                if (model == null || model.Days == null || model.Days.Count == 0) return;
+
+                int activeIdx = Math.Clamp(model.ActiveDayIndex, 0, model.Days.Count - 1);
+                var activeDay = model.Days[activeIdx];
+
+                var all = V34CleanFtakAndFactionEngine.ScanAllWindowRoots(w);
+                var opordTitleTb = all.OfType<TextBlock>().FirstOrDefault(t =>
+                    (t.Text ?? "").Contains("GENERATOR ROZKAZU BOJOWEGO", StringComparison.OrdinalIgnoreCase) ||
+                    (t.Text ?? "").Contains("OPERATION ORDER GENERATOR", StringComparison.OrdinalIgnoreCase));
+
+                if (opordTitleTb == null) return;
+
+                DependencyObject cur = opordTitleTb;
+                StackPanel mainOpordStack = null;
+                while (cur != null && !(cur is Window))
+                {
+                    if (cur is StackPanel sp && sp.Children.Count >= 3)
+                    {
+                        mainOpordStack = sp;
+                        break;
+                    }
+                    cur = LogicalTreeHelper.GetParent(cur) ?? VisualTreeHelper.GetParent(cur);
+                }
+
+                if (mainOpordStack == null || mainOpordStack.Tag?.ToString() == "V34_OPORD_UI_READY")
+                    return;
+
+                mainOpordStack.Tag = "V34_OPORD_UI_READY";
+
+                var opordElements = V34CleanSidebarAndHeaderEngine.GetLogicalTreeNodes(mainOpordStack);
+
+                // 1. Naprawa wszystkich małych przycisków usuwania wiersza ("−"), aby miały Padding = 0 i nie ucinały znaku do ":"
+                foreach (var btn in opordElements.OfType<Button>())
+                {
+                    string bt = V34CleanFtakAndFactionEngine.ExtractButtonTextSafe(btn).Trim();
+                    if ((btn.Width >= 20 && btn.Width <= 42) || bt == "-" || bt == "−" || bt == ":" || bt == "✖")
+                    {
+                        btn.Padding = new Thickness(0);
+                        btn.HorizontalContentAlignment = HorizontalAlignment.Center;
+                        btn.VerticalContentAlignment = VerticalAlignment.Center;
+                        if (bt == "-" || bt == ":") btn.Content = "−";
+                    }
+                }
+
+                // 2. Pierwszy górny boks nagłówkowy OPORD:
+                //    - Czysta lista stron w ComboBox (bez PLI / GeoChat)
+                //    - Przycisk "🔄 Pobierz z Generatora Stron" na samej górze
+                if (mainOpordStack.Children.Count > 0 &&
+                    mainOpordStack.Children[0] is Border topBorder &&
+                    topBorder.Child is StackPanel topHeaderStack)
+                {
+                    var topElems = V34CleanSidebarAndHeaderEngine.GetLogicalTreeNodes(topHeaderStack);
+                    var factionCombo = topElems.OfType<ComboBox>().FirstOrDefault();
+                    if (factionCombo != null)
+                    {
+                        var cleanNames = V34CleanOpordDataEngine.GetCleanFactionNames(w);
+                        for (int i = factionCombo.Items.Count - 1; i >= 0; i--)
+                        {
+                            string itemStr = factionCombo.Items[i]?.ToString() ?? "";
+                            if (V34CleanOpordDataEngine.IsGarbageFactionName(itemStr))
+                            {
+                                factionCombo.Items.RemoveAt(i);
+                            }
+                        }
+
+                        foreach (string fn in cleanNames)
+                        {
+                            bool exists = false;
+                            foreach (var existing in factionCombo.Items)
+                            {
+                                if (string.Equals(existing?.ToString(), fn, StringComparison.OrdinalIgnoreCase))
+                                {
+                                    exists = true;
+                                    break;
+                                }
+                            }
+                            if (!exists) factionCombo.Items.Add(fn);
+                        }
+
+                        foreach (var item in factionCombo.Items)
+                        {
+                            if (string.Equals(item?.ToString(), model.TargetFaction, StringComparison.OrdinalIgnoreCase))
+                            {
+                                factionCombo.SelectedItem = item;
+                                break;
+                            }
+                        }
+                    }
+
+                    bool hasTopSyncBtn = false;
+                    foreach (var b in topElems.OfType<Button>())
+                    {
+                        string bt = V34CleanFtakAndFactionEngine.ExtractButtonTextSafe(b);
+                        if (bt.Contains("Pobierz", StringComparison.OrdinalIgnoreCase) &&
+                            bt.Contains("Generatora Stron", StringComparison.OrdinalIgnoreCase))
+                        {
+                            hasTopSyncBtn = true;
+                            b.Content = "🔄 Pobierz z Generatora Stron (Odśwież strony, kanały radiowe i współrzędne AO)";
+                            b.PreviewMouseLeftButtonDown += (s, e) =>
+                            {
+                                e.Handled = true;
+                                TriggerFullOpordSyncAndRebuild(w);
+                            };
+                        }
+                    }
+
+                    if (!hasTopSyncBtn)
+                    {
+                        var topSyncBtn = new Button
+                        {
+                            Content = "🔄 Pobierz z Generatora Stron (Odśwież strony, kanały radiowe i współrzędne AO)",
+                            Height = 36,
+                            Margin = new Thickness(0, 6, 0, 8),
+                            Padding = new Thickness(16, 6, 16, 6),
+                            Background = new SolidColorBrush(Color.FromRgb(14, 52, 64)),
+                            Foreground = new SolidColorBrush(Color.FromRgb(31, 224, 197)),
+                            BorderBrush = new SolidColorBrush(Color.FromRgb(31, 224, 197)),
+                            BorderThickness = new Thickness(1.5),
+                            FontWeight = FontWeights.Bold,
+                            Cursor = System.Windows.Input.Cursors.Hand
+                        };
+                        topSyncBtn.Click += (_, __) => TriggerFullOpordSyncAndRebuild(w);
+
+                        int insertPos = topHeaderStack.Children.Count > 1 ? 1 : topHeaderStack.Children.Count;
+                        topHeaderStack.Children.Insert(insertPos, topSyncBtn);
+                    }
+                }
+
+                // 3. Naprawa przycisku "☑️ Generuj tylko aktywny dzień" (styl identyczny jak "☑️ Generuj wszystkie dni" + odznaczanie pozostałych dni)
+                Button btnGenAll = null;
+                Button btnActiveOnly = null;
+                foreach (var btn in opordElements.OfType<Button>())
+                {
+                    string bt = V34CleanFtakAndFactionEngine.ExtractButtonTextSafe(btn);
+                    if (bt.Contains("Generuj wszystkie dni", StringComparison.OrdinalIgnoreCase) ||
+                        bt.Contains("Generate all days", StringComparison.OrdinalIgnoreCase))
+                    {
+                        btnGenAll = btn;
+                    }
+                    else if (bt.Contains("aktywny dzień", StringComparison.OrdinalIgnoreCase) ||
+                             bt.Contains("active day", StringComparison.OrdinalIgnoreCase))
+                    {
+                        btnActiveOnly = btn;
+                    }
+                }
+
+                if (btnActiveOnly != null)
+                {
+                    btnActiveOnly.Content = "☑️ Generuj tylko aktywny dzień";
+                    if (btnGenAll != null)
+                    {
+                        btnActiveOnly.Background = btnGenAll.Background;
+                        btnActiveOnly.Foreground = btnGenAll.Foreground;
+                        btnActiveOnly.BorderBrush = btnGenAll.BorderBrush;
+                        btnActiveOnly.BorderThickness = btnGenAll.BorderThickness;
+                        btnActiveOnly.Padding = btnGenAll.Padding;
+                        btnActiveOnly.Height = btnGenAll.Height;
+                        btnActiveOnly.FontWeight = btnGenAll.FontWeight;
+                        btnActiveOnly.FontSize = btnGenAll.FontSize;
+                    }
+
+                    btnActiveOnly.PreviewMouseLeftButtonDown += (s, e) =>
+                    {
+                        e.Handled = true;
+                        int curDayIdx = Math.Clamp(model.ActiveDayIndex, 0, model.Days.Count - 1);
+                        for (int i = 0; i < model.Days.Count; i++)
+                        {
+                            model.Days[i].IncludeInExport = (i == curDayIdx);
+                        }
+                        TriggerFullOpordSyncAndRebuild(w);
+                    };
+                }
+
+                // 4. Sekcja B.2 (METOC): Wyczyść Lat/Lon przy braku AO i zablokuj pobieranie METOC dla pustego arkusza mapy
+                RefineMetocSectionUi(w, opordElements, activeDay);
+
+                // 5. Sekcja E (Tabela Łączności): Usuń 3 pola ręczne, pokaż automatyczną tabelę z Generatora Stron + opcjonalną tabelę na ptaszek
+                RefineSectionECommsUi(opordElements, activeDay);
+
+                // 6. Punkt rozszerzenia dla Kroku 7 (Załącznik nr 3 Mapa w Sekcji IV oraz eksport Discord)
+                OnExtendOpordSections?.Invoke(w, mainOpordStack, model, activeDay);
+            }
+            catch { }
+        }
+
+        public static void TriggerFullOpordSyncAndRebuild(Window win)
+        {
+            try
+            {
+                var w = win ?? Application.Current?.MainWindow;
+                V34CleanOpordDataEngine.SyncFactionsAndMapToOpordModel(w);
+                var mRebuild = typeof(OpordBuilderManager).GetMethod(
+                    "RebuildOpordForm",
+                    System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic);
+                mRebuild?.Invoke(null, new object[] { w });
+            }
+            catch { }
+        }
+
+        private static void RefineMetocSectionUi(Window win, List<DependencyObject> opordElements, OpordDayPlanModel activeDay)
+        {
+            var metocHdr = opordElements.OfType<TextBlock>().FirstOrDefault(t =>
+                (t.Text ?? "").Contains("B.2. PROGNOZA POGODY", StringComparison.OrdinalIgnoreCase) ||
+                (t.Text ?? "").Contains("B.2. WEATHER FORECAST", StringComparison.OrdinalIgnoreCase));
+
+            if (metocHdr == null) return;
+
+            DependencyObject p = LogicalTreeHelper.GetParent(metocHdr);
+            while (p != null && !(p is StackPanel)) p = LogicalTreeHelper.GetParent(p);
+            if (!(p is StackPanel metocStack)) return;
+
+            var metocItems = V34CleanSidebarAndHeaderEngine.GetLogicalTreeNodes(metocStack);
+            var boxes = metocItems.OfType<TextBox>().ToList();
+            TextBox locBox = boxes.Count >= 2 ? boxes[1] : null;
+            TextBox latBox = boxes.Count >= 3 ? boxes[2] : null;
+            TextBox lonBox = boxes.Count >= 4 ? boxes[3] : null;
+
+            V34CleanMapStudioBridge.SyncMapStudioState(win);
+            if (!V34CleanMapStudioBridge.HasExplicitAoMarked && (locBox == null || string.IsNullOrWhiteSpace(locBox.Text)))
+            {
+                if (latBox != null) latBox.Text = "";
+                if (lonBox != null) lonBox.Text = "";
+                activeDay.LocationLat = "";
+                activeDay.LocationLon = "";
+            }
+            else if (V34CleanMapStudioBridge.HasExplicitAoMarked)
+            {
+                string latS = V34CleanMapStudioBridge.AoCenterLat.ToString("F4", CultureInfo.InvariantCulture);
+                string lonS = V34CleanMapStudioBridge.AoCenterLon.ToString("F4", CultureInfo.InvariantCulture);
+                if (latBox != null) latBox.Text = latS;
+                if (lonBox != null) lonBox.Text = lonS;
+                activeDay.LocationLat = latS;
+                activeDay.LocationLon = lonS;
+            }
+
+            foreach (var btn in metocItems.OfType<Button>())
+            {
+                string bt = V34CleanFtakAndFactionEngine.ExtractButtonTextSafe(btn);
+                if (bt.Contains("Pobierz METOC", StringComparison.OrdinalIgnoreCase) ||
+                    bt.Contains("Fetch METOC", StringComparison.OrdinalIgnoreCase))
+                {
+                    btn.PreviewMouseLeftButtonDown += (s, e) =>
+                    {
+                        if (locBox != null) activeDay.LocationName = locBox.Text.Trim();
+                        if (!V34CleanOpordDataEngine.ValidateAndPrepareMetocBeforeFetch(win))
+                        {
+                            e.Handled = true;
+                            if (latBox != null) latBox.Text = "";
+                            if (lonBox != null) lonBox.Text = "";
+                        }
+                        else
+                        {
+                            if (locBox != null) locBox.Text = activeDay.LocationName;
+                            if (latBox != null) latBox.Text = activeDay.LocationLat;
+                            if (lonBox != null) lonBox.Text = activeDay.LocationLon;
+                        }
+                    };
+                }
+            }
+        }
+
+        private static void RefineSectionECommsUi(List<DependencyObject> opordElements, OpordDayPlanModel activeDay)
+        {
+            var secEHeader = opordElements.OfType<TextBlock>().FirstOrDefault(t =>
+                (t.Text ?? "").Contains("E. Tabela łączności", StringComparison.OrdinalIgnoreCase) ||
+                (t.Text ?? "").Contains("E. Communications", StringComparison.OrdinalIgnoreCase));
+
+            if (secEHeader == null) return;
+
+            secEHeader.Text = "E. Tabela łączności (" + activeDay.DayTitle + " — Automatycznie z Generatora Stron + opcjonalna tabela ręczna):";
+
+            if (LogicalTreeHelper.GetParent(secEHeader) is Panel hdrParent)
+            {
+                foreach (var b in V34CleanSidebarAndHeaderEngine.GetLogicalTreeNodes(hdrParent).OfType<Button>())
+                {
+                    if (V34CleanFtakAndFactionEngine.ExtractButtonTextSafe(b).Contains("Pobierz z Generatora Stron", StringComparison.OrdinalIgnoreCase))
+                    {
+                        b.Visibility = Visibility.Collapsed;
+                        b.Width = 0;
+                        b.Height = 0;
+                    }
+                }
+            }
+
+            DependencyObject secParent = LogicalTreeHelper.GetParent(secEHeader);
+            while (secParent != null && !(secParent is StackPanel))
+                secParent = LogicalTreeHelper.GetParent(secParent);
+
+            if (!(secParent is StackPanel secStack)) return;
+
+            var secItems = V34CleanSidebarAndHeaderEngine.GetLogicalTreeNodes(secStack);
+
+            // 1. Usunięcie 3 sztywnych pól ręcznych (Kanał główny, Kanał zapasowy, Kanał HQ) bezpośrednio pod nagłówkiem E
+            foreach (var tb in secItems.OfType<TextBox>())
+            {
+                if (LogicalTreeHelper.GetParent(tb) is Panel fieldPanel)
+                {
+                    string lblText = string.Join(" ", fieldPanel.Children.OfType<TextBlock>().Select(x => x.Text ?? ""));
+                    if (lblText.Contains("Kanał główny", StringComparison.OrdinalIgnoreCase) ||
+                        lblText.Contains("Kanał zapasowy", StringComparison.OrdinalIgnoreCase) ||
+                        lblText.Contains("Kanał HQ", StringComparison.OrdinalIgnoreCase) ||
+                        lblText.Contains("Primary channel", StringComparison.OrdinalIgnoreCase) ||
+                        lblText.Contains("Alternate channel", StringComparison.OrdinalIgnoreCase) ||
+                        lblText.Contains("HQ channel", StringComparison.OrdinalIgnoreCase))
+                    {
+                        fieldPanel.Visibility = Visibility.Collapsed;
+                        fieldPanel.Height = 0;
+                        fieldPanel.Margin = new Thickness(0);
+
+                        if (LogicalTreeHelper.GetParent(fieldPanel) is Grid threeColGrid && threeColGrid.ColumnDefinitions.Count == 3)
+                        {
+                            threeColGrid.Visibility = Visibility.Collapsed;
+                            threeColGrid.Height = 0;
+                            threeColGrid.Margin = new Thickness(0);
+                        }
+                    }
+                }
+            }
+
+            // 2. Aktualizacja automatycznej tabeli zaciąganej z Generatora Stron zaraz pod nagłówkiem E
+            foreach (var txt in secItems.OfType<TextBlock>())
+            {
+                if ((txt.Text ?? "").Contains("[ZACIĄGNIĘTE Z GENERATORA STRON", StringComparison.OrdinalIgnoreCase) &&
+                    !string.IsNullOrWhiteSpace(activeDay.SyncedCommsMatrixSummary))
+                {
+                    txt.Text = activeDay.SyncedCommsMatrixSummary;
+                }
+            }
+
+            // 3. Dodanie pod automatyczną tabelą opcjonalnej tabeli "na ptaszek" (☑️ Dodaj ręcznie dodatkowe kanały radiowe w OPORD)
+            Border optionalManualTable = BuildOptionalManualCommsBox(activeDay);
+
+            int insertIndex = secStack.Children.Count;
+            for (int i = 0; i < secStack.Children.Count; i++)
+            {
+                if (secStack.Children[i] is TextBlock tb && (tb.Text ?? "").Contains("F.1.", StringComparison.OrdinalIgnoreCase))
+                {
+                    insertIndex = i;
+                    break;
+                }
+            }
+
+            secStack.Children.Insert(insertIndex, optionalManualTable);
+        }
+
+        private static Border BuildOptionalManualCommsBox(OpordDayPlanModel activeDay)
+        {
+            var border = new Border
+            {
+                Background = new SolidColorBrush(Color.FromRgb(8, 22, 28)),
+                BorderBrush = new SolidColorBrush(Color.FromRgb(31, 224, 197)),
+                BorderThickness = new Thickness(1.2),
+                CornerRadius = new CornerRadius(6),
+                Padding = new Thickness(12),
+                Margin = new Thickness(0, 8, 0, 12)
+            };
+
+            var stack = new StackPanel();
+            var headerGrid = new Grid { Margin = new Thickness(0, 0, 0, 8) };
+            headerGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            headerGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+            var chk = new CheckBox
+            {
+                Content = "☑️ Dodaj ręcznie dodatkowe kanały radiowe w OPORD (" + activeDay.DayTitle + ")",
+                IsChecked = activeDay.IncludeCustomChannelsTable,
+                Foreground = new SolidColorBrush(Color.FromRgb(31, 224, 197)),
+                FontWeight = FontWeights.Bold,
+                VerticalAlignment = VerticalAlignment.Center,
+                Cursor = System.Windows.Input.Cursors.Hand
+            };
+            Grid.SetColumn(chk, 0);
+            headerGrid.Children.Add(chk);
+
+            var addRowBtn = new Button
+            {
+                Content = "➕ Dodaj kanał",
+                Height = 30,
+                Padding = new Thickness(12, 4, 12, 4),
+                Background = new SolidColorBrush(Color.FromRgb(22, 130, 75)),
+                Foreground = Brushes.White,
+                BorderBrush = new SolidColorBrush(Color.FromRgb(46, 204, 113)),
+                BorderThickness = new Thickness(1.2),
+                FontWeight = FontWeights.Bold,
+                Cursor = System.Windows.Input.Cursors.Hand,
+                Visibility = activeDay.IncludeCustomChannelsTable ? Visibility.Visible : Visibility.Collapsed
+            };
+            Grid.SetColumn(addRowBtn, 1);
+            headerGrid.Children.Add(addRowBtn);
+            stack.Children.Add(headerGrid);
+
+            var rowsContainer = new StackPanel
+            {
+                Visibility = activeDay.IncludeCustomChannelsTable ? Visibility.Visible : Visibility.Collapsed
+            };
+
+            void SaveCustomRowsToModel()
+            {
+                var lines = new List<string>();
+                foreach (var rowGrid in rowsContainer.Children.OfType<Grid>())
+                {
+                    var tbs = rowGrid.Children.OfType<TextBox>().ToList();
+                    if (tbs.Count >= 4)
+                    {
+                        string r = (tbs[0].Text ?? "").Trim();
+                        string b = (tbs[1].Text ?? "").Trim();
+                        string f = (tbs[2].Text ?? "").Trim();
+                        string t = (tbs[3].Text ?? "").Trim();
+                        if (!string.IsNullOrWhiteSpace(r) || !string.IsNullOrWhiteSpace(f))
+                        {
+                            lines.Add("• " + r + " [" + b + "]: " + f + " (" + t + ")");
+                        }
+                    }
+                }
+                activeDay.CustomChannelsTableText = string.Join("\n", lines);
+            }
+
+            void AddChannelRow(string role, string band, string freq, string tone)
+            {
+                var g = new Grid { Margin = new Thickness(0, 0, 0, 6) };
+                g.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1.2, GridUnitType.Star) });
+                g.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(0.7, GridUnitType.Star) });
+                g.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1.4, GridUnitType.Star) });
+                g.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1.0, GridUnitType.Star) });
+                g.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+                TextBox MakeCell(string val, int col)
+                {
+                    var tb = new TextBox
+                    {
+                        Text = val,
+                        Height = 30,
+                        VerticalContentAlignment = VerticalAlignment.Center,
+                        Padding = new Thickness(8, 2, 8, 2),
+                        Margin = new Thickness(0, 0, 6, 0),
+                        Background = new SolidColorBrush(Color.FromRgb(13, 33, 41)),
+                        Foreground = Brushes.White,
+                        BorderBrush = new SolidColorBrush(Color.FromRgb(34, 74, 89)),
+                        FontFamily = new FontFamily("Consolas"),
+                        FontSize = 11.5
+                    };
+                    tb.TextChanged += (_, __) => SaveCustomRowsToModel();
+                    Grid.SetColumn(tb, col);
+                    return tb;
+                }
+
+                g.Children.Add(MakeCell(role, 0));
+                g.Children.Add(MakeCell(band, 1));
+                g.Children.Add(MakeCell(freq, 2));
+                g.Children.Add(MakeCell(tone, 3));
+
+                var delBtn = new Button
+                {
+                    Content = "−",
+                    Width = 32,
+                    Height = 30,
+                    Padding = new Thickness(0),
+                    HorizontalContentAlignment = HorizontalAlignment.Center,
+                    VerticalContentAlignment = VerticalAlignment.Center,
+                    Background = new SolidColorBrush(Color.FromRgb(85, 22, 22)),
+                    Foreground = Brushes.White,
+                    BorderBrush = new SolidColorBrush(Color.FromRgb(235, 64, 52)),
+                    BorderThickness = new Thickness(1),
+                    FontWeight = FontWeights.Bold,
+                    FontSize = 14,
+                    Cursor = System.Windows.Input.Cursors.Hand
+                };
+                delBtn.Click += (_, __) =>
+                {
+                    rowsContainer.Children.Remove(g);
+                    SaveCustomRowsToModel();
+                };
+                Grid.SetColumn(delBtn, 4);
+                g.Children.Add(delBtn);
+
+                rowsContainer.Children.Add(g);
+            }
+
+            if (!string.IsNullOrWhiteSpace(activeDay.CustomChannelsTableText))
+            {
+                string[] savedLines = activeDay.CustomChannelsTableText.Split(new char[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
+                foreach (string line in savedLines)
+                {
+                    string clean = line.TrimStart('•', ' ', '\t');
+                    Match m = Regex.Match(clean, @"^(.*?)\s*\[(.*?)\]:\s*(.*?)\s*\((.*?)\)$");
+                    if (m.Success)
+                        AddChannelRow(m.Groups[1].Value, m.Groups[2].Value, m.Groups[3].Value, m.Groups[4].Value);
+                    else
+                        AddChannelRow(clean, "PMR", "CH 1", "CTCSS 67.0 Hz");
+                }
+            }
+            else
+            {
+                AddChannelRow("Kanał główny (Ręczny)", "PMR", "CH 1 (446.00625 MHz)", "CTCSS 67.0 Hz");
+                AddChannelRow("Kanał zapasowy", "PMR", "CH 3 (446.03125 MHz)", "CTCSS 88.5 Hz");
+                AddChannelRow("Kanał HQ", "PMR", "CH 8 (446.09375 MHz)", "Brak tonu");
+            }
+
+            addRowBtn.Click += (_, __) =>
+            {
+                AddChannelRow("Kanał dodatkowy", "PMR", "CH 5 (446.05625 MHz)", "CTCSS 110.9 Hz");
+                SaveCustomRowsToModel();
+            };
+
+            chk.Checked += (_, __) =>
+            {
+                activeDay.IncludeCustomChannelsTable = true;
+                rowsContainer.Visibility = Visibility.Visible;
+                addRowBtn.Visibility = Visibility.Visible;
+                SaveCustomRowsToModel();
+            };
+
+            chk.Unchecked += (_, __) =>
+            {
+                activeDay.IncludeCustomChannelsTable = false;
+                rowsContainer.Visibility = Visibility.Collapsed;
+                addRowBtn.Visibility = Visibility.Collapsed;
+            };
+
+            stack.Children.Add(rowsContainer);
+            border.Child = stack;
+            return border;
+        }
+    }
+    // [END_V34_CLEAN_OPORD_UI_TRANSFORMER]
 }
