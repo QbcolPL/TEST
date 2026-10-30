@@ -1,65 +1,64 @@
-#nullable disable
-using System;
+using System.IO;
+using System.Text;
 using System.Windows;
-using System.Windows.Threading;
 
-namespace FieldTakHub.Builder
+namespace FieldTakHub.Builder;
+
+public partial class App : Application
 {
-    /// <summary>
-    /// Punkt startowy aplikacji Field TAK Hub v4.0.
-    /// Jawnie inicjalizuje i wyświetla główne okno dowodzenia MainWindow podczas startu procesu.
-    /// </summary>
-    public partial class App : Application
+    private static string StartupLogPath => Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+        "FieldTakHub", "Builder-startup.log");
+
+    public App()
     {
-        public App()
+        DispatcherUnhandledException += (_, e) =>
         {
-            DispatcherUnhandledException += OnDispatcherUnhandledException;
-            AppDomain.CurrentDomain.UnhandledException += OnDomainUnhandledException;
-        }
-
-        protected override void OnStartup(StartupEventArgs e)
-        {
-            base.OnStartup(e);
-
-            try
-            {
-                ShutdownMode = ShutdownMode.OnMainWindowClose;
-                var mainWindow = new MainWindow();
-                MainWindow = mainWindow;
-                mainWindow.Show();
-                mainWindow.Activate();
-            }
-            catch (Exception ex)
-            {
-                MessageBox.Show(
-                    "Błąd podczas inicjalizacji okna głównego Field TAK Hub v4.0:\n\n" + ex,
-                    "Field TAK Hub — Błąd Startu",
-                    MessageBoxButton.OK,
-                    MessageBoxImage.Error);
-                Shutdown(1);
-            }
-        }
-
-        private void OnDispatcherUnhandledException(object sender, DispatcherUnhandledExceptionEventArgs e)
-        {
+            LogFatal(e.Exception);
             MessageBox.Show(
-                "Wystąpił nieoczekiwany wyjątek w interfejsie użytkownika:\n\n" + e.Exception.Message,
-                "Field TAK Hub v4.0",
-                MessageBoxButton.OK,
-                MessageBoxImage.Warning);
+                "Field TAK Hub Builder nie może się uruchomić.\n\n" +
+                "Szczegóły zapisano w:\n" + StartupLogPath + "\n\n" +
+                DescribeException(e.Exception),
+                "Field TAK Hub Builder 2.3.0",
+                MessageBoxButton.OK, MessageBoxImage.Error);
             e.Handled = true;
-        }
+            Shutdown(1);
+        };
 
-        private void OnDomainUnhandledException(object sender, UnhandledExceptionEventArgs e)
+        AppDomain.CurrentDomain.UnhandledException += (_, e) =>
         {
-            if (e.ExceptionObject is Exception ex)
-            {
-                MessageBox.Show(
-                    "Krytyczny wyjątek środowiska uruchomieniowego:\n\n" + ex.Message,
-                    "Field TAK Hub v4.0",
-                    MessageBoxButton.OK,
-                    MessageBoxImage.Error);
-            }
+            if (e.ExceptionObject is Exception ex) LogFatal(ex);
+            else LogFatal(new Exception(Convert.ToString(e.ExceptionObject)));
+        };
+
+        TaskScheduler.UnobservedTaskException += (_, e) =>
+        {
+            LogFatal(e.Exception);
+            e.SetObserved();
+        };
+    }
+
+    private static string DescribeException(Exception ex)
+    {
+        var current = ex;
+        while (current.InnerException is not null) current = current.InnerException;
+        return current.Message;
+    }
+
+    private static void LogFatal(Exception ex)
+    {
+        try
+        {
+            var dir = Path.GetDirectoryName(StartupLogPath)!;
+            Directory.CreateDirectory(dir);
+            File.AppendAllText(
+                StartupLogPath,
+                $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff}]\r\n{ex}\r\n\r\n",
+                new UTF8Encoding(false));
+        }
+        catch
+        {
+            // Never allow diagnostic logging to become another startup failure.
         }
     }
 }
