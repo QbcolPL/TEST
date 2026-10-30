@@ -1619,6 +1619,8 @@ private static void CaptureAndCollapseTopMenuBar(List<DependencyObject> allEleme
         
             NativeV34SidebarAndHeaderCleaner.ApplyCleanSidebarAndHeader(win);
             NativeV34OpordDataEngine.OnSwitchedToOpordTab(win, modeKey);
+        
+            V34CleanSidebarAndHeaderEngine.ApplySidebarAndHeaderFixes(win);
         }
 
         private static bool TryInvokeOriginalButtonByText(List<DependencyObject> allElements, string searchText)
@@ -2956,4 +2958,279 @@ private static void CaptureAndCollapseTopMenuBar(List<DependencyObject> allEleme
         }
     }
     // [END_NATIVE_V34_USB_BRIDGE]
+
+// [START_V34_CLEAN_SIDEBAR_ENGINE]
+    internal static class V34CleanSidebarAndHeaderEngine
+    {
+        public static event Action<Window> OnApplyAdditionalModuleFixes;
+
+        public static void ApplySidebarAndHeaderFixes(Window win)
+        {
+            var w = win ?? Application.Current?.MainWindow;
+            if (w == null) return;
+
+            try
+            {
+                if (w.MinWidth > 900) w.MinWidth = 900;
+                if (w.MinHeight > 560) w.MinHeight = 560;
+
+                RemoveLegacyTopBarAndBlackHeaderGap(w);
+                UpdateSidebarIconsAndCollapseButton(w);
+
+                OnApplyAdditionalModuleFixes?.Invoke(w);
+            }
+            catch { }
+        }
+
+        /// <summary>
+        /// Usuwa pozostalosci po starym gornym pasku (dwie poziome linie cyjanowe TRYB PRACY BUILDERA)
+        /// oraz czarna przerwe nad naglowkiem BUILDER (zeruje stary RowDefinition i pusty Border).
+        /// </summary>
+        public static void RemoveLegacyTopBarAndBlackHeaderGap(Window win)
+        {
+            var elements = GetLogicalTreeNodes(win);
+
+            foreach (var tb in elements.OfType<TextBlock>())
+            {
+                string txt = (tb.Text ?? "").Trim();
+
+                // 1. Całkowite usunięcie starego paska "TRYB PRACY BUILDERA" / "BUILDER MODE" i jego cyjanowych linii
+                if (txt.Contains("TRYB PRACY BUILDERA", StringComparison.OrdinalIgnoreCase) ||
+                    txt.Contains("BUILDER MODE", StringComparison.OrdinalIgnoreCase))
+                {
+                    DependencyObject cur = tb;
+                    for (int depth = 0; depth < 6 && cur != null && !(cur is Window); depth++)
+                    {
+                        if (cur is Border b)
+                        {
+                            b.Visibility = Visibility.Collapsed;
+                            b.Height = 0;
+                            b.MinHeight = 0;
+                            b.Margin = new Thickness(0);
+                            b.Padding = new Thickness(0);
+                            b.BorderThickness = new Thickness(0);
+                            b.BorderBrush = Brushes.Transparent;
+                            b.Background = Brushes.Transparent;
+
+                            var parent = LogicalTreeHelper.GetParent(b) ?? VisualTreeHelper.GetParent(b);
+                            if (parent is Grid g)
+                            {
+                                int r = Grid.GetRow(b);
+                                if (r >= 0 && r < g.RowDefinitions.Count)
+                                {
+                                    g.RowDefinitions[r].Height = new GridLength(0);
+                                    g.RowDefinitions[r].MinHeight = 0;
+                                }
+                            }
+                        }
+                        cur = LogicalTreeHelper.GetParent(cur) ?? VisualTreeHelper.GetParent(cur);
+                    }
+                }
+
+                // 2. Usunięcie czarnej przerwy nad nagłówkiem BUILDER
+                if (txt.StartsWith("BUILDER", StringComparison.OrdinalIgnoreCase) && tb.FontSize >= 15)
+                {
+                    tb.Margin = new Thickness(tb.Margin.Left, 0, tb.Margin.Right, tb.Margin.Bottom);
+
+                    DependencyObject p = LogicalTreeHelper.GetParent(tb) ?? VisualTreeHelper.GetParent(tb);
+                    for (int step = 0; step < 5 && p != null && !(p is Window); step++)
+                    {
+                        if (p is FrameworkElement fe && fe.Margin.Top > 4)
+                        {
+                            fe.Margin = new Thickness(fe.Margin.Left, 0, fe.Margin.Right, fe.Margin.Bottom);
+                        }
+                        if (p is Border pb && pb.Padding.Top > 6)
+                        {
+                            pb.Padding = new Thickness(pb.Padding.Left, 4, pb.Padding.Right, pb.Padding.Bottom);
+                        }
+                        if (p is Grid g && g.RowDefinitions.Count >= 2)
+                        {
+                            bool row0HasRealContent = false;
+                            foreach (UIElement ch in g.Children)
+                            {
+                                if (ch != null && Grid.GetRow(ch) == 0 && ch.Visibility == Visibility.Visible)
+                                {
+                                    if (ch is Border rb && (rb.Height == 0 || rb.Child == null))
+                                        continue;
+                                    row0HasRealContent = true;
+                                    break;
+                                }
+                            }
+                            if (!row0HasRealContent)
+                            {
+                                g.RowDefinitions[0].Height = new GridLength(0);
+                                g.RowDefinitions[0].MinHeight = 0;
+                            }
+                        }
+                        p = LogicalTreeHelper.GetParent(p) ?? VisualTreeHelper.GetParent(p);
+                    }
+                }
+            }
+
+            // 3. Wyzerowanie pustych ramek z poziomymi liniami podziału
+            foreach (var b in elements.OfType<Border>())
+            {
+                if (b.Child == null && b.Height <= 4 && (b.BorderThickness.Top >= 1 || b.BorderThickness.Bottom >= 1))
+                {
+                    b.BorderThickness = new Thickness(0);
+                    b.Height = 0;
+                    b.Visibility = Visibility.Collapsed;
+                }
+            }
+        }
+
+        /// <summary>
+        /// Pasek boczny (Sidebar): Rozróżnia przycisk zwijania (❮/❯) od przycisków modułów
+        /// (sprawdza, czy zawartością przycisku jest Panel z ikoną), dzięki czemu po schowaniu
+        /// paska bocznego wszystkie ikony modułów są w pełni widoczne i wyśrodkowane.
+        /// </summary>
+        public static void UpdateSidebarIconsAndCollapseButton(Window win)
+        {
+            var elements = GetLogicalTreeNodes(win);
+
+            Border sidebarBorder = null;
+            foreach (var b in elements.OfType<Border>())
+            {
+                if (Grid.GetColumn(b) == 0 && (b.Width >= 44 && b.Width <= 290 || b.ActualWidth >= 44 && b.ActualWidth <= 290))
+                {
+                    var btns = GetLogicalTreeNodes(b).OfType<Button>().ToList();
+                    if (btns.Count >= 4)
+                    {
+                        sidebarBorder = b;
+                        break;
+                    }
+                }
+            }
+
+            if (sidebarBorder == null) return;
+
+            double currentWidth = sidebarBorder.ActualWidth > 0 ? sidebarBorder.ActualWidth : sidebarBorder.Width;
+            bool isCollapsed = currentWidth > 0 && currentWidth < 95;
+
+            var sideButtons = GetLogicalTreeNodes(sidebarBorder).OfType<Button>().ToList();
+            for (int i = 0; i < sideButtons.Count; i++)
+            {
+                var btn = sideButtons[i];
+
+                // A. Przycisk modułu (jego zawartością jest Panel zawierający ikonę i tytuł)
+                if (btn.Content is Panel modulePanel)
+                {
+                    var textBlocks = modulePanel.Children.OfType<TextBlock>().ToList();
+                    if (isCollapsed)
+                    {
+                        btn.Padding = new Thickness(0);
+                        btn.HorizontalContentAlignment = HorizontalAlignment.Center;
+                        btn.VerticalContentAlignment = VerticalAlignment.Center;
+
+                        modulePanel.HorizontalAlignment = HorizontalAlignment.Center;
+                        modulePanel.VerticalAlignment = VerticalAlignment.Center;
+                        modulePanel.Margin = new Thickness(0);
+
+                        if (textBlocks.Count >= 1)
+                        {
+                            textBlocks[0].Visibility = Visibility.Visible;
+                            textBlocks[0].Margin = new Thickness(0);
+                            textBlocks[0].Padding = new Thickness(0);
+                            textBlocks[0].Width = double.NaN;
+                            textBlocks[0].FontSize = 18;
+                            textBlocks[0].TextAlignment = TextAlignment.Center;
+                            textBlocks[0].HorizontalAlignment = HorizontalAlignment.Center;
+                            textBlocks[0].VerticalAlignment = VerticalAlignment.Center;
+                        }
+
+                        for (int t = 1; t < textBlocks.Count; t++)
+                        {
+                            textBlocks[t].Visibility = Visibility.Collapsed;
+                        }
+                    }
+                    else
+                    {
+                        btn.Padding = new Thickness(12, 8, 12, 8);
+                        btn.HorizontalContentAlignment = HorizontalAlignment.Left;
+                        btn.VerticalContentAlignment = VerticalAlignment.Center;
+
+                        modulePanel.HorizontalAlignment = HorizontalAlignment.Left;
+
+                        if (textBlocks.Count >= 1)
+                        {
+                            textBlocks[0].Visibility = Visibility.Visible;
+                            textBlocks[0].Margin = new Thickness(0, 0, 10, 0);
+                            textBlocks[0].FontSize = 15;
+                        }
+
+                        for (int t = 1; t < textBlocks.Count; t++)
+                        {
+                            textBlocks[t].Visibility = Visibility.Visible;
+                        }
+                    }
+                    continue;
+                }
+
+                // B. Przycisk zwijania / rozwijania paska bocznego (nie jest Panelem z ikoną modułu)
+                string rawText = (btn.Content?.ToString() ?? "").Trim();
+                if (i == 0 || rawText == "<" || rawText == ">" || rawText == "❮" || rawText == "❯" || rawText == "«" || rawText == "»" || btn.Width <= 42)
+                {
+                    btn.Padding = new Thickness(0);
+                    btn.HorizontalContentAlignment = HorizontalAlignment.Center;
+                    btn.VerticalContentAlignment = VerticalAlignment.Center;
+                    btn.FontSize = 14;
+                    btn.FontWeight = FontWeights.Bold;
+                    btn.Content = isCollapsed ? "❯" : "❮";
+
+                    if (btn.Tag?.ToString() != "V34_SIDEBAR_TOGGLE_HOOKED")
+                    {
+                        btn.Tag = "V34_SIDEBAR_TOGGLE_HOOKED";
+                        btn.Click += (_, __) =>
+                        {
+                            win.Dispatcher.BeginInvoke(new Action(() =>
+                            {
+                                UpdateSidebarIconsAndCollapseButton(win);
+                            }), System.Windows.Threading.DispatcherPriority.Loaded);
+                        };
+                    }
+                }
+            }
+        }
+
+        public static List<DependencyObject> GetLogicalTreeNodes(DependencyObject root)
+        {
+            var result = new List<DependencyObject>(128);
+            if (root == null) return result;
+
+            var visited = new HashSet<DependencyObject>();
+            var queue = new Queue<DependencyObject>(64);
+            queue.Enqueue(root);
+            visited.Add(root);
+
+            while (queue.Count > 0)
+            {
+                var cur = queue.Dequeue();
+                result.Add(cur);
+
+                if (cur is Panel panel)
+                {
+                    foreach (UIElement child in panel.Children)
+                    {
+                        if (child != null && visited.Add(child))
+                            queue.Enqueue(child);
+                    }
+                }
+                else if (cur is Decorator dec && dec.Child != null && visited.Add(dec.Child))
+                {
+                    queue.Enqueue(dec.Child);
+                }
+                else if (cur is ScrollViewer sv && sv.Content is DependencyObject svContent && visited.Add(svContent))
+                {
+                    queue.Enqueue(svContent);
+                }
+                else if (cur is ContentControl cc && !(cur is ButtonBase) && !(cur is ComboBoxItem) && !(cur is ListBoxItem) && cc.Content is DependencyObject ccContent && visited.Add(ccContent))
+                {
+                    queue.Enqueue(ccContent);
+                }
+            }
+
+            return result;
+        }
+    }
+    // [END_V34_CLEAN_SIDEBAR_ENGINE]
 }

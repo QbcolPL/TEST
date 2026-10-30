@@ -551,7 +551,7 @@
 
             <Grid Margin="0,9,0,0">
               <Grid.ColumnDefinitions><ColumnDefinition Width="1*"/><ColumnDefinition Width="1*"/></Grid.ColumnDefinitions>
-              <StackPanel Margin="0,0,8,0"><TextBlock Text="Nazwa kanału" Style="{StaticResource FieldLabel}"/><TextBox x:Name="MeshtasticChannelNameBox" Text="GGZS-TAK"/></StackPanel>
+              <StackPanel Margin="0,0,8,0"><TextBlock Text="Nazwa kanału" Style="{StaticResource FieldLabel}"/><TextBox x:Name="MeshtasticChannelNameBox" Text="MILSIM-TAK"/></StackPanel>
               <StackPanel Grid.Column="1"><TextBlock Text="Channel URL (opcjonalny)" Style="{StaticResource FieldLabel}"/><TextBox x:Name="MeshtasticUrlBox" MinHeight="560" TextWrapping="Wrap" ToolTip="{DynamicResource MeshtasticChannelUrlHint}"/></StackPanel>
             </Grid>
 
