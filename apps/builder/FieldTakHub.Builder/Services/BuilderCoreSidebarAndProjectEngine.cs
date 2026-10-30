@@ -1,4 +1,5 @@
 #pragma warning disable CS0414, CS0649, CS8600, CS8601, CS8602, CS8603, CS8604, CS8618, CS8625
+using System.Globalization;
 using System.Text.RegularExpressions;
 using System;
 using System.Collections.Generic;
@@ -1623,6 +1624,7 @@ private static void CaptureAndCollapseTopMenuBar(List<DependencyObject> allEleme
             V34CleanSidebarAndHeaderEngine.ApplySidebarAndHeaderFixes(win);
         
             V34CleanFtakAndFactionEngine.ApplyFactionAndPackageFixes(win);
+            V34CleanMapStudioBridge.SyncMapStudioState(win);
         }
 
         private static bool TryInvokeOriginalButtonByText(List<DependencyObject> allElements, string searchText)
@@ -3236,7 +3238,30 @@ private static void CaptureAndCollapseTopMenuBar(List<DependencyObject> allEleme
     }
     // [END_V34_CLEAN_SIDEBAR_ENGINE]
 
+
+
 // [START_V34_CLEAN_FTAK_ENGINE]
+    internal sealed class V34FactionVoiceChannelRow
+    {
+        public string Role { get; set; } = "Dowodzenie HQ";
+        public string Band { get; set; } = "PMR";
+        public string Freq { get; set; } = "CH 1 (446.00625 MHz)";
+        public string Tone { get; set; } = "CTCSS 67.0 Hz";
+    }
+
+    internal sealed class V34FactionSnapshot
+    {
+        public string FactionName { get; set; } = "ORGA";
+        public string ColorHex { get; set; } = "#2684FF";
+        public string ChannelName { get; set; } = "ORGA-MESH";
+        public string Region { get; set; } = "EU_868";
+        public string ModemPreset { get; set; } = "SHORT_FAST";
+        public string OtsHost { get; set; } = "";
+        public string EmergencyPhone { get; set; } = "Brak / 112";
+        public int ExpirationHours { get; set; } = 0;
+        public List<V34FactionVoiceChannelRow> VoiceRows { get; set; } = new List<V34FactionVoiceChannelRow>();
+    }
+
     internal static class V34CleanFtakAndFactionEngine
     {
         private static readonly string[] TacticalRgbPalette = new string[]
@@ -3251,6 +3276,8 @@ private static void CaptureAndCollapseTopMenuBar(List<DependencyObject> allEleme
         {
             "#2684FF"
         };
+
+        public static List<V34FactionSnapshot> CachedFactions { get; } = new List<V34FactionSnapshot>();
 
         public static string GetNextUniqueFactionColorHex(Window win = null)
         {
@@ -3311,7 +3338,7 @@ private static void CaptureAndCollapseTopMenuBar(List<DependencyObject> allEleme
 
         public static string SanitizeFolderName(string name)
         {
-            if (string.IsNullOrWhiteSpace(name)) return "BLUFOR";
+            if (string.IsNullOrWhiteSpace(name)) return "ORGA";
             char[] inv = Path.GetInvalidFileNameChars();
             StringBuilder sb = new StringBuilder();
             foreach (char c in name.Trim())
@@ -3319,7 +3346,7 @@ private static void CaptureAndCollapseTopMenuBar(List<DependencyObject> allEleme
                 sb.Append(Array.IndexOf(inv, c) >= 0 ? '_' : c);
             }
             string r = sb.ToString().Trim();
-            return string.IsNullOrEmpty(r) ? "BLUFOR" : r;
+            return string.IsNullOrEmpty(r) ? "ORGA" : r;
         }
 
         public static void ApplyFactionAndPackageFixes(Window win)
@@ -3330,7 +3357,7 @@ private static void CaptureAndCollapseTopMenuBar(List<DependencyObject> allEleme
             EnsureSharedFolderStructure();
             var all = ScanAllWindowRoots(w);
 
-            // 1. Dodaj etykietę "(0 = bezterminowo)" do pól ważności paczek / kodów QR
+            // 1. Etykieta "(0 = bezterminowo)" w polach ważności paczek i kodów QR
             foreach (var tb in all.OfType<TextBlock>())
             {
                 string txt = (tb.Text ?? "").Trim();
@@ -3343,7 +3370,10 @@ private static void CaptureAndCollapseTopMenuBar(List<DependencyObject> allEleme
                 }
             }
 
-            // 2. Odblokowanie przycisku "📂 Pliki strony", naprawa małych przycisków i Plakat Safezone QR
+            // 2. Wymuszenie unikalnych kolorów RGB i nazw STRONA-X dla nowo dodanych kart stron
+            EnforceUniqueColorsAndNamesOnCards(all);
+
+            // 3. Odblokowanie przycisku "📂 Pliki strony", naprawa małych przycisków ("+", "−") oraz Plakat Safezone QR
             foreach (var btn in all.OfType<Button>())
             {
                 string txt = ExtractButtonTextSafe(btn).Trim();
@@ -3354,6 +3384,19 @@ private static void CaptureAndCollapseTopMenuBar(List<DependencyObject> allEleme
                     btn.HorizontalContentAlignment = HorizontalAlignment.Center;
                     btn.VerticalContentAlignment = VerticalAlignment.Center;
                     if (txt == "-" || txt == ":") btn.Content = "−";
+                }
+
+                if ((txt == "+" || txt.Contains("Dodaj stronę", StringComparison.OrdinalIgnoreCase) || txt.Contains("Dodaj kanał", StringComparison.OrdinalIgnoreCase)) &&
+                    btn.Tag?.ToString() != "V34_ADD_BTN_HOOKED")
+                {
+                    btn.Tag = "V34_ADD_BTN_HOOKED";
+                    btn.Click += (_, __) =>
+                    {
+                        w.Dispatcher.BeginInvoke(new Action(() =>
+                        {
+                            ApplyFactionAndPackageFixes(w);
+                        }), System.Windows.Threading.DispatcherPriority.Loaded);
+                    };
                 }
 
                 if ((txt.Contains("Pliki str", StringComparison.OrdinalIgnoreCase) || txt.StartsWith("factions/", StringComparison.OrdinalIgnoreCase)) &&
@@ -3375,9 +3418,13 @@ private static void CaptureAndCollapseTopMenuBar(List<DependencyObject> allEleme
                         e.Handled = true;
                         try
                         {
+                            RefreshCachedFactions(w, null);
                             string facName = "ORGA";
                             if (txt.Contains("/"))
                                 facName = txt.Split('/').Last().Trim().ToUpperInvariant();
+                            else if (CachedFactions.Count > 0)
+                                facName = CachedFactions[0].FactionName;
+
                             string dir = EnsureFactionOutputDir(facName);
                             Process.Start(new ProcessStartInfo("explorer.exe", "\"" + dir + "\"") { UseShellExecute = true });
                         }
@@ -3398,8 +3445,90 @@ private static void CaptureAndCollapseTopMenuBar(List<DependencyObject> allEleme
                 }
             }
 
-            // 3. Przebudowa karty Generator Paczek .FTAK v3.0 do dokładnie 3 przycisków
+            // 4. Przebudowa karty Generator Paczek .FTAK v3.0 do dokładnie 3 przycisków
             UpgradeFtakCardToThreeButtons(w, all);
+
+            // 5. Odświeżenie migawki stron konfliktu i kanałów głosowych
+            RefreshCachedFactions(w, all);
+        }
+
+        private static void EnforceUniqueColorsAndNamesOnCards(List<DependencyObject> all)
+        {
+            var usedColors = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var usedNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            var headers = all.OfType<TextBlock>()
+                .Where(t => (t.Text ?? "").Contains("Generator Stron —", StringComparison.OrdinalIgnoreCase))
+                .ToList();
+
+            for (int i = 0; i < headers.Count; i++)
+            {
+                var hdr = headers[i];
+                var card = FindFactionCardContainer(hdr);
+                if (card == null) continue;
+
+                var elems = V34CleanSidebarAndHeaderEngine.GetLogicalTreeNodes(card);
+                var firstBox = elems.OfType<TextBox>().FirstOrDefault();
+                if (firstBox != null)
+                {
+                    string curName = (firstBox.Text ?? "").Trim();
+                    if (usedNames.Contains(curName) && curName.StartsWith("STRONA-", StringComparison.OrdinalIgnoreCase))
+                    {
+                        int n = i + 1;
+                        while (usedNames.Contains("STRONA-" + n)) n++;
+                        curName = "STRONA-" + n;
+                        firstBox.Text = curName;
+                        hdr.Text = "Generator Stron — " + curName;
+                    }
+                    if (!string.IsNullOrWhiteSpace(curName))
+                        usedNames.Add(curName);
+                }
+
+                var colorBtn = elems.OfType<Button>().FirstOrDefault(b => Regex.IsMatch(ExtractButtonTextSafe(b), @"#[0-9A-Fa-f]{6}"));
+                if (colorBtn != null)
+                {
+                    Match m = Regex.Match(ExtractButtonTextSafe(colorBtn), @"#[0-9A-Fa-f]{6}");
+                    if (m.Success)
+                    {
+                        string hex = m.Value.ToUpperInvariant();
+                        if (usedColors.Contains(hex))
+                        {
+                            hex = GetNextUniqueFactionColorHex(null);
+                            ApplyHexColorToButton(colorBtn, hdr, hex);
+                        }
+                        usedColors.Add(hex);
+                        _allocatedColors.Add(hex);
+                    }
+                }
+            }
+        }
+
+        private static void ApplyHexColorToButton(Button colorBtn, TextBlock hdrTb, string hex)
+        {
+            try
+            {
+                var brush = new SolidColorBrush((Color)ColorConverter.ConvertFromString(hex));
+                if (colorBtn.Content is string)
+                {
+                    colorBtn.Content = "■ " + hex;
+                }
+                else if (colorBtn.Content is Panel p)
+                {
+                    foreach (var b in p.Children.OfType<Border>()) b.Background = brush;
+                    foreach (var s in p.Children.OfType<System.Windows.Shapes.Shape>()) s.Fill = brush;
+                    foreach (var t in p.Children.OfType<TextBlock>())
+                        if (t.Text != null && t.Text.Contains("#")) t.Text = hex;
+                }
+                colorBtn.BorderBrush = brush;
+
+                if (LogicalTreeHelper.GetParent(hdrTb) is Panel hdrParent)
+                {
+                    foreach (var s in hdrParent.Children.OfType<System.Windows.Shapes.Shape>()) s.Fill = brush;
+                    foreach (var b in hdrParent.Children.OfType<Border>())
+                        if (b.Width <= 20 && b.Height <= 20) b.Background = brush;
+                }
+            }
+            catch { }
         }
 
         private static void UpgradeFtakCardToThreeButtons(Window win, List<DependencyObject> all)
@@ -3455,6 +3584,7 @@ private static void CaptureAndCollapseTopMenuBar(List<DependencyObject> allEleme
                         b1.Click += (_, __) =>
                         {
                             EnsureSharedFolderStructure();
+                            foreach (var f in CachedFactions) EnsureFactionOutputDir(f.FactionName);
                             if (origBuildAll != null)
                                 origBuildAll.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
                         };
@@ -3511,15 +3641,31 @@ private static void CaptureAndCollapseTopMenuBar(List<DependencyObject> allEleme
         {
             try
             {
-                string outDir = EnsureFactionOutputDir("ORGA");
-                string htmlPath = Path.Combine(outDir, "Plakat_Safezone_ORGA.html");
+                RefreshCachedFactions(win, null);
+                var snap = CachedFactions.FirstOrDefault() ?? new V34FactionSnapshot();
+                string outDir = EnsureFactionOutputDir(snap.FactionName);
+                string htmlPath = Path.Combine(outDir, "Plakat_Safezone_" + SanitizeFolderName(snap.FactionName) + ".html");
 
-                string html = "<!DOCTYPE html><html><head><meta charset='utf-8'/><title>Plakat Safezone A4</title>" +
-                              "<style>body{font-family:'Segoe UI',Arial,sans-serif;background:#071115;color:#fff;padding:18px;}.sheet{max-width:190mm;margin:0 auto;border:3px solid #1FE0C5;border-radius:12px;padding:18px;background:#0A181E;}</style></head><body>" +
-                              "<div class='sheet'><h1>🛡️ STRONA: ORGA</h1>" +
-                              "<p><b>Ważność paczki / QR:</b> Bezterminowo (0) &nbsp;|&nbsp; <b>Telefon ORGA / SOS:</b> 112</p>" +
-                              "<div style='background:#fff;color:#000;padding:14px;border-radius:8px;width:230px;text-align:center;margin:12px auto;'><img src='https://api.qrserver.com/v1/create-qr-code/?size=210x210&data=FTAK-ORGA' width='210' height='210'/><br/><b>ZESKANUJ W FIELD TAK HUB</b></div>" +
-                              "</div></body></html>";
+                string qrPayload = Uri.EscapeDataString("{\"Faction\":\"" + snap.FactionName + "\",\"Channel\":\"" + snap.ChannelName + "\",\"Region\":\"" + snap.Region + "\",\"ExpirationHours\":" + snap.ExpirationHours + "}");
+
+                StringBuilder rows = new StringBuilder();
+                foreach (var r in snap.VoiceRows)
+                {
+                    rows.AppendLine("<tr><td><b>" + System.Net.WebUtility.HtmlEncode(r.Role) + "</b></td><td>" +
+                                    System.Net.WebUtility.HtmlEncode(r.Band) + "</td><td><b>" +
+                                    System.Net.WebUtility.HtmlEncode(r.Freq) + "</b></td><td>" +
+                                    System.Net.WebUtility.HtmlEncode(r.Tone) + "</td></tr>");
+                }
+
+                string expLabel = snap.ExpirationHours <= 0 ? "Bezterminowo (0)" : (snap.ExpirationHours + " h");
+
+                string html = "<!DOCTYPE html><html><head><meta charset='utf-8'/><title>Plakat Safezone A4 — " + System.Net.WebUtility.HtmlEncode(snap.FactionName) + "</title>" +
+                              "<style>body{font-family:'Segoe UI',Arial,sans-serif;background:#071115;color:#fff;padding:18px;}.sheet{max-width:190mm;margin:0 auto;border:3px solid " + System.Net.WebUtility.HtmlEncode(snap.ColorHex) + ";border-radius:12px;padding:18px;background:#0A181E;}table{width:100%;border-collapse:collapse;margin-top:12px;}th,td{border:1px solid #224A59;padding:7px;text-align:left;}th{background:#122C36;color:#1FE0C5;}</style></head><body>" +
+                              "<div class='sheet'><h1>🛡️ STRONA: " + System.Net.WebUtility.HtmlEncode(snap.FactionName) + "</h1>" +
+                              "<p><b>Ważność paczki / QR:</b> " + System.Net.WebUtility.HtmlEncode(expLabel) + " &nbsp;|&nbsp; <b>Telefon ORGA / SOS:</b> " + System.Net.WebUtility.HtmlEncode(snap.EmergencyPhone) + "</p>" +
+                              "<div style='background:#fff;color:#000;padding:14px;border-radius:8px;width:230px;text-align:center;margin:12px auto;'><img src='https://api.qrserver.com/v1/create-qr-code/?size=210x210&data=" + qrPayload + "' width='210' height='210'/><br/><b>ZESKANUJ W FIELD TAK HUB</b></div>" +
+                              "<p><b>LoRa Meshtastic:</b> " + System.Net.WebUtility.HtmlEncode(snap.ChannelName) + " (" + System.Net.WebUtility.HtmlEncode(snap.Region) + " / " + System.Net.WebUtility.HtmlEncode(snap.ModemPreset) + ")</p>" +
+                              "<table><thead><tr><th>Rola</th><th>Pasmo</th><th>Częstotliwość / Kanał</th><th>Ton / Kod</th></tr></thead><tbody>" + rows + "</tbody></table></div></body></html>";
 
                 File.WriteAllText(htmlPath, html, Encoding.UTF8);
                 Process.Start(new ProcessStartInfo(htmlPath) { UseShellExecute = true });
@@ -3528,6 +3674,146 @@ private static void CaptureAndCollapseTopMenuBar(List<DependencyObject> allEleme
             {
                 MessageBox.Show("Błąd generowania plakatu Safezone: " + ex.Message, "Field TAK Hub", MessageBoxButton.OK, MessageBoxImage.Warning);
             }
+        }
+
+        public static DependencyObject FindFactionCardContainer(TextBlock hdrTb)
+        {
+            if (hdrTb == null) return null;
+            DependencyObject cur = hdrTb;
+            DependencyObject bestBorder = null;
+
+            for (int depth = 0; depth < 9 && cur != null; depth++)
+            {
+                cur = LogicalTreeHelper.GetParent(cur) ?? VisualTreeHelper.GetParent(cur);
+                if (cur is Border || cur is Panel)
+                {
+                    var elems = V34CleanSidebarAndHeaderEngine.GetLogicalTreeNodes(cur);
+                    var texts = elems.OfType<TextBlock>().Select(x => x.Text ?? "").ToList();
+                    int hdrCount = texts.Count(x => x.Contains("Generator Stron —", StringComparison.OrdinalIgnoreCase));
+                    if (hdrCount > 1) break;
+
+                    if (cur is Border b && b.BorderThickness.Top >= 1)
+                        bestBorder = b;
+
+                    if (hdrCount == 1 &&
+                        texts.Any(x => x.Contains("Nazwa strony", StringComparison.OrdinalIgnoreCase)) &&
+                        texts.Any(x => x.Contains("Kanały Głosowe", StringComparison.OrdinalIgnoreCase)))
+                    {
+                        return cur;
+                    }
+                }
+            }
+            return bestBorder;
+        }
+
+        public static List<V34FactionSnapshot> RefreshCachedFactions(Window win, List<DependencyObject> preScanned = null)
+        {
+            var list = new List<V34FactionSnapshot>();
+            try
+            {
+                var all = preScanned ?? ScanAllWindowRoots(win ?? Application.Current?.MainWindow);
+                var headers = all.OfType<TextBlock>()
+                    .Where(t => (t.Text ?? "").Contains("Generator Stron —", StringComparison.OrdinalIgnoreCase))
+                    .ToList();
+
+                foreach (var hdr in headers)
+                {
+                    var card = FindFactionCardContainer(hdr);
+                    if (card == null) continue;
+
+                    var items = V34CleanSidebarAndHeaderEngine.GetLogicalTreeNodes(card);
+                    var boxes = items.OfType<TextBox>().ToList();
+                    var snap = new V34FactionSnapshot();
+
+                    snap.FactionName = (boxes.Count > 0 && !string.IsNullOrWhiteSpace(boxes[0].Text))
+                        ? boxes[0].Text.Trim()
+                        : (hdr.Text ?? "").Replace("Generator Stron —", "").Trim();
+
+                    if (string.IsNullOrWhiteSpace(snap.FactionName) ||
+                        snap.FactionName.Equals("PLI", StringComparison.OrdinalIgnoreCase) ||
+                        snap.FactionName.Equals("GeoChat", StringComparison.OrdinalIgnoreCase) ||
+                        snap.FactionName.Equals("TAK", StringComparison.OrdinalIgnoreCase))
+                    {
+                        snap.FactionName = "ORGA";
+                    }
+
+                    snap.ChannelName = snap.FactionName.ToUpperInvariant() + "-MESH";
+
+                    var colBtn = items.OfType<Button>().FirstOrDefault(b => Regex.IsMatch(ExtractButtonTextSafe(b), @"#[0-9A-Fa-f]{6}"));
+                    if (colBtn != null)
+                    {
+                        Match m = Regex.Match(ExtractButtonTextSafe(colBtn), @"#[0-9A-Fa-f]{6}");
+                        if (m.Success) snap.ColorHex = m.Value.ToUpperInvariant();
+                    }
+
+                    foreach (var tb in boxes)
+                    {
+                        var p = LogicalTreeHelper.GetParent(tb) as Panel;
+                        if (p != null && p.Children.OfType<TextBlock>().Any(l => (l.Text ?? "").Contains("Telefon alarmowy", StringComparison.OrdinalIgnoreCase)))
+                        {
+                            if (!string.IsNullOrWhiteSpace(tb.Text)) snap.EmergencyPhone = tb.Text.Trim();
+                        }
+                    }
+
+                    foreach (var panel in items.OfType<Panel>())
+                    {
+                        var directInputs = panel.Children.Cast<UIElement>().Where(x => x is TextBox || x is ComboBox).ToList();
+                        if (directInputs.Count >= 2 && directInputs.Any(x => x is TextBox))
+                        {
+                            bool isNameRow = panel.Children.OfType<StackPanel>().Any(sp => sp.Children.OfType<TextBlock>().Any(t => (t.Text ?? "").Contains("Nazwa strony", StringComparison.OrdinalIgnoreCase)));
+                            if (isNameRow) continue;
+
+                            string ReadVal(UIElement el)
+                            {
+                                if (el is TextBox tbx) return (tbx.Text ?? "").Trim();
+                                if (el is ComboBox cbx) return ((cbx.SelectedItem is ComboBoxItem cbi ? cbi.Content?.ToString() : cbx.SelectedItem?.ToString()) ?? cbx.Text ?? "").Trim();
+                                return "";
+                            }
+
+                            var vals = directInputs.Select(ReadVal).ToList();
+                            string role = vals[0];
+                            string band = vals.Count >= 2 ? vals[1] : "PMR";
+                            string freq = vals.Count >= 3 ? vals[2] : vals[1];
+                            string tone = vals.Count >= 4 ? vals[3] : "-";
+
+                            if (role.Equals("PMR", StringComparison.OrdinalIgnoreCase) ||
+                                role.Equals("VHF", StringComparison.OrdinalIgnoreCase) ||
+                                role.Equals("UHF", StringComparison.OrdinalIgnoreCase) ||
+                                role.Equals("DMR", StringComparison.OrdinalIgnoreCase) ||
+                                role.Contains("VHF/", StringComparison.OrdinalIgnoreCase))
+                            {
+                                band = role;
+                                role = vals.Count >= 2 ? vals[1] : "Kanał";
+                                freq = vals.Count >= 3 ? vals[2] : "-";
+                            }
+
+                            if (!string.IsNullOrWhiteSpace(role) || !string.IsNullOrWhiteSpace(freq))
+                            {
+                                snap.VoiceRows.Add(new V34FactionVoiceChannelRow
+                                {
+                                    Role = string.IsNullOrWhiteSpace(role) ? "Kanał" : role,
+                                    Band = string.IsNullOrWhiteSpace(band) ? "PMR" : band,
+                                    Freq = string.IsNullOrWhiteSpace(freq) ? "-" : freq,
+                                    Tone = string.IsNullOrWhiteSpace(tone) ? "-" : tone
+                                });
+                            }
+                        }
+                    }
+
+                    if (snap.VoiceRows.Count == 0)
+                        snap.VoiceRows.Add(new V34FactionVoiceChannelRow());
+
+                    list.Add(snap);
+                }
+            }
+            catch { }
+
+            if (list.Count > 0)
+            {
+                CachedFactions.Clear();
+                CachedFactions.AddRange(list);
+            }
+            return CachedFactions;
         }
 
         public static List<DependencyObject> ScanAllWindowRoots(Window win)
@@ -3549,6 +3835,16 @@ private static void CaptureAndCollapseTopMenuBar(List<DependencyObject> allEleme
                     try { if (f.GetValue(win) is DependencyObject d) AddTree(d); } catch { }
                 }
             }
+
+            foreach (var t in typeof(V34CleanFtakAndFactionEngine).Assembly.GetTypes())
+            {
+                if (t.Namespace == null || !t.Namespace.StartsWith("FieldTakHub.Builder")) continue;
+                foreach (var sf in t.GetFields(System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic))
+                {
+                    try { if (typeof(DependencyObject).IsAssignableFrom(sf.FieldType) && sf.GetValue(null) is DependencyObject sd) AddTree(sd); } catch { }
+                }
+            }
+
             return result;
         }
 
@@ -3563,4 +3859,173 @@ private static void CaptureAndCollapseTopMenuBar(List<DependencyObject> allEleme
         }
     }
     // [END_V34_CLEAN_FTAK_ENGINE]
+
+    // [START_V34_CLEAN_MAP_STUDIO_ENGINE]
+    /// <summary>
+    /// Krok 4: Most geodezyjny dla Modułu 1 (Generator Map Taktycznych 1:1 — Hybryda Orto + Turbo LiDAR ISOK / Siatka MGRS).
+    /// Weryfikuje, czy użytkownik faktycznie wyznaczył wielokąt AO lub punkty POI na mapie (blokując pobieranie METOC
+    /// dla samego pustego arkusza mapy) oraz konwertuje współrzędne na wybrany w Studio Map układ (MGRS / UTM / DMS / WGS84).
+    /// </summary>
+    internal static class V34CleanMapStudioBridge
+    {
+        private static readonly string[] MgrsCols = { "ABCDEFGH", "JKLMNPQR", "STUVWXYZ" };
+        private static readonly string[] MgrsRows = { "ABCDEFGHJKLMNPQRSTUV", "FGHJKLMNPQRSTUVABCDE" };
+
+        public static bool HasExplicitAoMarked { get; private set; }
+        public static double AoCenterLat { get; private set; } = 49.849444;
+        public static double AoCenterLon { get; private set; } = 18.812667;
+        public static string ActiveCoordinateSystem { get; private set; } = "MGRS";
+
+        public static void SyncMapStudioState(Window win)
+        {
+            try
+            {
+                var w = win ?? Application.Current?.MainWindow;
+                if (w == null) return;
+
+                V34CleanFtakAndFactionEngine.EnsureSharedFolderStructure();
+                var all = V34CleanFtakAndFactionEngine.ScanAllWindowRoots(w);
+                bool foundAoOrPois = false;
+
+                // 1. Odczyt aktywnego układu współrzędnych wybranego w Studio Map 1:1
+                foreach (var cb in all.OfType<ComboBox>())
+                {
+                    string sel = ((cb.SelectedItem is ComboBoxItem cbi ? cbi.Content?.ToString() : cb.SelectedItem?.ToString()) ?? cb.Text ?? "").Trim();
+                    if (sel.Contains("MGRS", StringComparison.OrdinalIgnoreCase)) ActiveCoordinateSystem = "MGRS";
+                    else if (sel.Contains("DMS", StringComparison.OrdinalIgnoreCase) || sel.Contains("Stopnie", StringComparison.OrdinalIgnoreCase)) ActiveCoordinateSystem = "DMS";
+                    else if (sel.Contains("UTM", StringComparison.OrdinalIgnoreCase) && !sel.Contains("MGRS", StringComparison.OrdinalIgnoreCase)) ActiveCoordinateSystem = "UTM";
+                    else if (sel.Contains("WGS84", StringComparison.OrdinalIgnoreCase) || sel.Contains("Dziesiętne", StringComparison.OrdinalIgnoreCase)) ActiveCoordinateSystem = "WGS84";
+                }
+
+                // 2. Sprawdzenie natywnego obiektu danych mapy (GetExtractedMapData / ExtractMapData)
+                var flags = System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static;
+                var mExtract = typeof(OpordBuilderManager).GetMethod("GetExtractedMapData", flags)
+                            ?? typeof(OpordBuilderManager).GetMethod("ExtractMapData", flags);
+
+                if (mExtract != null && mExtract.GetParameters().Length == 0)
+                {
+                    var mapData = mExtract.Invoke(null, null);
+                    if (mapData != null)
+                    {
+                        var mt = mapData.GetType();
+                        bool hasAoProp = (bool)(mt.GetProperty("HasAoPolygon")?.GetValue(mapData) ?? false);
+                        double cLat = Convert.ToDouble(mt.GetProperty("CenterLat")?.GetValue(mapData) ?? 49.849444);
+                        double cLon = Convert.ToDouble(mt.GetProperty("CenterLon")?.GetValue(mapData) ?? 18.812667);
+
+                        int poisCount = 0;
+                        if (mt.GetProperty("Pois")?.GetValue(mapData) is System.Collections.IEnumerable poisEnum)
+                        {
+                            foreach (var _ in poisEnum) poisCount++;
+                        }
+
+                        if (hasAoProp || poisCount > 0)
+                        {
+                            foundAoOrPois = true;
+                            AoCenterLat = cLat;
+                            AoCenterLon = cLon;
+                        }
+                    }
+                }
+
+                // 3. Sprawdzenie wielokąta AO bezpośrednio na płótnie Canvas w Studio Map 1:1
+                if (!foundAoOrPois)
+                {
+                    foreach (var canvas in all.OfType<Canvas>())
+                    {
+                        foreach (UIElement ch in canvas.Children)
+                        {
+                            if (ch is System.Windows.Shapes.Polygon poly && poly.Points != null && poly.Points.Count >= 3 && poly.Visibility == Visibility.Visible)
+                            {
+                                foundAoOrPois = true;
+                                break;
+                            }
+                            if (ch is System.Windows.Shapes.Polyline pline && pline.Points != null && pline.Points.Count >= 3 && pline.Visibility == Visibility.Visible)
+                            {
+                                foundAoOrPois = true;
+                                break;
+                            }
+                        }
+                        if (foundAoOrPois) break;
+                    }
+                }
+
+                HasExplicitAoMarked = foundAoOrPois;
+            }
+            catch { }
+        }
+
+        public static string FormatByActiveMapSystem(double lat, double lon)
+        {
+            string sys = (ActiveCoordinateSystem ?? "MGRS").ToUpperInvariant();
+            if (sys.Contains("MGRS")) return LatLonToMgrs(lat, lon);
+            if (sys.Contains("UTM")) return LatLonToUtm(lat, lon);
+            if (sys.Contains("DMS")) return LatLonToDms(lat, lon);
+            return string.Format(CultureInfo.InvariantCulture, "{0:F5}°N, {1:F5}°E", lat, lon);
+        }
+
+        public static string LatLonToMgrs(double lat, double lon)
+        {
+            try
+            {
+                double cLat = Math.Clamp(lat, -80.0, 84.0);
+                double nLon = ((lon + 180.0) % 360.0 + 360.0) % 360.0 - 180.0;
+                int zone = (int)Math.Floor((nLon + 180.0) / 6.0) + 1;
+                double latRad = cLat * Math.PI / 180.0;
+                double lonRad = nLon * Math.PI / 180.0;
+                double lonOrig = ((zone - 1) * 6 - 180 + 3) * Math.PI / 180.0;
+                double a = 6378137.0, eccSq = 0.00669438, k0 = 0.9996, eccP = eccSq / (1.0 - eccSq);
+                double n = a / Math.Sqrt(1.0 - eccSq * Math.Sin(latRad) * Math.Sin(latRad));
+                double t = Math.Tan(latRad) * Math.Tan(latRad);
+                double c = eccP * Math.Cos(latRad) * Math.Cos(latRad);
+                double A = Math.Cos(latRad) * (lonRad - lonOrig);
+                double M = a * ((1.0 - eccSq / 4.0 - 3.0 * eccSq * eccSq / 64.0) * latRad - (3.0 * eccSq / 8.0 + 3.0 * eccSq * eccSq / 32.0) * Math.Sin(2.0 * latRad));
+                double east = k0 * n * (A + (1.0 - t + c) * Math.Pow(A, 3) / 6.0) + 500000.0;
+                double north = k0 * (M + n * Math.Tan(latRad) * (A * A / 2.0));
+                if (cLat < 0) north += 10000000.0;
+                string bands = "CDEFGHJKLMNPQRSTUVWXX";
+                char bChar = bands[Math.Clamp((int)Math.Floor((cLat + 80.0) / 8.0), 0, bands.Length - 1)];
+                char cChar = MgrsCols[(zone - 1) % 3][Math.Clamp((int)Math.Floor(east / 100000.0) - 1, 0, 7)];
+                char rChar = MgrsRows[(zone - 1) % 2][Math.Clamp((int)Math.Floor(north / 100000.0) % 20, 0, 19)];
+                int e5 = Math.Clamp((int)Math.Round(east) % 100000, 0, 99999);
+                int n5 = Math.Clamp((int)Math.Round(north) % 100000, 0, 99999);
+                return string.Format(CultureInfo.InvariantCulture, "{0:00}{1} {2}{3} {4:00000} {5:00000}", zone, bChar, cChar, rChar, e5, n5);
+            }
+            catch
+            {
+                return string.Format(CultureInfo.InvariantCulture, "{0:F5}, {1:F5}", lat, lon);
+            }
+        }
+
+        public static string LatLonToUtm(double lat, double lon)
+        {
+            double cLat = Math.Clamp(lat, -80.0, 84.0);
+            double nLon = ((lon + 180.0) % 360.0 + 360.0) % 360.0 - 180.0;
+            int zone = (int)Math.Floor((nLon + 180.0) / 6.0) + 1;
+            double latRad = cLat * Math.PI / 180.0, lonRad = nLon * Math.PI / 180.0;
+            double lonOrig = ((zone - 1) * 6 - 180 + 3) * Math.PI / 180.0;
+            double a = 6378137.0, eccSq = 0.00669438, k0 = 0.9996;
+            double n = a / Math.Sqrt(1.0 - eccSq * Math.Sin(latRad) * Math.Sin(latRad));
+            double A = Math.Cos(latRad) * (lonRad - lonOrig);
+            double M = a * ((1.0 - eccSq / 4.0) * latRad - (3.0 * eccSq / 8.0) * Math.Sin(2.0 * latRad));
+            double east = k0 * n * A + 500000.0;
+            double north = k0 * (M + n * Math.Tan(latRad) * (A * A / 2.0));
+            return string.Format(CultureInfo.InvariantCulture, "UTM {0}N {1:0}E {2:0}N", zone, east, north);
+        }
+
+        public static string LatLonToDms(double lat, double lon)
+        {
+            return ToDmsPart(lat, lat >= 0 ? 'N' : 'S') + " " + ToDmsPart(lon, lon >= 0 ? 'E' : 'W');
+        }
+
+        private static string ToDmsPart(double val, char hem)
+        {
+            double abs = Math.Abs(val);
+            int d = (int)Math.Floor(abs);
+            double mf = (abs - d) * 60.0;
+            int m = (int)Math.Floor(mf);
+            double s = (mf - m) * 60.0;
+            return string.Format(CultureInfo.InvariantCulture, "{0:00}°{1:00}'{2:00.0}\"{3}", d, m, s, hem);
+        }
+    }
+    // [END_V34_CLEAN_MAP_STUDIO_ENGINE]
 }
