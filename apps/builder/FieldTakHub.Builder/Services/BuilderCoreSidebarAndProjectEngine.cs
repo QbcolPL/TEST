@@ -1625,6 +1625,7 @@ private static void CaptureAndCollapseTopMenuBar(List<DependencyObject> allEleme
         
             V34CleanFtakAndFactionEngine.ApplyFactionAndPackageFixes(win);
             V34CleanMapStudioBridge.SyncMapStudioState(win);
+            V34CleanOpordDataEngine.OnSwitchedToOpordTab(win, modeKey);
         }
 
         private static bool TryInvokeOriginalButtonByText(List<DependencyObject> allElements, string searchText)
