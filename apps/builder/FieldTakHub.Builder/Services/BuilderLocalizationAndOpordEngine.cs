@@ -920,6 +920,9 @@ namespace FieldTakHub.Builder.Services
     // =========================================================================
     internal sealed class OpordRosterRow
     {
+        public string Callsign { get; set; } = "ALFA-1";
+        public string GearAndTasks { get; set; } = "Radio + ATAK";
+
         public string OperatorOrTeam { get; set; } = "ALFA-1";
         public string PrimaryRole { get; set; } = "Lider (Dowódca polowy)";
         public string SecondaryRole { get; set; } = "RTO (Radiooperator)";
@@ -944,6 +947,9 @@ namespace FieldTakHub.Builder.Services
     // Każdy dzień operacji posiada własny, w 100% niezależny zestaw wszystkich sekcji rozkazu OPORD!
     internal sealed class OpordDayPlanModel
     {
+        public string MetocQuickSummary { get; set; } = "";
+        public string CoordinationMeasures { get; set; } = "";
+
         public string PrimaryChannel { get; set; } = "";
         public string AlternateChannel { get; set; } = "";
         public string HqChannel { get; set; } = "";
@@ -1026,6 +1032,8 @@ namespace FieldTakHub.Builder.Services
 
     internal sealed class OpordParagraphModel
     {
+        public string EventName { get; set; } = "Operacja Taktyczna";
+
         public string TargetFaction { get; set; } = "BLUFOR";
         public List<OpordDayPlanModel> Days { get; set; } = new List<OpordDayPlanModel>();
         public int ActiveDayIndex { get; set; } = 0;
@@ -1980,241 +1988,7 @@ namespace FieldTakHub.Builder.Services
         }
     }
 
-// [START_NATIVE_V34_OPORD_DATA_ENGINE]
-    internal static class NativeV34OpordDataEngine
-    {
-        private static bool _isRefreshingOpord;
 
-        /// <summary>
-        /// Wywolywane automatycznie w chwili klikniecia zakladki Generator OPORD na pasku bocznym.
-        /// Pobiera aktualna liste stron i wszystkie kanaly z Generatora Stron oraz przebudowuje formularz OPORD.
-        /// </summary>
-        public static void OnSwitchedToOpordTab(Window win, string modeKey)
-        {
-            if (string.IsNullOrWhiteSpace(modeKey) || !modeKey.Contains("OPORD", StringComparison.OrdinalIgnoreCase))
-                return;
-
-            var w = win ?? Application.Current?.MainWindow;
-            if (w == null || _isRefreshingOpord) return;
-
-            w.Dispatcher.BeginInvoke(new Action(() =>
-            {
-                try
-                {
-                    _isRefreshingOpord = true;
-                    SyncFactionsAndMapToOpordModel(w);
-                    var mRebuild = typeof(OpordBuilderManager).GetMethod(
-                        "RebuildOpordForm",
-                        System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic);
-                    if (mRebuild != null)
-                    {
-                        mRebuild.Invoke(null, new object[] { w });
-                    }
-                }
-                catch { }
-                finally
-                {
-                    _isRefreshingOpord = false;
-                }
-            }), System.Windows.Threading.DispatcherPriority.Loaded);
-        }
-
-        public static OpordParagraphModel GetLiveOpordModel()
-        {
-            try
-            {
-                var flags = System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic;
-                foreach (var f in typeof(OpordBuilderManager).GetFields(flags))
-                {
-                    if (typeof(OpordParagraphModel).IsAssignableFrom(f.FieldType))
-                    {
-                        var model = f.GetValue(null) as OpordParagraphModel;
-                        if (model != null) return model;
-                    }
-                }
-                foreach (var p in typeof(OpordBuilderManager).GetProperties(flags))
-                {
-                    if (typeof(OpordParagraphModel).IsAssignableFrom(p.PropertyType))
-                    {
-                        var model = p.GetValue(null, null) as OpordParagraphModel;
-                        if (model != null) return model;
-                    }
-                }
-            }
-            catch { }
-            return null;
-        }
-
-        public static bool IsGarbageFactionName(string name)
-        {
-            if (string.IsNullOrWhiteSpace(name)) return true;
-            string s = name.Trim();
-            return s.Equals("PLI", StringComparison.OrdinalIgnoreCase) ||
-                   s.Equals("GeoChat", StringComparison.OrdinalIgnoreCase) ||
-                   s.Equals("TAK", StringComparison.OrdinalIgnoreCase) ||
-                   s.Equals("Auto", StringComparison.OrdinalIgnoreCase) ||
-                   s.StartsWith("☑️", StringComparison.OrdinalIgnoreCase);
-        }
-
-        public static List<string> GetCleanFactionNames(Window win)
-        {
-            var factions = FtakBuilderV34Enhancements.RefreshCachedFactions(win ?? Application.Current?.MainWindow, null);
-            var names = factions
-                .Select(f => f.FactionName)
-                .Where(n => !IsGarbageFactionName(n))
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .ToList();
-
-            if (names.Count == 0)
-            {
-                names.Add("ORGA");
-                names.Add("STRONA-2");
-            }
-            return names;
-        }
-
-        /// <summary>
-        /// Synchronizuje kanaly glosowe, parametry Meshtastic, adres OTS i telefon SOS z Generatora Stron
-        /// oraz wspolrzedne AO z Generatora Map 1:1 (w wybranym ukladzie np. MGRS) do modelu OPORD.
-        /// </summary>
-        public static void SyncFactionsAndMapToOpordModel(Window win)
-        {
-            try
-            {
-                var w = win ?? Application.Current?.MainWindow;
-                var model = GetLiveOpordModel();
-                if (model == null || model.Days == null || model.Days.Count == 0) return;
-
-                int activeIdx = Math.Clamp(model.ActiveDayIndex, 0, model.Days.Count - 1);
-                var activeDay = model.Days[activeIdx];
-
-                var factions = FtakBuilderV34Enhancements.RefreshCachedFactions(w, null);
-                NativeV34MapStudioBridge.SyncMapStudioState(w);
-
-                if (IsGarbageFactionName(model.TargetFaction))
-                {
-                    model.TargetFaction = factions.Count > 0 ? factions[0].FactionName : "ORGA";
-                }
-
-                if (factions.Count > 0)
-                {
-                    var matched = factions.FirstOrDefault(f =>
-                        string.Equals(f.FactionName, model.TargetFaction, StringComparison.OrdinalIgnoreCase))
-                        ?? factions[0];
-
-                    model.TargetFaction = matched.FactionName;
-
-                    if (matched.VoiceRows.Count > 0)
-                    {
-                        var r0 = matched.VoiceRows[0];
-                        activeDay.PrimaryChannel = r0.Role + ": " + r0.Freq + " [" + r0.Band + "] (" + r0.Tone + ")";
-                        if (matched.VoiceRows.Count > 1)
-                        {
-                            var r1 = matched.VoiceRows[1];
-                            activeDay.AlternateChannel = r1.Role + ": " + r1.Freq + " [" + r1.Band + "] (" + r1.Tone + ")";
-                        }
-                        if (matched.VoiceRows.Count > 2)
-                        {
-                            var r2 = matched.VoiceRows[2];
-                            activeDay.HqChannel = r2.Role + ": " + r2.Freq + " [" + r2.Band + "] (" + r2.Tone + ")";
-                        }
-                    }
-
-                    StringBuilder sb = new StringBuilder();
-                    sb.AppendLine("📡 [ZACIĄGNIĘTE Z GENERATORA STRON KANAŁY RADIOWE I MESHTASTIC DLA: " + matched.FactionName + "]");
-                    sb.AppendLine("• Meshtastic LoRa: Kanał '" + matched.ChannelName + "' | Region: " + matched.Region + " | Preset: " + matched.ModemPreset + " | Szyfrowanie: AES-256 PSK");
-                    sb.AppendLine("• Serwer ATAK (OpenTAKServer): " + (string.IsNullOrWhiteSpace(matched.OtsHost) ? "Tryb lokalny / Off-Grid Mesh" : matched.OtsHost));
-                    sb.AppendLine("• Telefon alarmowy ORGA / MEDEVAC (SOS MGRS): " + (string.IsNullOrWhiteSpace(matched.EmergencyPhone) ? "Brak / 112" : matched.EmergencyPhone));
-                    sb.AppendLine("• Wszystkie kanały głosowe zdefiniowane w Generatorze Stron:");
-                    foreach (var vr in matched.VoiceRows)
-                    {
-                        sb.AppendLine("   - " + vr.Role + " [" + vr.Band + "]: " + vr.Freq + " (" + vr.Tone + ")");
-                    }
-
-                    string summary = sb.ToString().TrimEnd();
-                    activeDay.SyncedCommsMatrixSummary = summary;
-
-                    // Zapisz takze do innych ewentualnych wlasciwosci modelu przechowujacych podsumowanie lacznosci
-                    foreach (var prop in activeDay.GetType().GetProperties(System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public))
-                    {
-                        if (prop.PropertyType == typeof(string) && prop.CanWrite && prop.Name.Contains("Synced", StringComparison.OrdinalIgnoreCase))
-                        {
-                            prop.SetValue(activeDay, summary, null);
-                        }
-                    }
-                }
-
-                // Jezeli w Generatorze Map 1:1 zaznaczono wielokat AO lub punkty POI -> zsynchronizuj wspolrzedne w wybranym systemie (np. MGRS)
-                if (NativeV34MapStudioBridge.HasExplicitAoMarked)
-                {
-                    double cLat = NativeV34MapStudioBridge.AoCenterLat;
-                    double cLon = NativeV34MapStudioBridge.AoCenterLon;
-                    activeDay.LocationLat = cLat.ToString("F4", System.Globalization.CultureInfo.InvariantCulture);
-                    activeDay.LocationLon = cLon.ToString("F4", System.Globalization.CultureInfo.InvariantCulture);
-
-                    string coordFormatted = NativeV34MapStudioBridge.FormatCoordByActiveMapSystem(cLat, cLon);
-                    string sysName = NativeV34MapStudioBridge.ActiveCoordinateSystem;
-
-                    if (string.IsNullOrWhiteSpace(activeDay.AreaOfInterestPoiDesc) ||
-                        activeDay.AreaOfInterestPoiDesc.Contains("Układ współrzędnych mapy:", StringComparison.OrdinalIgnoreCase))
-                    {
-                        activeDay.AreaOfInterestPoiDesc = "Układ współrzędnych mapy: " + sysName + " | Środek AO: " + coordFormatted;
-                    }
-                }
-                else if (string.IsNullOrWhiteSpace(activeDay.LocationName))
-                {
-                    // Brak zaznaczonego AO i brak wpisanej miejscowosci -> wyczysc domyslne wspolrzedne arkusza!
-                    activeDay.LocationLat = "";
-                    activeDay.LocationLon = "";
-                }
-            }
-            catch { }
-        }
-
-        /// <summary>
-        /// Walidacja METOC: Gdy pole Miejscowosc jest puste i w Generatorze Map 1:1 nie zaznaczono wielokata AO,
-        /// blokuje pobieranie pogody dla domyslnego arkusza mapy i wyswietla komunikat ostrzegawczy.
-        /// </summary>
-        public static bool ValidateAndPrepareMetocBeforeFetch(Window win)
-        {
-            var w = win ?? Application.Current?.MainWindow;
-            NativeV34MapStudioBridge.SyncMapStudioState(w);
-
-            var model = GetLiveOpordModel();
-            if (model == null || model.Days == null || model.Days.Count == 0) return true;
-
-            int activeIdx = Math.Clamp(model.ActiveDayIndex, 0, model.Days.Count - 1);
-            var activeDay = model.Days[activeIdx];
-
-            string locTyped = (activeDay.LocationName ?? "").Trim();
-            bool hasAo = NativeV34MapStudioBridge.HasExplicitAoMarked;
-
-            if (string.IsNullOrWhiteSpace(locTyped) && !hasAo)
-            {
-                activeDay.LocationLat = "";
-                activeDay.LocationLon = "";
-                MessageBox.Show(
-                    "Zaznacz obszar AO w Generatorze Map 1:1 lub wpisz miejscowość",
-                    "METOC — Wymagany obszar AO lub miejscowość",
-                    MessageBoxButton.OK,
-                    MessageBoxImage.Warning);
-                return false;
-            }
-
-            if (string.IsNullOrWhiteSpace(locTyped) && hasAo)
-            {
-                double lat = NativeV34MapStudioBridge.AoCenterLat;
-                double lon = NativeV34MapStudioBridge.AoCenterLon;
-                activeDay.LocationLat = lat.ToString("F4", System.Globalization.CultureInfo.InvariantCulture);
-                activeDay.LocationLon = lon.ToString("F4", System.Globalization.CultureInfo.InvariantCulture);
-                string coordStr = NativeV34MapStudioBridge.FormatCoordByActiveMapSystem(lat, lon);
-                activeDay.LocationName = "Obszar AO (" + NativeV34MapStudioBridge.ActiveCoordinateSystem + ": " + coordStr + ")";
-            }
-
-            return true;
-        }
-    }
-    // [END_NATIVE_V34_OPORD_DATA_ENGINE]
 
 // [START_V34_CLEAN_OPORD_DATA_ENGINE]
     internal static class V34CleanOpordDataEngine
