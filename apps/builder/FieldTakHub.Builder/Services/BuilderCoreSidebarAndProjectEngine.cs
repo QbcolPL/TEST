@@ -1625,6 +1625,7 @@ private static void CaptureAndCollapseTopMenuBar(List<DependencyObject> allEleme
         
             V34CleanFtakAndFactionEngine.ApplyFactionAndPackageFixes(win);
             V34CleanMapStudioBridge.SyncMapStudioState(win);
+            V34CleanUsbProgrammerBridge.SyncUsbProgrammerUi(win);
             V34CleanOpordDataEngine.OnSwitchedToOpordTab(win, modeKey);
         }
 
@@ -4029,4 +4030,77 @@ private static void CaptureAndCollapseTopMenuBar(List<DependencyObject> allEleme
         }
     }
     // [END_V34_CLEAN_MAP_STUDIO_ENGINE]
+
+// [START_V34_CLEAN_USB_BRIDGE]
+    /// <summary>
+    /// Krok 8: Czysta synchronizacja Modułu 4 (Masowy Programator Płytek USB LoRa Meshtastic).
+    /// Synchronizuje selektor stron konfliktu z kartami Generatora Stron (odrzucając śmieciowe wpisy PLI / GeoChat)
+    /// oraz dba o prawidłowy wygląd przycisków portów COM dla płytek Heltec V3 / T-Beam.
+    /// </summary>
+    internal static class V34CleanUsbProgrammerBridge
+    {
+        public static void SyncUsbProgrammerUi(Window win)
+        {
+            try
+            {
+                var w = win ?? Application.Current?.MainWindow;
+                if (w == null) return;
+
+                var all = V34CleanFtakAndFactionEngine.ScanAllWindowRoots(w);
+                var cleanFactionNames = V34CleanOpordDataEngine.GetCleanFactionNames(w);
+
+                foreach (var tb in all.OfType<TextBlock>())
+                {
+                    string txt = (tb.Text ?? "").Trim();
+                    if (txt.Contains("PROGRAMATOR PŁYTEK USB", StringComparison.OrdinalIgnoreCase) ||
+                        txt.Contains("MASOWY PROGRAMATOR", StringComparison.OrdinalIgnoreCase) ||
+                        txt.Contains("USB BOARD PROGRAMMER", StringComparison.OrdinalIgnoreCase))
+                    {
+                        DependencyObject root = LogicalTreeHelper.GetParent(tb) ?? VisualTreeHelper.GetParent(tb);
+                        while (root != null && !(root is StackPanel || root is Grid))
+                        {
+                            root = LogicalTreeHelper.GetParent(root) ?? VisualTreeHelper.GetParent(root);
+                        }
+
+                        if (root != null)
+                        {
+                            var usbElems = V34CleanSidebarAndHeaderEngine.GetLogicalTreeNodes(root);
+                            foreach (var cb in usbElems.OfType<ComboBox>())
+                            {
+                                for (int i = cb.Items.Count - 1; i >= 0; i--)
+                                {
+                                    string itemStr = cb.Items[i]?.ToString() ?? "";
+                                    if (V34CleanOpordDataEngine.IsGarbageFactionName(itemStr))
+                                    {
+                                        cb.Items.RemoveAt(i);
+                                    }
+                                }
+
+                                foreach (string fn in cleanFactionNames)
+                                {
+                                    bool exists = false;
+                                    foreach (var existing in cb.Items)
+                                    {
+                                        if (string.Equals(existing?.ToString(), fn, StringComparison.OrdinalIgnoreCase))
+                                        {
+                                            exists = true;
+                                            break;
+                                        }
+                                    }
+                                    if (!exists) cb.Items.Add(fn);
+                                }
+
+                                if (cb.SelectedItem == null && cb.Items.Count > 0)
+                                {
+                                    cb.SelectedIndex = 0;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            catch { }
+        }
+    }
+    // [END_V34_CLEAN_USB_BRIDGE]
 }
