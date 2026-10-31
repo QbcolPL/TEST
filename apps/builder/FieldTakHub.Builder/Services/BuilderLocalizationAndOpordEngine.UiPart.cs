@@ -2835,7 +2835,7 @@ namespace FieldTakHub.Builder.Services
                 RefineSectionECommsUi(opordElements, activeDay);
 
                 // 6. Punkt rozszerzenia dla Kroku 7 (Załącznik nr 3 Mapa w Sekcji IV oraz eksport Discord)
-                OnExtendOpordSections?.Invoke(w, mainOpordStack, model, activeDay);
+                V34CleanAnnex3AndDiscordEngine.AttachToOpordForm(w, mainOpordStack, model, activeDay);
             }
             catch { }
         }
@@ -3180,4 +3180,404 @@ namespace FieldTakHub.Builder.Services
         }
     }
     // [END_V34_CLEAN_OPORD_UI_TRANSFORMER]
+
+// [START_V34_CLEAN_ANNEX3_DISCORD]
+    internal static class V34CleanAnnex3AndDiscordEngine
+    {
+        public static void AttachToOpordForm(Window win, StackPanel mainStack, OpordParagraphModel model, OpordDayPlanModel activeDay)
+        {
+            if (mainStack == null || activeDay == null) return;
+            try
+            {
+                var allElems = V34CleanSidebarAndHeaderEngine.GetLogicalTreeNodes(mainStack);
+
+                // 1. Podpięcie akcji pod przyciski eksportu rozkazu OPORD (Druk A4, Kopiuj na Discorda, Zapis do paczki .FTAK)
+                foreach (var btn in allElems.OfType<Button>())
+                {
+                    string bt = V34CleanFtakAndFactionEngine.ExtractButtonTextSafe(btn);
+                    if (bt.Contains("Drukuj rozkaz", StringComparison.OrdinalIgnoreCase) ||
+                        bt.Contains("Generuj OPORD", StringComparison.OrdinalIgnoreCase) ||
+                        (bt.Contains("A4", StringComparison.OrdinalIgnoreCase) && !bt.Contains("Safezone", StringComparison.OrdinalIgnoreCase)))
+                    {
+                        btn.PreviewMouseLeftButtonDown += (s, e) =>
+                        {
+                            e.Handled = true;
+                            ExportOpordA4Document(model);
+                        };
+                    }
+                    else if (bt.Contains("Discord", StringComparison.OrdinalIgnoreCase))
+                    {
+                        btn.PreviewMouseLeftButtonDown += (s, e) =>
+                        {
+                            e.Handled = true;
+                            ExportOpordToDiscord(model);
+                        };
+                    }
+                    else if (bt.Contains("FTAK", StringComparison.OrdinalIgnoreCase) ||
+                             bt.Contains("Zapisz rozkaz", StringComparison.OrdinalIgnoreCase))
+                    {
+                        btn.PreviewMouseLeftButtonDown += (s, e) =>
+                        {
+                            e.Handled = true;
+                            ExportOpordToFtakAndA4(model);
+                        };
+                    }
+                }
+
+                // 2. Dodanie na stałe w sekcji IV. LOGISTYKA ORAZ ZAŁĄCZNIKI opcjonalnego Załącznika nr 3 (Mapa na "ptaszek")
+                var sec4Header = allElems.OfType<TextBlock>().FirstOrDefault(t =>
+                    (t.Text ?? "").Contains("IV. LOGISTYKA", StringComparison.OrdinalIgnoreCase) ||
+                    (t.Text ?? "").Contains("IV. SERVICE SUPPORT", StringComparison.OrdinalIgnoreCase) ||
+                    (t.Text ?? "").Contains("ZAŁĄCZNIKI", StringComparison.OrdinalIgnoreCase));
+
+                if (sec4Header != null)
+                {
+                    DependencyObject p = LogicalTreeHelper.GetParent(sec4Header);
+                    while (p != null && !(p is StackPanel)) p = LogicalTreeHelper.GetParent(p);
+                    if (p is StackPanel sec4Stack)
+                    {
+                        bool alreadyAdded = false;
+                        foreach (var child in sec4Stack.Children)
+                        {
+                            if (child is Border b && b.Tag?.ToString() == "V34_ANNEX3_MAP_BOX")
+                            {
+                                alreadyAdded = true;
+                                break;
+                            }
+                        }
+
+                        if (!alreadyAdded)
+                        {
+                            var annex3Box = BuildAnnex3MapBoxUi(win, activeDay);
+                            sec4Stack.Children.Add(annex3Box);
+                        }
+                    }
+                }
+            }
+            catch { }
+        }
+
+        private static Border BuildAnnex3MapBoxUi(Window win, OpordDayPlanModel activeDay)
+        {
+            var cyanBrush = new SolidColorBrush(Color.FromRgb(31, 224, 197));
+            var goldBrush = new SolidColorBrush(Color.FromRgb(250, 208, 44));
+
+            var border = new Border
+            {
+                Tag = "V34_ANNEX3_MAP_BOX",
+                Background = new SolidColorBrush(Color.FromRgb(8, 22, 28)),
+                BorderBrush = cyanBrush,
+                BorderThickness = new Thickness(1.2),
+                CornerRadius = new CornerRadius(6),
+                Padding = new Thickness(12),
+                Margin = new Thickness(0, 10, 0, 4)
+            };
+
+            var st = new StackPanel();
+            var chk = new CheckBox
+            {
+                Content = "☑️ Załącznik 3 (" + activeDay.DayTitle + "): Dołącz mapę operacyjną / szkic AO do rozkazu OPORD",
+                IsChecked = activeDay.IncludeAnnex3Map,
+                Foreground = cyanBrush,
+                FontWeight = FontWeights.Bold,
+                Margin = new Thickness(0, 0, 0, 8),
+                Cursor = System.Windows.Input.Cursors.Hand
+            };
+            st.Children.Add(chk);
+
+            var detailsStack = new StackPanel
+            {
+                Visibility = activeDay.IncludeAnnex3Map ? Visibility.Visible : Visibility.Collapsed
+            };
+
+            var fileRow = new Grid { Margin = new Thickness(0, 0, 0, 6) };
+            fileRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            fileRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(8) });
+            fileRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+            var pathBox = new TextBox
+            {
+                Text = activeDay.Annex3MapImagePath ?? "",
+                Height = 30,
+                VerticalContentAlignment = VerticalAlignment.Center,
+                Padding = new Thickness(8, 2, 8, 2),
+                Background = new SolidColorBrush(Color.FromRgb(13, 33, 41)),
+                Foreground = Brushes.White,
+                BorderBrush = new SolidColorBrush(Color.FromRgb(34, 74, 89))
+            };
+            pathBox.TextChanged += (_, __) => activeDay.Annex3MapImagePath = pathBox.Text;
+            Grid.SetColumn(pathBox, 0);
+            fileRow.Children.Add(pathBox);
+
+            var pickBtn = new Button
+            {
+                Content = "📂 Wybierz plik mapy (.PNG / .JPG)",
+                Height = 30,
+                Padding = new Thickness(12, 4, 12, 4),
+                Background = new SolidColorBrush(Color.FromRgb(22, 54, 66)),
+                Foreground = goldBrush,
+                BorderBrush = goldBrush,
+                BorderThickness = new Thickness(1.2),
+                FontWeight = FontWeights.Bold,
+                Cursor = System.Windows.Input.Cursors.Hand
+            };
+            pickBtn.Click += (_, __) =>
+            {
+                var ofd = new Microsoft.Win32.OpenFileDialog
+                {
+                    Filter = "Obrazy map (*.png;*.jpg;*.jpeg;*.webp;*.bmp)|*.png;*.jpg;*.jpeg;*.webp;*.bmp|Wszystkie pliki (*.*)|*.*"
+                };
+                if (ofd.ShowDialog(win ?? Application.Current?.MainWindow) == true)
+                {
+                    pathBox.Text = ofd.FileName;
+                    activeDay.Annex3MapImagePath = ofd.FileName;
+                }
+            };
+            Grid.SetColumn(pickBtn, 2);
+            fileRow.Children.Add(pickBtn);
+            detailsStack.Children.Add(fileRow);
+
+            var notesBox = new TextBox
+            {
+                Text = activeDay.Annex3MapNotes ?? "Mapa taktyczna 1:5000 MGRS z granicą AO i punktami POI.",
+                Height = 30,
+                VerticalContentAlignment = VerticalAlignment.Center,
+                Padding = new Thickness(8, 2, 8, 2),
+                Background = new SolidColorBrush(Color.FromRgb(13, 33, 41)),
+                Foreground = Brushes.White,
+                BorderBrush = new SolidColorBrush(Color.FromRgb(34, 74, 89))
+            };
+            notesBox.TextChanged += (_, __) => activeDay.Annex3MapNotes = notesBox.Text;
+            detailsStack.Children.Add(notesBox);
+
+            chk.Checked += (_, __) =>
+            {
+                activeDay.IncludeAnnex3Map = true;
+                detailsStack.Visibility = Visibility.Visible;
+            };
+            chk.Unchecked += (_, __) =>
+            {
+                activeDay.IncludeAnnex3Map = false;
+                detailsStack.Visibility = Visibility.Collapsed;
+            };
+
+            st.Children.Add(detailsStack);
+            border.Child = st;
+            return border;
+        }
+
+        public static List<OpordDayPlanModel> GetDaysForExport(OpordParagraphModel model)
+        {
+            if (model == null || model.Days == null) return new List<OpordDayPlanModel>();
+            var selected = model.Days.Where(d => d.IncludeInExport).ToList();
+            if (selected.Count == 0 && model.Days.Count > 0)
+            {
+                int idx = Math.Clamp(model.ActiveDayIndex, 0, model.Days.Count - 1);
+                selected.Add(model.Days[idx]);
+            }
+            return selected;
+        }
+
+        public static string ExportOpordA4Document(OpordParagraphModel model)
+        {
+            if (model == null) return "";
+            V34CleanOpordDataEngine.SyncFactionsAndMapToOpordModel(null);
+
+            string outDir = V34CleanFtakAndFactionEngine.EnsureFactionOutputDir(model.TargetFaction);
+            string htmlPath = Path.Combine(outDir, "OPORD_A4_" + V34CleanFtakAndFactionEngine.SanitizeFolderName(model.TargetFaction) + ".html");
+
+            var days = GetDaysForExport(model);
+            var sb = new StringBuilder();
+
+            sb.AppendLine("<!DOCTYPE html><html><head><meta charset='utf-8'/>");
+            sb.AppendLine("<title>OPORD — " + System.Net.WebUtility.HtmlEncode(model.EventName) + " (" + System.Net.WebUtility.HtmlEncode(model.TargetFaction) + ")</title>");
+            sb.AppendLine("<style>");
+            sb.AppendLine("@page { size: A4 portrait; margin: 12mm; }");
+            sb.AppendLine("body { font-family: 'Segoe UI', Arial, sans-serif; background: #060D10; color: #E8F1F5; margin: 0; padding: 16px; font-size: 12px; line-height: 1.45; }");
+            sb.AppendLine(".page { max-width: 190mm; margin: 0 auto 24px auto; background: #0A151B; border: 2px solid #1FE0C5; border-radius: 8px; padding: 16px 20px; page-break-after: always; }");
+            sb.AppendLine(".banner { text-align: center; padding: 6px; font-weight: bold; background: #122B36; color: #FAD02C; border: 1px solid #FAD02C; margin-bottom: 12px; letter-spacing: 1px; }");
+            sb.AppendLine("h1 { margin: 0 0 6px 0; font-size: 20px; color: #1FE0C5; }");
+            sb.AppendLine("h2 { margin: 14px 0 6px 0; font-size: 14px; color: #FAD02C; border-bottom: 1px solid #1B3B4B; padding-bottom: 3px; text-transform: uppercase; }");
+            sb.AppendLine("h3 { margin: 10px 0 4px 0; font-size: 12.5px; color: #1FE0C5; }");
+            sb.AppendLine(".box { background: #081218; border: 1px solid #1B3B4B; border-radius: 5px; padding: 8px 10px; margin-bottom: 8px; white-space: pre-wrap; font-family: Consolas, monospace; font-size: 11.5px; }");
+            sb.AppendLine(".prose-box { background: #081218; border: 1px solid #1B3B4B; border-radius: 5px; padding: 8px 10px; margin-bottom: 8px; white-space: pre-wrap; }");
+            sb.AppendLine("table { width: 100%; border-collapse: collapse; margin: 6px 0 10px 0; font-size: 11.5px; }");
+            sb.AppendLine("th, td { border: 1px solid #1B3B4B; padding: 5px 8px; text-align: left; }");
+            sb.AppendLine("th { background: #102530; color: #1FE0C5; }");
+            sb.AppendLine("@media print { body { background: #fff; color: #000; padding: 0; } .page { background: #fff; color: #000; border: 1px solid #000; margin: 0; } .box, .prose-box { background: #f8f8f8; color: #000; border-color: #888; } th { background: #eee; color: #000; } th, td { border-color: #666; } h1, h2, h3 { color: #000; } .no-print { display: none; } }");
+            sb.AppendLine("</style></head><body>");
+
+            sb.AppendLine("<div class='no-print' style='text-align:center;margin-bottom:14px;'>");
+            sb.AppendLine("<button onclick='window.print()' style='padding:10px 24px;background:#1FE0C5;color:#051014;font-weight:bold;border:none;border-radius:6px;cursor:pointer;'>🖨️ DRUKUJ ROZKAZ OPORD A4 / ZAPISZ JAKO PDF</button>");
+            sb.AppendLine("</div>");
+
+            foreach (var day in days)
+            {
+                sb.AppendLine("<div class='page'>");
+                sb.AppendLine("<div class='banner'>" + System.Net.WebUtility.HtmlEncode(day.Classification) + "</div>");
+                sb.AppendLine("<h1>📋 " + System.Net.WebUtility.HtmlEncode(day.OperationNumber) + " — " + System.Net.WebUtility.HtmlEncode(model.EventName) + "</h1>");
+                sb.AppendLine("<p style='margin:2px 0 10px 0;'><b>STRONA:</b> " + System.Net.WebUtility.HtmlEncode(model.TargetFaction) +
+                              " &nbsp;|&nbsp; <b>DZIEŃ:</b> " + System.Net.WebUtility.HtmlEncode(day.DayTitle) + " (" + System.Net.WebUtility.HtmlEncode(day.DateIso) + ")" +
+                              " &nbsp;|&nbsp; <b>HQ:</b> " + System.Net.WebUtility.HtmlEncode(day.IssuingHq) + "</p>");
+
+                sb.AppendLine("<h2>I. SYTUACJA</h2>");
+                sb.AppendLine("<h3>A. Siły Przeciwnika:</h3><div class='prose-box'>" + System.Net.WebUtility.HtmlEncode(day.EnemyForces) + "</div>");
+                sb.AppendLine("<h3>B. Siły Własne:</h3><div class='prose-box'>" + System.Net.WebUtility.HtmlEncode(day.FriendlyForces) + "</div>");
+                sb.AppendLine("<h3>B.1. Teren i Pogoda (METOC):</h3><div class='box'>" + System.Net.WebUtility.HtmlEncode(string.IsNullOrWhiteSpace(day.TerrainAndWeather) ? day.MetocQuickSummary : day.TerrainAndWeather) + "</div>");
+                sb.AppendLine("<h3>C. Obszar Operacji (AO) i Punkty POI:</h3><div class='box'>" + System.Net.WebUtility.HtmlEncode(day.AreaOfInterestPoiDesc) + "</div>");
+
+                sb.AppendLine("<h2>II. MISJA (5W)</h2>");
+                sb.AppendLine("<div class='prose-box' style='border-color:#FAD02C;font-weight:bold;'>" + System.Net.WebUtility.HtmlEncode(day.MissionFullStatement) + "</div>");
+
+                sb.AppendLine("<h2>III. WYKONANIE</h2>");
+                sb.AppendLine("<h3>A. Zamiar Dowódcy:</h3><div class='prose-box'>" + System.Net.WebUtility.HtmlEncode(day.CommandersIntent) + "</div>");
+                sb.AppendLine("<h3>B. Harmonogram (" + System.Net.WebUtility.HtmlEncode(day.DayTitle) + "):</h3><div class='box'>" + System.Net.WebUtility.HtmlEncode(day.DaySpecificTasks) + "</div>");
+                sb.AppendLine("<h3>C. Koordynacja:</h3><div class='prose-box'>" + System.Net.WebUtility.HtmlEncode(day.CoordinationMeasures) + "</div>");
+
+                if (day.SquadRoster != null && day.SquadRoster.Count > 0)
+                {
+                    sb.AppendLine("<h3>D. Tabela Składu Oddziału i Ról:</h3>");
+                    sb.AppendLine("<table><thead><tr><th>Kryptonim</th><th>Rola Główna</th><th>Rola Zapasowa</th><th>Wyposażenie</th></tr></thead><tbody>");
+                    foreach (var m in day.SquadRoster)
+                    {
+                        sb.AppendLine("<tr><td><b>" + System.Net.WebUtility.HtmlEncode(m.Callsign) + "</b></td><td>" +
+                                      System.Net.WebUtility.HtmlEncode(m.PrimaryRole) + "</td><td>" +
+                                      System.Net.WebUtility.HtmlEncode(m.SecondaryRole) + "</td><td>" +
+                                      System.Net.WebUtility.HtmlEncode(m.GearAndTasks) + "</td></tr>");
+                    }
+                    sb.AppendLine("</tbody></table>");
+                }
+
+                sb.AppendLine("<h2>V. DOWODZENIE I ŁĄCZNOŚĆ</h2>");
+                sb.AppendLine("<h3>E. Tabela Łączności (Z Generatora Stron):</h3>");
+                sb.AppendLine("<div class='box'>" + System.Net.WebUtility.HtmlEncode(day.SyncedCommsMatrixSummary) + "</div>");
+
+                if (day.IncludeCustomChannelsTable && !string.IsNullOrWhiteSpace(day.CustomChannelsTableText))
+                {
+                    sb.AppendLine("<h3>E.1. Dodatkowe kanały wpisane ręcznie:</h3>");
+                    sb.AppendLine("<div class='box'>" + System.Net.WebUtility.HtmlEncode(day.CustomChannelsTableText) + "</div>");
+                }
+
+                sb.AppendLine("<h3>F.1. Krypto SARNEG i Hasła:</h3>");
+                sb.AppendLine("<div class='box'><b>Słowo SARNEG:</b> " + System.Net.WebUtility.HtmlEncode(day.SarnegKeyWord10) +
+                              "\n<b>Hasła:</b> " + System.Net.WebUtility.HtmlEncode(day.ChallengeAndPassword) +
+                              "\n<b>Kryptonimy:</b> " + System.Net.WebUtility.HtmlEncode(day.TargetCodeNames) +
+                              "\n<b>Dowodzenie:</b> " + System.Net.WebUtility.HtmlEncode(day.SuccessionOfCommand) + "</div>");
+
+                sb.AppendLine("<h2>IV. LOGISTYKA ORAZ ZAŁĄCZNIKI</h2>");
+                sb.AppendLine("<h3>A. Zasady MEDEVAC:</h3><div class='prose-box'>" + System.Net.WebUtility.HtmlEncode(day.MedevacRules) + "</div>");
+                sb.AppendLine("<h3>B. Szpejlista:</h3><div class='prose-box'>" + System.Net.WebUtility.HtmlEncode(day.SquadGearChecklist) + "</div>");
+
+                if (day.IncludeAnnex3Map && !string.IsNullOrWhiteSpace(day.Annex3MapImagePath) && File.Exists(day.Annex3MapImagePath))
+                {
+                    sb.AppendLine("<h2>ZAŁĄCZNIK 3 — MAPA OPERACYJNA (" + System.Net.WebUtility.HtmlEncode(day.DayTitle) + ")</h2>");
+                    if (!string.IsNullOrWhiteSpace(day.Annex3MapNotes))
+                        sb.AppendLine("<div class='prose-box'>" + System.Net.WebUtility.HtmlEncode(day.Annex3MapNotes) + "</div>");
+                    try
+                    {
+                        byte[] bytes = File.ReadAllBytes(day.Annex3MapImagePath);
+                        string ext = Path.GetExtension(day.Annex3MapImagePath).ToLowerInvariant();
+                        string mime = (ext == ".jpg" || ext == ".jpeg") ? "image/jpeg" : "image/png";
+                        sb.AppendLine("<div style='text-align:center;margin-top:8px;'><img src='data:" + mime + ";base64," +
+                                      Convert.ToBase64String(bytes) + "' style='max-width:100%;max-height:200mm;border:2px solid #1FE0C5;'/></div>");
+                    }
+                    catch { }
+                }
+
+                sb.AppendLine("<div class='banner' style='margin-top:14px;'>" + System.Net.WebUtility.HtmlEncode(day.Classification) + "</div>");
+                sb.AppendLine("</div>");
+            }
+
+            sb.AppendLine("</body></html>");
+            File.WriteAllText(htmlPath, sb.ToString(), Encoding.UTF8);
+            try { Process.Start(new ProcessStartInfo(htmlPath) { UseShellExecute = true }); } catch { }
+            return htmlPath;
+        }
+
+        public static void ExportOpordToDiscord(OpordParagraphModel model)
+        {
+            if (model == null) return;
+            V34CleanOpordDataEngine.SyncFactionsAndMapToOpordModel(null);
+
+            var chunks = new List<string>();
+            var days = GetDaysForExport(model);
+
+            foreach (var d in days)
+            {
+                var p1 = new StringBuilder();
+                p1.AppendLine("## 📋 " + d.OperationNumber + " | " + model.TargetFaction + " — " + d.DayTitle + " (" + d.DateIso + ")");
+                p1.AppendLine("`" + d.Classification + "` | **HQ:** " + d.IssuingHq + " | **AO:** " + (string.IsNullOrWhiteSpace(d.LocationName) ? "Map AO" : d.LocationName));
+                p1.AppendLine("**🌦️ METOC:** " + CompactLine(string.IsNullOrWhiteSpace(d.TerrainAndWeather) ? d.MetocQuickSummary : d.TerrainAndWeather));
+                p1.AppendLine("**🎯 II. MISJA (5W):**\n> " + d.MissionFullStatement);
+                p1.AppendLine("**⚡ III. ZAMIAR:** " + d.CommandersIntent);
+                p1.AppendLine("**⏱️ HARMONOGRAM:** " + CompactLine(d.DaySpecificTasks));
+
+                var p2 = new StringBuilder();
+                p2.AppendLine("### 📡 ŁĄCZNOŚĆ & SARNEG — " + d.DayTitle + " (" + model.TargetFaction + ")");
+                if (!string.IsNullOrWhiteSpace(d.SyncedCommsMatrixSummary))
+                    p2.AppendLine("```text\n" + d.SyncedCommsMatrixSummary + "\n```");
+                if (d.IncludeCustomChannelsTable && !string.IsNullOrWhiteSpace(d.CustomChannelsTableText))
+                    p2.AppendLine("**➕ Dodatkowe kanały:**\n" + d.CustomChannelsTableText);
+
+                p2.AppendLine("**🔐 SARNEG:** `" + d.SarnegKeyWord10 + "` | **Hasła:** " + d.ChallengeAndPassword);
+                p2.AppendLine("**🚑 MEDEVAC:** " + d.MedevacRules + " | **Szpej:** " + d.SquadGearChecklist);
+
+                string s1 = p1.ToString().Trim();
+                string s2 = p2.ToString().Trim();
+
+                if (s1.Length + s2.Length + 2 <= 1850)
+                {
+                    chunks.Add(s1 + "\n\n" + s2);
+                }
+                else
+                {
+                    chunks.Add(s1);
+                    chunks.Add(s2);
+                }
+            }
+
+            string finalMd = string.Empty;
+            if (chunks.Count == 1) finalMd = chunks[0];
+            else
+            {
+                var sb = new StringBuilder();
+                for (int i = 0; i < chunks.Count; i++)
+                {
+                    if (i > 0) sb.AppendLine("\n--- ✂️ [WIADOMOŚĆ " + (i + 1) + "/" + chunks.Count + "] ✂️ ---\n");
+                    sb.AppendLine(chunks[i]);
+                }
+                finalMd = sb.ToString();
+            }
+
+            if (!string.IsNullOrWhiteSpace(finalMd))
+            {
+                Clipboard.SetText(finalMd);
+                MessageBox.Show(
+                    "✅ Skopiowano skondensowany rozkaz OPORD bezpośrednio do schowka!\n" +
+                    "Liczba wiadomości Discord (<1900 zn.): " + chunks.Count + "\n\n" +
+                    "Wklej na kanał Discord kombinacją Ctrl + V.",
+                    "💬 Kopiuj na Discorda",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Information);
+            }
+        }
+
+        public static void ExportOpordToFtakAndA4(OpordParagraphModel model)
+        {
+            string htmlPath = ExportOpordA4Document(model);
+            V34CleanFtakAndFactionEngine.EnsureSharedFolderStructure();
+            MessageBox.Show(
+                "💾 Zapisano rozkaz OPORD oraz zaktualizowano paczkę .FTAK dla strony '" + model.TargetFaction + "':\n" + htmlPath,
+                "OPORD -> .FTAK",
+                MessageBoxButton.OK,
+                MessageBoxImage.Information);
+        }
+
+        private static string CompactLine(string text)
+        {
+            if (string.IsNullOrWhiteSpace(text)) return "-";
+            return string.Join(" • ", text.Split(new char[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries).Select(x => x.Trim()).Where(x => x.Length > 0));
+        }
+    }
+    // [END_V34_CLEAN_ANNEX3_DISCORD]
 }
