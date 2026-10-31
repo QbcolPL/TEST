@@ -1991,7 +1991,7 @@ namespace FieldTakHub.Builder.Services
 
 
 // [START_V34_CLEAN_OPORD_DATA_ENGINE]
-    internal static class V34CleanOpordDataEngine
+    public static class V34CleanOpordDataEngine
     {
         private static bool _isRefreshingOpord;
 

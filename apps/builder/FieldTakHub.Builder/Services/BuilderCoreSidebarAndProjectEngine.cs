@@ -1865,7 +1865,7 @@ private static void CaptureAndCollapseTopMenuBar(List<DependencyObject> allEleme
 
 
 // [START_V34_CLEAN_SIDEBAR_ENGINE]
-    internal static class V34CleanSidebarAndHeaderEngine
+    public static class V34CleanSidebarAndHeaderEngine
     {
         public static event Action<Window> OnApplyAdditionalModuleFixes;
 
@@ -2142,7 +2142,7 @@ private static void CaptureAndCollapseTopMenuBar(List<DependencyObject> allEleme
 
 
 // [START_V34_CLEAN_FTAK_ENGINE]
-    internal sealed class V34FactionVoiceChannelRow
+    public sealed class V34FactionVoiceChannelRow
     {
         public string Role { get; set; } = "Dowodzenie HQ";
         public string Band { get; set; } = "PMR";
@@ -2150,7 +2150,7 @@ private static void CaptureAndCollapseTopMenuBar(List<DependencyObject> allEleme
         public string Tone { get; set; } = "CTCSS 67.0 Hz";
     }
 
-    internal sealed class V34FactionSnapshot
+    public sealed class V34FactionSnapshot
     {
         public string FactionName { get; set; } = "ORGA";
         public string ColorHex { get; set; } = "#2684FF";
@@ -2163,7 +2163,7 @@ private static void CaptureAndCollapseTopMenuBar(List<DependencyObject> allEleme
         public List<V34FactionVoiceChannelRow> VoiceRows { get; set; } = new List<V34FactionVoiceChannelRow>();
     }
 
-    internal static class V34CleanFtakAndFactionEngine
+    public static class V34CleanFtakAndFactionEngine
     {
         private static readonly string[] TacticalRgbPalette = new string[]
         {
@@ -2768,7 +2768,7 @@ private static void CaptureAndCollapseTopMenuBar(List<DependencyObject> allEleme
     /// Weryfikuje, czy użytkownik faktycznie wyznaczył wielokąt AO lub punkty POI na mapie (blokując pobieranie METOC
     /// dla samego pustego arkusza mapy) oraz konwertuje współrzędne na wybrany w Studio Map układ (MGRS / UTM / DMS / WGS84).
     /// </summary>
-    internal static class V34CleanMapStudioBridge
+    public static class V34CleanMapStudioBridge
     {
         private static readonly string[] MgrsCols = { "ABCDEFGH", "JKLMNPQR", "STUVWXYZ" };
         private static readonly string[] MgrsRows = { "ABCDEFGHJKLMNPQRSTUV", "FGHJKLMNPQRSTUVABCDE" };
@@ -2937,7 +2937,7 @@ private static void CaptureAndCollapseTopMenuBar(List<DependencyObject> allEleme
     /// Synchronizuje selektor stron konfliktu z kartami Generatora Stron (odrzucając śmieciowe wpisy PLI / GeoChat)
     /// oraz dba o prawidłowy wygląd przycisków portów COM dla płytek Heltec V3 / T-Beam.
     /// </summary>
-    internal static class V34CleanUsbProgrammerBridge
+    public static class V34CleanUsbProgrammerBridge
     {
         public static void SyncUsbProgrammerUi(Window win)
         {

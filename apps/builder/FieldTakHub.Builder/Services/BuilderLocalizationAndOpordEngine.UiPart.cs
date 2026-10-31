@@ -1730,7 +1730,7 @@ namespace FieldTakHub.Builder.Services
 
 
 // [START_V34_CLEAN_OPORD_UI_TRANSFORMER]
-    internal static class V34CleanOpordUiTransformer
+    public static class V34CleanOpordUiTransformer
     {
         
 
@@ -2269,7 +2269,7 @@ namespace FieldTakHub.Builder.Services
     // [END_V34_CLEAN_OPORD_UI_TRANSFORMER]
 
 // [START_V34_CLEAN_ANNEX3_DISCORD]
-    internal static class V34CleanAnnex3AndDiscordEngine
+    public static class V34CleanAnnex3AndDiscordEngine
     {
         public static void AttachToOpordForm(Window win, StackPanel mainStack, OpordParagraphModel model, OpordDayPlanModel activeDay)
         {

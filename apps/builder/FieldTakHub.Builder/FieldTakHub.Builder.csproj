@@ -26,4 +26,8 @@
     <Resource Include="Assets\tak-field-hub-builder.ico" />
       <None Include="update-config.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="FieldTakHub.Builder.Tests" />
+  </ItemGroup>
 </Project>
