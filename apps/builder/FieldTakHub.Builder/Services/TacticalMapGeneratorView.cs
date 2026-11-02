@@ -2854,6 +2854,30 @@ namespace FieldTakHub.Builder.Services
             AddResizeThumb(HorizontalAlignment.Right, VerticalAlignment.Bottom, 11, 11, Cursors.SizeNWSE, 1, 1);
         }
 
+                public static byte[] CaptureCurrentMapSheetForOpordAnnex3Png(Window win = null)
+        {
+            try
+            {
+                var w = win ?? _hostWindow ?? Application.Current?.MainWindow;
+                if (_mapCompositeGrid == null && w != null)
+                {
+                    AttachFullScreenTab(w);
+                }
+                if (_mapCompositeGrid != null)
+                {
+                    var (cw, ch) = GetExactCanvasSize();
+                    if (_mapCompositeGrid.ActualWidth < 100 || _mapCompositeGrid.ActualHeight < 100)
+                    {
+                        _mapCompositeGrid.Measure(new Size(cw, ch));
+                        _mapCompositeGrid.Arrange(new Rect(0, 0, cw, ch));
+                    }
+                    return CaptureMapCanvasPngBytes();
+                }
+            }
+            catch { }
+            return null;
+        }
+
         private static byte[] CaptureMapCanvasPngBytes()
         {
             var (cw, ch) = GetExactCanvasSize();

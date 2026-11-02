@@ -1855,7 +1855,7 @@ namespace FieldTakHub.Builder.Services
                 // 4. Zalacznik 3 i integracja eksportu
                 if (model != null && activeDay != null)
                 {
-                    V34CleanAnnex3AndDiscordEngine.AttachToOpordForm(w, mainOpordStack, model, activeDay);
+                    V34CleanAnnex3AndDiscordEngine.AttachToOpordForm(w, mainOpordStack, model, activeDay, activeFactionName);
                 }
             }
             catch { }
@@ -2079,9 +2079,63 @@ namespace FieldTakHub.Builder.Services
             }
         }
 
+        private static Border CreateConsistentOpordSquareActionBtn(string symbol, bool isPlus, string toolTipText, Brush refMinusBg, Brush refMinusBorder, Action onClick)
+        {
+            Brush bgBrush = isPlus
+                ? new SolidColorBrush(Color.FromRgb(16, 52, 34))
+                : (refMinusBg ?? new SolidColorBrush(Color.FromRgb(55, 18, 22)));
+            Brush borderBrush = isPlus
+                ? new SolidColorBrush(Color.FromRgb(46, 204, 113))
+                : (refMinusBorder ?? new SolidColorBrush(Color.FromRgb(235, 64, 52)));
+
+            var box = new Border
+            {
+                Width = 28,
+                Height = 26,
+                CornerRadius = new CornerRadius(4),
+                Background = bgBrush,
+                BorderBrush = borderBrush,
+                BorderThickness = new Thickness(1.3),
+                Cursor = Cursors.Hand,
+                VerticalAlignment = VerticalAlignment.Center,
+                HorizontalAlignment = HorizontalAlignment.Center,
+                ToolTip = toolTipText,
+                Child = new TextBlock
+                {
+                    Text = symbol,
+                    Foreground = Brushes.White,
+                    FontSize = 14,
+                    FontWeight = FontWeights.Bold,
+                    HorizontalAlignment = HorizontalAlignment.Center,
+                    VerticalAlignment = VerticalAlignment.Center,
+                    Margin = new Thickness(0, -1, 0, 0)
+                }
+            };
+            box.MouseLeftButtonDown += (_, e) =>
+            {
+                e.Handled = true;
+                onClick?.Invoke();
+            };
+            return box;
+        }
+
         private static void RebuildCommunicationsTableSection(Window win, StackPanel mainOpordStack, string activeFactionName, OpordDayPlanModel activeDay, Action rebuildCallback)
         {
             SyncChannelsIntoDayModel(activeFactionName, activeDay);
+
+            // Pobierz dokladny pedzel tla i ramki przycisku "-" z Sekcji D (Tabela Skladu Oddzialu), aby zachowac 100% spojnosci UI
+            Brush sectionDMinusBg = new SolidColorBrush(Color.FromRgb(55, 18, 22));
+            Brush sectionDMinusBorder = new SolidColorBrush(Color.FromRgb(235, 64, 52));
+            foreach (var existingBtn in V34CleanSidebarAndHeaderEngine.GetLogicalTreeNodes(mainOpordStack).OfType<Button>())
+            {
+                string cTxt = (existingBtn.Content?.ToString() ?? "").Trim();
+                if ((cTxt == "-" || cTxt == "\u2212") && existingBtn.Background != null && existingBtn.BorderBrush != null)
+                {
+                    sectionDMinusBg = existingBtn.Background;
+                    sectionDMinusBorder = existingBtn.BorderBrush;
+                    break;
+                }
+            }
 
             foreach (var border in mainOpordStack.Children.OfType<Border>())
             {
@@ -2093,7 +2147,6 @@ namespace FieldTakHub.Builder.Services
                 var secStack = border.Child as StackPanel;
                 if (secStack == null) continue;
 
-                // Znajdz naglowek "E. Tabela lacznosci" i ukryj stare 3 pola pod nim
                 int insertIndex = -1;
                 for (int i = 0; i < secStack.Children.Count; i++)
                 {
@@ -2111,7 +2164,6 @@ namespace FieldTakHub.Builder.Services
                     }
                 }
 
-                // Usun poprzednia instancje przebudowanej karty, jesli istnieje
                 for (int i = secStack.Children.Count - 1; i >= 0; i--)
                 {
                     if ((secStack.Children[i] as FrameworkElement)?.Tag?.ToString() == "REMODELED_OPORD_COMMS_CARD")
@@ -2143,6 +2195,8 @@ namespace FieldTakHub.Builder.Services
                 var cStack = new StackPanel();
 
                 var hdrDock = new DockPanel { Margin = new Thickness(0, 0, 0, 6) };
+                var rightHeaderControls = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+
                 var chkManual = new CheckBox
                 {
                     Content = "\u270F\uFE0F Wprowad\u017A / edytuj cz\u0119stotliwo\u015Bci r\u0119cznie",
@@ -2151,6 +2205,7 @@ namespace FieldTakHub.Builder.Services
                     FontWeight = FontWeights.Bold,
                     FontSize = 10.5,
                     VerticalAlignment = VerticalAlignment.Center,
+                    Margin = new Thickness(0, 0, isManual ? 10 : 0, 0),
                     Cursor = Cursors.Hand,
                     ToolTip = "Zaznacz ten ptaszek, je\u015Bli chcesz r\u0119cznie edytowa\u0107 lub doda\u0107 cz\u0119stotliwo\u015Bci w OPORD. Gdy odznaczony, tabela pobiera wszystkie kana\u0142y automatycznie z Generatora Stron."
                 };
@@ -2166,8 +2221,40 @@ namespace FieldTakHub.Builder.Services
                     SyncChannelsIntoDayModel(activeFactionName, activeDay);
                     rebuildCallback?.Invoke();
                 };
-                DockPanel.SetDock(chkManual, Dock.Right);
-                hdrDock.Children.Add(chkManual);
+                rightHeaderControls.Children.Add(chkManual);
+
+                if (isManual)
+                {
+                    var btnTopPlus = CreateConsistentOpordSquareActionBtn("+", true, "Dodaj nowy wiersz kana\u0142u", sectionDMinusBg, sectionDMinusBorder, () =>
+                    {
+                        channels.Add(new OpordManualChannelItem
+                        {
+                            RoleName = $"Kana\u0142 {channels.Count + 1}",
+                            BandType = "PMR",
+                            FreqMhz = $"CH {Math.Clamp(channels.Count + 1, 1, 16)}",
+                            ToneOrCode = "CTCSS 67.0 Hz"
+                        });
+                        SyncChannelsIntoDayModel(activeFactionName, activeDay);
+                        rebuildCallback?.Invoke();
+                    });
+                    btnTopPlus.Margin = new Thickness(0, 0, 4, 0);
+
+                    var btnTopMinus = CreateConsistentOpordSquareActionBtn("\u2212", false, "Usu\u0144 ostatni wiersz kana\u0142u", sectionDMinusBg, sectionDMinusBorder, () =>
+                    {
+                        if (channels.Count > 1)
+                        {
+                            channels.RemoveAt(channels.Count - 1);
+                            SyncChannelsIntoDayModel(activeFactionName, activeDay);
+                            rebuildCallback?.Invoke();
+                        }
+                    });
+
+                    rightHeaderControls.Children.Add(btnTopPlus);
+                    rightHeaderControls.Children.Add(btnTopMinus);
+                }
+
+                DockPanel.SetDock(rightHeaderControls, Dock.Right);
+                hdrDock.Children.Add(rightHeaderControls);
 
                 hdrDock.Children.Add(new TextBlock
                 {
@@ -2179,7 +2266,6 @@ namespace FieldTakHub.Builder.Services
                 });
                 cStack.Children.Add(hdrDock);
 
-                // Pasek parametrow cyfrowych (LoRa Meshtastic + OTS + SOS)
                 var digitalInfoBorder = new Border
                 {
                     Background = TacticalConfigPanel.BrushInputBg,
@@ -2199,14 +2285,13 @@ namespace FieldTakHub.Builder.Services
                 };
                 cStack.Children.Add(digitalInfoBorder);
 
-                // Naglowek kolumn tabeli kanalow glosowych
                 var tblHdr = new Grid { Margin = new Thickness(0, 0, 0, 4) };
                 tblHdr.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(32) });
                 tblHdr.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1.3, GridUnitType.Star) });
                 tblHdr.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(95) });
                 tblHdr.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1.4, GridUnitType.Star) });
                 tblHdr.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1.2, GridUnitType.Star) });
-                tblHdr.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(isManual ? 30 : 0) });
+                tblHdr.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(isManual ? 36 : 0) });
 
                 void AddColTitle(string txt, int col)
                 {
@@ -2232,7 +2317,7 @@ namespace FieldTakHub.Builder.Services
                     rowGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(95) });
                     rowGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1.4, GridUnitType.Star) });
                     rowGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1.2, GridUnitType.Star) });
-                    rowGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(isManual ? 30 : 0) });
+                    rowGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(isManual ? 36 : 0) });
 
                     var lpBadge = new Border
                     {
@@ -2320,39 +2405,16 @@ namespace FieldTakHub.Builder.Services
 
                     if (isManual)
                     {
-                        var btnDel = new Border
+                        var btnDel = CreateConsistentOpordSquareActionBtn("\u2212", false, $"Usu\u0144 kana\u0142: {chItem.RoleName}", sectionDMinusBg, sectionDMinusBorder, () =>
                         {
-                            Width = 26,
-                            Height = 24,
-                            CornerRadius = new CornerRadius(5),
-                            Background = TacticalConfigPanel.BrushRedMinus,
-                            BorderBrush = Brushes.White,
-                            BorderThickness = new Thickness(1),
-                            Cursor = Cursors.Hand,
-                            VerticalAlignment = VerticalAlignment.Center,
-                            HorizontalAlignment = HorizontalAlignment.Center,
-                            ToolTip = "Usu\u0144 ten kana\u0142",
-                            Child = new TextBlock
-                            {
-                                Text = "\u2212",
-                                Foreground = Brushes.White,
-                                FontSize = 15,
-                                FontWeight = FontWeights.Bold,
-                                HorizontalAlignment = HorizontalAlignment.Center,
-                                VerticalAlignment = VerticalAlignment.Center,
-                                Margin = new Thickness(0, -2, 0, 0)
-                            }
-                        };
-                        btnDel.MouseLeftButtonDown += (_, e) =>
-                        {
-                            e.Handled = true;
                             if (channels.Count > 1)
                             {
                                 channels.Remove(chItem);
                                 SyncChannelsIntoDayModel(activeFactionName, activeDay);
                                 rebuildCallback?.Invoke();
                             }
-                        };
+                        });
+                        btnDel.HorizontalAlignment = HorizontalAlignment.Right;
                         Grid.SetColumn(btnDel, 5);
                         rowGrid.Children.Add(btnDel);
                     }
@@ -2369,10 +2431,10 @@ namespace FieldTakHub.Builder.Services
                         Height = 26,
                         Padding = new Thickness(12, 0, 12, 0),
                         Margin = new Thickness(0, 0, 8, 0),
-                        Background = TacticalConfigPanel.BrushGreenPlus,
+                        Background = new SolidColorBrush(Color.FromRgb(16, 52, 34)),
                         Foreground = Brushes.White,
-                        BorderBrush = Brushes.White,
-                        BorderThickness = new Thickness(1),
+                        BorderBrush = new SolidColorBrush(Color.FromRgb(46, 204, 113)),
+                        BorderThickness = new Thickness(1.2),
                         FontSize = 10,
                         FontWeight = FontWeights.Bold,
                         Cursor = Cursors.Hand
@@ -2438,401 +2500,355 @@ namespace FieldTakHub.Builder.Services
     // [END_V34_CLEAN_OPORD_UI_TRANSFORMER]
 
 // [START_V34_CLEAN_ANNEX3_DISCORD]
+    public sealed class OpordAnnex3State
+    {
+        public bool Enabled { get; set; } = false;
+        public string MapTitle { get; set; } = "Mapa taktyczna rejonu dzia\u0142a\u0144 (AO) \u2014 Arkusz sztabowy";
+        public string MapNotes { get; set; } = "Siatka wsp\u00F3\u0142rz\u0119dnych, granica terenu gry (AO) oraz punkty charakterystyczne zgodnie z legend\u0105 mapy.";
+        public string ImageBase64 { get; set; } = "";
+        public string ImageMimeType { get; set; } = "image/png";
+        public string SourceLabel { get; set; } = "Brak wczytanej mapy (kliknij 'Pobierz aktualn\u0105 map\u0119 z Generatora Map 1:1' lub 'Wczytaj plik mapy z dysku')";
+        public int PixelWidth { get; set; }
+        public int PixelHeight { get; set; }
+    }
+
     internal static class V34CleanAnnex3AndDiscordEngine
     {
-        public static void AttachToOpordForm(Window win, StackPanel mainStack, OpordParagraphModel model, OpordDayPlanModel activeDay)
+        private static readonly Dictionary<string, OpordAnnex3State> Annex3ByFaction = new Dictionary<string, OpordAnnex3State>(StringComparer.OrdinalIgnoreCase);
+
+        public static OpordAnnex3State GetOrCreateState(string factionName)
         {
-            if (mainStack == null || activeDay == null) return;
-            try
+            string key = string.IsNullOrWhiteSpace(factionName) ? "BLUFOR" : factionName.Trim();
+            if (!Annex3ByFaction.TryGetValue(key, out var st) || st == null)
             {
-                var allElems = V34CleanSidebarAndHeaderEngine.GetLogicalTreeNodes(mainStack);
-
-                // 1. Podpięcie akcji pod przyciski eksportu rozkazu OPORD (Druk A4, Kopiuj na Discorda, Zapis do paczki .FTAK)
-                foreach (var btn in allElems.OfType<Button>())
-                {
-                    string bt = V34CleanFtakAndFactionEngine.ExtractButtonTextSafe(btn);
-                    if (bt.Contains("Drukuj rozkaz", StringComparison.OrdinalIgnoreCase) ||
-                        bt.Contains("Generuj OPORD", StringComparison.OrdinalIgnoreCase) ||
-                        (bt.Contains("A4", StringComparison.OrdinalIgnoreCase) && !bt.Contains("Safezone", StringComparison.OrdinalIgnoreCase)))
-                    {
-                        btn.PreviewMouseLeftButtonDown += (s, e) =>
-                        {
-                            e.Handled = true;
-                            ExportOpordA4Document(model);
-                        };
-                    }
-                    else if (bt.Contains("Discord", StringComparison.OrdinalIgnoreCase))
-                    {
-                        btn.PreviewMouseLeftButtonDown += (s, e) =>
-                        {
-                            e.Handled = true;
-                            ExportOpordToDiscord(model);
-                        };
-                    }
-                    else if (bt.Contains("FTAK", StringComparison.OrdinalIgnoreCase) ||
-                             bt.Contains("Zapisz rozkaz", StringComparison.OrdinalIgnoreCase))
-                    {
-                        btn.PreviewMouseLeftButtonDown += (s, e) =>
-                        {
-                            e.Handled = true;
-                            ExportOpordToFtakAndA4(model);
-                        };
-                    }
-                }
-
-                // 2. Dodanie na stałe w sekcji IV. LOGISTYKA ORAZ ZAŁĄCZNIKI opcjonalnego Załącznika nr 3 (Mapa na "ptaszek")
-                var sec4Header = allElems.OfType<TextBlock>().FirstOrDefault(t =>
-                    (t.Text ?? "").Contains("IV. LOGISTYKA", StringComparison.OrdinalIgnoreCase) ||
-                    (t.Text ?? "").Contains("IV. SERVICE SUPPORT", StringComparison.OrdinalIgnoreCase) ||
-                    (t.Text ?? "").Contains("ZAŁĄCZNIKI", StringComparison.OrdinalIgnoreCase));
-
-                if (sec4Header != null)
-                {
-                    DependencyObject p = LogicalTreeHelper.GetParent(sec4Header);
-                    while (p != null && !(p is StackPanel)) p = LogicalTreeHelper.GetParent(p);
-                    if (p is StackPanel sec4Stack)
-                    {
-                        bool alreadyAdded = false;
-                        foreach (var child in sec4Stack.Children)
-                        {
-                            if (child is Border b && b.Tag?.ToString() == "V34_ANNEX3_MAP_BOX")
-                            {
-                                alreadyAdded = true;
-                                break;
-                            }
-                        }
-
-                        if (!alreadyAdded)
-                        {
-                            var annex3Box = BuildAnnex3MapBoxUi(win, activeDay);
-                            sec4Stack.Children.Add(annex3Box);
-                        }
-                    }
-                }
+                st = new OpordAnnex3State();
+                Annex3ByFaction[key] = st;
             }
-            catch { }
+            return st;
         }
 
-        private static Border BuildAnnex3MapBoxUi(Window win, OpordDayPlanModel activeDay)
+        public static void AttachToOpordForm(Window win, StackPanel mainStack, OpordParagraphModel model, OpordDayPlanModel activeDay, string activeFactionName = null)
         {
-            var cyanBrush = new SolidColorBrush(Color.FromRgb(31, 224, 197));
-            var goldBrush = new SolidColorBrush(Color.FromRgb(250, 208, 44));
+            if (mainStack == null) return;
+            string facName = !string.IsNullOrWhiteSpace(activeFactionName)
+                ? activeFactionName
+                : (!string.IsNullOrWhiteSpace(model?.TargetFaction) ? model.TargetFaction : "BLUFOR");
 
-            var border = new Border
+            var state = GetOrCreateState(facName);
+
+            for (int i = mainStack.Children.Count - 1; i >= 0; i--)
+            {
+                if (mainStack.Children[i] is FrameworkElement fe && fe.Tag?.ToString() == "V34_ANNEX3_MAP_BOX")
+                {
+                    mainStack.Children.RemoveAt(i);
+                }
+            }
+
+            var annex3Card = new Border
             {
                 Tag = "V34_ANNEX3_MAP_BOX",
-                Background = new SolidColorBrush(Color.FromRgb(8, 22, 28)),
-                BorderBrush = cyanBrush,
-                BorderThickness = new Thickness(1.2),
+                Background = TacticalConfigPanel.BrushCardBg,
+                BorderBrush = state.Enabled ? TacticalConfigPanel.BrushAccent : TacticalConfigPanel.BrushTileBorder,
+                BorderThickness = new Thickness(state.Enabled ? 1.5 : 1.0),
+                CornerRadius = new CornerRadius(8),
+                Padding = new Thickness(14, 10, 14, 10),
+                Margin = new Thickness(0, 0, 0, 12)
+            };
+
+            var outerStack = new StackPanel();
+            var bodyStack = new StackPanel
+            {
+                Visibility = state.Enabled ? Visibility.Visible : Visibility.Collapsed,
+                Margin = new Thickness(0, 8, 0, 0)
+            };
+
+            var chkEnableAnnex3 = new CheckBox
+            {
+                Content = $"\uD83D\uDDFA\uFE0F ZA\u0141\u0104CZNIK 3. MAPA TAKTYCZNA OPERACJI / SZKIC SYTUACYJNY \u2014 STRONA: {facName.ToUpperInvariant()} (Opcjonalny \u2014 zaznacz, aby do\u0142\u0105czy\u0107 map\u0119 do OPORD)",
+                IsChecked = state.Enabled,
+                Foreground = TacticalConfigPanel.BrushAccent,
+                FontWeight = FontWeights.Bold,
+                FontSize = 11.5,
+                Cursor = Cursors.Hand,
+                VerticalAlignment = VerticalAlignment.Center
+            };
+
+            var previewImg = new Image
+            {
+                MaxHeight = 320,
+                Stretch = Stretch.Uniform,
+                HorizontalAlignment = HorizontalAlignment.Center
+            };
+
+            var previewContainer = new Border
+            {
+                Background = TacticalConfigPanel.BrushInputBg,
+                BorderBrush = TacticalConfigPanel.BrushTileBorder,
+                BorderThickness = new Thickness(1),
                 CornerRadius = new CornerRadius(6),
-                Padding = new Thickness(12),
-                Margin = new Thickness(0, 10, 0, 4)
+                Padding = new Thickness(8),
+                Margin = new Thickness(0, 6, 0, 6),
+                Visibility = string.IsNullOrWhiteSpace(state.ImageBase64) ? Visibility.Collapsed : Visibility.Visible,
+                Child = previewImg
             };
 
-            var st = new StackPanel();
-            var chk = new CheckBox
+            var statusLabel = new TextBlock
             {
-                Content = "☑️ Załącznik 3 (" + activeDay.DayTitle + "): Dołącz mapę operacyjną / szkic AO do rozkazu OPORD",
-                IsChecked = activeDay.IncludeAnnex3Map,
-                Foreground = cyanBrush,
+                Text = state.SourceLabel,
+                Foreground = string.IsNullOrWhiteSpace(state.ImageBase64) ? TacticalConfigPanel.BrushMutedText : TacticalConfigPanel.BrushAccent,
+                FontSize = 10,
+                FontWeight = FontWeights.SemiBold,
+                Margin = new Thickness(0, 2, 0, 6),
+                TextWrapping = TextWrapping.Wrap
+            };
+
+            void RefreshPreviewFromBase64()
+            {
+                if (string.IsNullOrWhiteSpace(state.ImageBase64))
+                {
+                    previewImg.Source = null;
+                    previewContainer.Visibility = Visibility.Collapsed;
+                    statusLabel.Text = state.SourceLabel;
+                    statusLabel.Foreground = TacticalConfigPanel.BrushMutedText;
+                    return;
+                }
+                try
+                {
+                    byte[] bytes = Convert.FromBase64String(state.ImageBase64);
+                    var bmp = new BitmapImage();
+                    using (var ms = new MemoryStream(bytes))
+                    {
+                        bmp.BeginInit();
+                        bmp.CacheOption = BitmapCacheOption.OnLoad;
+                        bmp.StreamSource = ms;
+                        bmp.EndInit();
+                        bmp.Freeze();
+                    }
+                    state.PixelWidth = bmp.PixelWidth;
+                    state.PixelHeight = bmp.PixelHeight;
+                    previewImg.Source = bmp;
+                    previewContainer.Visibility = Visibility.Visible;
+                    statusLabel.Text = state.SourceLabel + $" ({bmp.PixelWidth}\u00D7{bmp.PixelHeight} px | {Math.Max(1, bytes.Length / 1024)} KB)";
+                    statusLabel.Foreground = TacticalConfigPanel.BrushAccent;
+                }
+                catch
+                {
+                    previewImg.Source = null;
+                    previewContainer.Visibility = Visibility.Collapsed;
+                }
+            }
+
+            void CaptureFromMapGeneratorNow(bool silentIfEmpty)
+            {
+                try
+                {
+                    byte[] pngBytes = TacticalMapGeneratorView.CaptureCurrentMapSheetForOpordAnnex3Png(win);
+                    if (pngBytes != null && pngBytes.Length > 100)
+                    {
+                        state.ImageBase64 = Convert.ToBase64String(pngBytes);
+                        state.ImageMimeType = "image/png";
+                        state.SourceLabel = "\u2713 Pobrano aktualny arkusz mapy z Generatora Map 1:1";
+                        RefreshPreviewFromBase64();
+                    }
+                    else if (!silentIfEmpty)
+                    {
+                        MessageBox.Show(
+                            "Nie uda\u0142o si\u0119 pobra\u0107 obrazu z Generatora Map 1:1. Otw\u00F3rz na chwil\u0119 modu\u0142 Generator Map 1:1 lub wczytaj gotowy plik mapy (.PNG / .JPG) z dysku.",
+                            "Za\u0142\u0105cznik 3 \u2014 Mapa OPORD",
+                            MessageBoxButton.OK,
+                            MessageBoxImage.Information);
+                    }
+                }
+                catch { }
+            }
+
+            chkEnableAnnex3.Checked += (_, __) =>
+            {
+                state.Enabled = true;
+                bodyStack.Visibility = Visibility.Visible;
+                annex3Card.BorderBrush = TacticalConfigPanel.BrushAccent;
+                annex3Card.BorderThickness = new Thickness(1.5);
+                if (string.IsNullOrWhiteSpace(state.ImageBase64))
+                {
+                    CaptureFromMapGeneratorNow(silentIfEmpty: true);
+                }
+            };
+            chkEnableAnnex3.Unchecked += (_, __) =>
+            {
+                state.Enabled = false;
+                bodyStack.Visibility = Visibility.Collapsed;
+                annex3Card.BorderBrush = TacticalConfigPanel.BrushTileBorder;
+                annex3Card.BorderThickness = new Thickness(1.0);
+            };
+            outerStack.Children.Add(chkEnableAnnex3);
+
+            var btnsRow = new Grid { Margin = new Thickness(0, 0, 0, 6) };
+            btnsRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1.25, GridUnitType.Star) });
+            btnsRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1.25, GridUnitType.Star) });
+            btnsRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(0.7, GridUnitType.Star) });
+
+            var btnCaptureMap = new Button
+            {
+                Content = "\uD83D\uDDFA\uFE0F Pobierz aktualn\u0105 map\u0119 z Generatora Map 1:1",
+                Height = 30,
+                Margin = new Thickness(0, 0, 6, 0),
+                Background = TacticalConfigPanel.BrushButtonAccent,
+                Foreground = TacticalConfigPanel.BrushDarkFg,
+                BorderBrush = TacticalConfigPanel.BrushAccent,
+                BorderThickness = new Thickness(1),
                 FontWeight = FontWeights.Bold,
-                Margin = new Thickness(0, 0, 0, 8),
-                Cursor = System.Windows.Input.Cursors.Hand
+                FontSize = 10.5,
+                Cursor = Cursors.Hand
             };
-            st.Children.Add(chk);
+            btnCaptureMap.Click += (_, __) => CaptureFromMapGeneratorNow(silentIfEmpty: false);
 
-            var detailsStack = new StackPanel
+            var btnLoadDiskMap = new Button
             {
-                Visibility = activeDay.IncludeAnnex3Map ? Visibility.Visible : Visibility.Collapsed
-            };
-
-            var fileRow = new Grid { Margin = new Thickness(0, 0, 0, 6) };
-            fileRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-            fileRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(8) });
-            fileRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-
-            var pathBox = new TextBox
-            {
-                Text = activeDay.Annex3MapImagePath ?? "",
+                Content = "\uD83D\uDCC2 Wczytaj plik mapy z dysku (.PNG / .JPG)...",
                 Height = 30,
-                VerticalContentAlignment = VerticalAlignment.Center,
-                Padding = new Thickness(8, 2, 8, 2),
-                Background = new SolidColorBrush(Color.FromRgb(13, 33, 41)),
+                Margin = new Thickness(0, 0, 6, 0),
+                Background = new SolidColorBrush(Color.FromRgb(18, 48, 60)),
                 Foreground = Brushes.White,
-                BorderBrush = new SolidColorBrush(Color.FromRgb(34, 74, 89))
-            };
-            pathBox.TextChanged += (_, __) => activeDay.Annex3MapImagePath = pathBox.Text;
-            Grid.SetColumn(pathBox, 0);
-            fileRow.Children.Add(pathBox);
-
-            var pickBtn = new Button
-            {
-                Content = "📂 Wybierz plik mapy (.PNG / .JPG)",
-                Height = 30,
-                Padding = new Thickness(12, 4, 12, 4),
-                Background = new SolidColorBrush(Color.FromRgb(22, 54, 66)),
-                Foreground = goldBrush,
-                BorderBrush = goldBrush,
+                BorderBrush = TacticalConfigPanel.BrushAccent,
                 BorderThickness = new Thickness(1.2),
                 FontWeight = FontWeights.Bold,
-                Cursor = System.Windows.Input.Cursors.Hand
+                FontSize = 10.5,
+                Cursor = Cursors.Hand
             };
-            pickBtn.Click += (_, __) =>
+            btnLoadDiskMap.Click += (_, __) =>
             {
-                var ofd = new Microsoft.Win32.OpenFileDialog
+                var dlg = new Microsoft.Win32.OpenFileDialog
                 {
-                    Filter = "Obrazy map (*.png;*.jpg;*.jpeg;*.webp;*.bmp)|*.png;*.jpg;*.jpeg;*.webp;*.bmp|Wszystkie pliki (*.*)|*.*"
+                    Title = "Wybierz plik obrazu mapy dla Za\u0142\u0105cznika nr 3 OPORD",
+                    Filter = "Obrazy map (*.png;*.jpg;*.jpeg;*.bmp;*.webp)|*.png;*.jpg;*.jpeg;*.bmp;*.webp|Wszystkie pliki (*.*)|*.*"
                 };
-                if (ofd.ShowDialog(win ?? Application.Current?.MainWindow) == true)
+                if (dlg.ShowDialog(win) == true && File.Exists(dlg.FileName))
                 {
-                    pathBox.Text = ofd.FileName;
-                    activeDay.Annex3MapImagePath = ofd.FileName;
-                }
-            };
-            Grid.SetColumn(pickBtn, 2);
-            fileRow.Children.Add(pickBtn);
-            detailsStack.Children.Add(fileRow);
-
-            var notesBox = new TextBox
-            {
-                Text = activeDay.Annex3MapNotes ?? "Mapa taktyczna 1:5000 MGRS z granicą AO i punktami POI.",
-                Height = 30,
-                VerticalContentAlignment = VerticalAlignment.Center,
-                Padding = new Thickness(8, 2, 8, 2),
-                Background = new SolidColorBrush(Color.FromRgb(13, 33, 41)),
-                Foreground = Brushes.White,
-                BorderBrush = new SolidColorBrush(Color.FromRgb(34, 74, 89))
-            };
-            notesBox.TextChanged += (_, __) => activeDay.Annex3MapNotes = notesBox.Text;
-            detailsStack.Children.Add(notesBox);
-
-            chk.Checked += (_, __) =>
-            {
-                activeDay.IncludeAnnex3Map = true;
-                detailsStack.Visibility = Visibility.Visible;
-            };
-            chk.Unchecked += (_, __) =>
-            {
-                activeDay.IncludeAnnex3Map = false;
-                detailsStack.Visibility = Visibility.Collapsed;
-            };
-
-            st.Children.Add(detailsStack);
-            border.Child = st;
-            return border;
-        }
-
-        public static List<OpordDayPlanModel> GetDaysForExport(OpordParagraphModel model)
-        {
-            if (model == null || model.Days == null) return new List<OpordDayPlanModel>();
-            var selected = model.Days.Where(d => d.IncludeInExport).ToList();
-            if (selected.Count == 0 && model.Days.Count > 0)
-            {
-                int idx = Math.Clamp(model.ActiveDayIndex, 0, model.Days.Count - 1);
-                selected.Add(model.Days[idx]);
-            }
-            return selected;
-        }
-
-        public static string ExportOpordA4Document(OpordParagraphModel model)
-        {
-            if (model == null) return "";
-            V34CleanOpordDataEngine.SyncFactionsAndMapToOpordModel(null);
-
-            string outDir = V34CleanFtakAndFactionEngine.EnsureFactionOutputDir(model.TargetFaction);
-            string htmlPath = Path.Combine(outDir, "OPORD_A4_" + V34CleanFtakAndFactionEngine.SanitizeFolderName(model.TargetFaction) + ".html");
-
-            var days = GetDaysForExport(model);
-            var sb = new StringBuilder();
-
-            sb.AppendLine("<!DOCTYPE html><html><head><meta charset='utf-8'/>");
-            sb.AppendLine("<title>OPORD — " + System.Net.WebUtility.HtmlEncode(model.EventName) + " (" + System.Net.WebUtility.HtmlEncode(model.TargetFaction) + ")</title>");
-            sb.AppendLine("<style>");
-            sb.AppendLine("@page { size: A4 portrait; margin: 12mm; }");
-            sb.AppendLine("body { font-family: 'Segoe UI', Arial, sans-serif; background: #060D10; color: #E8F1F5; margin: 0; padding: 16px; font-size: 12px; line-height: 1.45; }");
-            sb.AppendLine(".page { max-width: 190mm; margin: 0 auto 24px auto; background: #0A151B; border: 2px solid #1FE0C5; border-radius: 8px; padding: 16px 20px; page-break-after: always; }");
-            sb.AppendLine(".banner { text-align: center; padding: 6px; font-weight: bold; background: #122B36; color: #FAD02C; border: 1px solid #FAD02C; margin-bottom: 12px; letter-spacing: 1px; }");
-            sb.AppendLine("h1 { margin: 0 0 6px 0; font-size: 20px; color: #1FE0C5; }");
-            sb.AppendLine("h2 { margin: 14px 0 6px 0; font-size: 14px; color: #FAD02C; border-bottom: 1px solid #1B3B4B; padding-bottom: 3px; text-transform: uppercase; }");
-            sb.AppendLine("h3 { margin: 10px 0 4px 0; font-size: 12.5px; color: #1FE0C5; }");
-            sb.AppendLine(".box { background: #081218; border: 1px solid #1B3B4B; border-radius: 5px; padding: 8px 10px; margin-bottom: 8px; white-space: pre-wrap; font-family: Consolas, monospace; font-size: 11.5px; }");
-            sb.AppendLine(".prose-box { background: #081218; border: 1px solid #1B3B4B; border-radius: 5px; padding: 8px 10px; margin-bottom: 8px; white-space: pre-wrap; }");
-            sb.AppendLine("table { width: 100%; border-collapse: collapse; margin: 6px 0 10px 0; font-size: 11.5px; }");
-            sb.AppendLine("th, td { border: 1px solid #1B3B4B; padding: 5px 8px; text-align: left; }");
-            sb.AppendLine("th { background: #102530; color: #1FE0C5; }");
-            sb.AppendLine("@media print { body { background: #fff; color: #000; padding: 0; } .page { background: #fff; color: #000; border: 1px solid #000; margin: 0; } .box, .prose-box { background: #f8f8f8; color: #000; border-color: #888; } th { background: #eee; color: #000; } th, td { border-color: #666; } h1, h2, h3 { color: #000; } .no-print { display: none; } }");
-            sb.AppendLine("</style></head><body>");
-
-            sb.AppendLine("<div class='no-print' style='text-align:center;margin-bottom:14px;'>");
-            sb.AppendLine("<button onclick='window.print()' style='padding:10px 24px;background:#1FE0C5;color:#051014;font-weight:bold;border:none;border-radius:6px;cursor:pointer;'>🖨️ DRUKUJ ROZKAZ OPORD A4 / ZAPISZ JAKO PDF</button>");
-            sb.AppendLine("</div>");
-
-            foreach (var day in days)
-            {
-                sb.AppendLine("<div class='page'>");
-                sb.AppendLine("<div class='banner'>" + System.Net.WebUtility.HtmlEncode(day.Classification) + "</div>");
-                sb.AppendLine("<h1>📋 " + System.Net.WebUtility.HtmlEncode(day.OperationNumber) + " — " + System.Net.WebUtility.HtmlEncode(model.EventName) + "</h1>");
-                sb.AppendLine("<p style='margin:2px 0 10px 0;'><b>STRONA:</b> " + System.Net.WebUtility.HtmlEncode(model.TargetFaction) +
-                              " &nbsp;|&nbsp; <b>DZIEŃ:</b> " + System.Net.WebUtility.HtmlEncode(day.DayTitle) + " (" + System.Net.WebUtility.HtmlEncode(day.DateIso) + ")" +
-                              " &nbsp;|&nbsp; <b>HQ:</b> " + System.Net.WebUtility.HtmlEncode(day.IssuingHq) + "</p>");
-
-                sb.AppendLine("<h2>I. SYTUACJA</h2>");
-                sb.AppendLine("<h3>A. Siły Przeciwnika:</h3><div class='prose-box'>" + System.Net.WebUtility.HtmlEncode(day.EnemyForces) + "</div>");
-                sb.AppendLine("<h3>B. Siły Własne:</h3><div class='prose-box'>" + System.Net.WebUtility.HtmlEncode(day.FriendlyForces) + "</div>");
-                sb.AppendLine("<h3>B.1. Teren i Pogoda (METOC):</h3><div class='box'>" + System.Net.WebUtility.HtmlEncode(string.IsNullOrWhiteSpace(day.TerrainAndWeather) ? day.MetocQuickSummary : day.TerrainAndWeather) + "</div>");
-                sb.AppendLine("<h3>C. Obszar Operacji (AO) i Punkty POI:</h3><div class='box'>" + System.Net.WebUtility.HtmlEncode(day.AreaOfInterestPoiDesc) + "</div>");
-
-                sb.AppendLine("<h2>II. MISJA (5W)</h2>");
-                sb.AppendLine("<div class='prose-box' style='border-color:#FAD02C;font-weight:bold;'>" + System.Net.WebUtility.HtmlEncode(day.MissionFullStatement) + "</div>");
-
-                sb.AppendLine("<h2>III. WYKONANIE</h2>");
-                sb.AppendLine("<h3>A. Zamiar Dowódcy:</h3><div class='prose-box'>" + System.Net.WebUtility.HtmlEncode(day.CommandersIntent) + "</div>");
-                sb.AppendLine("<h3>B. Harmonogram (" + System.Net.WebUtility.HtmlEncode(day.DayTitle) + "):</h3><div class='box'>" + System.Net.WebUtility.HtmlEncode(day.DaySpecificTasks) + "</div>");
-                sb.AppendLine("<h3>C. Koordynacja:</h3><div class='prose-box'>" + System.Net.WebUtility.HtmlEncode(day.CoordinationMeasures) + "</div>");
-
-                if (day.SquadRoster != null && day.SquadRoster.Count > 0)
-                {
-                    sb.AppendLine("<h3>D. Tabela Składu Oddziału i Ról:</h3>");
-                    sb.AppendLine("<table><thead><tr><th>Kryptonim</th><th>Rola Główna</th><th>Rola Zapasowa</th><th>Wyposażenie</th></tr></thead><tbody>");
-                    foreach (var m in day.SquadRoster)
-                    {
-                        sb.AppendLine("<tr><td><b>" + System.Net.WebUtility.HtmlEncode(m.Callsign) + "</b></td><td>" +
-                                      System.Net.WebUtility.HtmlEncode(m.PrimaryRole) + "</td><td>" +
-                                      System.Net.WebUtility.HtmlEncode(m.SecondaryRole) + "</td><td>" +
-                                      System.Net.WebUtility.HtmlEncode(m.GearAndTasks) + "</td></tr>");
-                    }
-                    sb.AppendLine("</tbody></table>");
-                }
-
-                sb.AppendLine("<h2>V. DOWODZENIE I ŁĄCZNOŚĆ</h2>");
-                sb.AppendLine("<h3>E. Tabela Łączności (Z Generatora Stron):</h3>");
-                sb.AppendLine("<div class='box'>" + System.Net.WebUtility.HtmlEncode(day.SyncedCommsMatrixSummary) + "</div>");
-
-                if (day.IncludeCustomChannelsTable && !string.IsNullOrWhiteSpace(day.CustomChannelsTableText))
-                {
-                    sb.AppendLine("<h3>E.1. Dodatkowe kanały wpisane ręcznie:</h3>");
-                    sb.AppendLine("<div class='box'>" + System.Net.WebUtility.HtmlEncode(day.CustomChannelsTableText) + "</div>");
-                }
-
-                sb.AppendLine("<h3>F.1. Krypto SARNEG i Hasła:</h3>");
-                sb.AppendLine("<div class='box'><b>Słowo SARNEG:</b> " + System.Net.WebUtility.HtmlEncode(day.SarnegKeyWord10) +
-                              "\n<b>Hasła:</b> " + System.Net.WebUtility.HtmlEncode(day.ChallengeAndPassword) +
-                              "\n<b>Kryptonimy:</b> " + System.Net.WebUtility.HtmlEncode(day.TargetCodeNames) +
-                              "\n<b>Dowodzenie:</b> " + System.Net.WebUtility.HtmlEncode(day.SuccessionOfCommand) + "</div>");
-
-                sb.AppendLine("<h2>IV. LOGISTYKA ORAZ ZAŁĄCZNIKI</h2>");
-                sb.AppendLine("<h3>A. Zasady MEDEVAC:</h3><div class='prose-box'>" + System.Net.WebUtility.HtmlEncode(day.MedevacRules) + "</div>");
-                sb.AppendLine("<h3>B. Szpejlista:</h3><div class='prose-box'>" + System.Net.WebUtility.HtmlEncode(day.SquadGearChecklist) + "</div>");
-
-                if (day.IncludeAnnex3Map && !string.IsNullOrWhiteSpace(day.Annex3MapImagePath) && File.Exists(day.Annex3MapImagePath))
-                {
-                    sb.AppendLine("<h2>ZAŁĄCZNIK 3 — MAPA OPERACYJNA (" + System.Net.WebUtility.HtmlEncode(day.DayTitle) + ")</h2>");
-                    if (!string.IsNullOrWhiteSpace(day.Annex3MapNotes))
-                        sb.AppendLine("<div class='prose-box'>" + System.Net.WebUtility.HtmlEncode(day.Annex3MapNotes) + "</div>");
                     try
                     {
-                        byte[] bytes = File.ReadAllBytes(day.Annex3MapImagePath);
-                        string ext = Path.GetExtension(day.Annex3MapImagePath).ToLowerInvariant();
-                        string mime = (ext == ".jpg" || ext == ".jpeg") ? "image/jpeg" : "image/png";
-                        sb.AppendLine("<div style='text-align:center;margin-top:8px;'><img src='data:" + mime + ";base64," +
-                                      Convert.ToBase64String(bytes) + "' style='max-width:100%;max-height:200mm;border:2px solid #1FE0C5;'/></div>");
+                        byte[] raw = File.ReadAllBytes(dlg.FileName);
+                        string ext = Path.GetExtension(dlg.FileName).ToLowerInvariant();
+                        state.ImageMimeType = (ext == ".jpg" || ext == ".jpeg") ? "image/jpeg" : (ext == ".webp" ? "image/webp" : (ext == ".bmp" ? "image/bmp" : "image/png"));
+                        state.ImageBase64 = Convert.ToBase64String(raw);
+                        state.SourceLabel = "\u2713 Wczytano plik mapy z dysku: " + Path.GetFileName(dlg.FileName);
+                        RefreshPreviewFromBase64();
                     }
-                    catch { }
+                    catch (Exception ex)
+                    {
+                        MessageBox.Show("B\u0142\u0105d wczytywania obrazu mapy: " + ex.Message, "Za\u0142\u0105cznik 3", MessageBoxButton.OK, MessageBoxImage.Warning);
+                    }
                 }
+            };
 
-                sb.AppendLine("<div class='banner' style='margin-top:14px;'>" + System.Net.WebUtility.HtmlEncode(day.Classification) + "</div>");
-                sb.AppendLine("</div>");
-            }
+            var btnClearMap = new Button
+            {
+                Content = "\uD83D\uDDD1\uFE0F Usu\u0144 map\u0119",
+                Height = 30,
+                Background = new SolidColorBrush(Color.FromRgb(55, 18, 22)),
+                Foreground = Brushes.White,
+                BorderBrush = new SolidColorBrush(Color.FromRgb(235, 64, 52)),
+                BorderThickness = new Thickness(1.2),
+                FontWeight = FontWeights.Bold,
+                FontSize = 10.5,
+                Cursor = Cursors.Hand
+            };
+            btnClearMap.Click += (_, __) =>
+            {
+                state.ImageBase64 = "";
+                state.SourceLabel = "Usuni\u0119to map\u0119 z Za\u0142\u0105cznika nr 3.";
+                RefreshPreviewFromBase64();
+            };
 
-            sb.AppendLine("</body></html>");
-            File.WriteAllText(htmlPath, sb.ToString(), Encoding.UTF8);
-            try { Process.Start(new ProcessStartInfo(htmlPath) { UseShellExecute = true }); } catch { }
-            return htmlPath;
+            Grid.SetColumn(btnCaptureMap, 0);
+            Grid.SetColumn(btnLoadDiskMap, 1);
+            Grid.SetColumn(btnClearMap, 2);
+            btnsRow.Children.Add(btnCaptureMap);
+            btnsRow.Children.Add(btnLoadDiskMap);
+            btnsRow.Children.Add(btnClearMap);
+            bodyStack.Children.Add(btnsRow);
+
+            bodyStack.Children.Add(statusLabel);
+
+            var titleInputsGrid = new Grid { Margin = new Thickness(0, 0, 0, 4) };
+            titleInputsGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            titleInputsGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1.2, GridUnitType.Star) });
+
+            var mapTitleBox = (TextBox)TacticalConfigPanel.TextCtrl(state.MapTitle, v => state.MapTitle = v);
+            mapTitleBox.Margin = new Thickness(0, 0, 6, 0);
+            var mapNotesBox = (TextBox)TacticalConfigPanel.TextCtrl(state.MapNotes, v => state.MapNotes = v);
+
+            var fTitle = TacticalConfigPanel.FieldBox("Tytu\u0142 mapy w Za\u0142\u0105czniku nr 3:", mapTitleBox);
+            var fNotes = TacticalConfigPanel.FieldBox("Uwagi / opis pod map\u0105 w Za\u0142\u0105czniku nr 3:", mapNotesBox);
+            Grid.SetColumn(fTitle, 0);
+            Grid.SetColumn(fNotes, 1);
+            titleInputsGrid.Children.Add(fTitle);
+            titleInputsGrid.Children.Add(fNotes);
+            bodyStack.Children.Add(titleInputsGrid);
+
+            RefreshPreviewFromBase64();
+            bodyStack.Children.Add(previewContainer);
+
+            outerStack.Children.Add(bodyStack);
+            annex3Card.Child = outerStack;
+            mainStack.Children.Add(annex3Card);
         }
 
-        public static void ExportOpordToDiscord(OpordParagraphModel model)
+        public static string BuildAnnex3HtmlSection(Window win, string factionName, string dayTitle)
         {
-            if (model == null) return;
-            V34CleanOpordDataEngine.SyncFactionsAndMapToOpordModel(null);
+            var st = GetOrCreateState(factionName);
+            if (!st.Enabled) return "";
 
-            var chunks = new List<string>();
-            var days = GetDaysForExport(model);
-
-            foreach (var d in days)
+            if (string.IsNullOrWhiteSpace(st.ImageBase64))
             {
-                var p1 = new StringBuilder();
-                p1.AppendLine("## 📋 " + d.OperationNumber + " | " + model.TargetFaction + " — " + d.DayTitle + " (" + d.DateIso + ")");
-                p1.AppendLine("`" + d.Classification + "` | **HQ:** " + d.IssuingHq + " | **AO:** " + (string.IsNullOrWhiteSpace(d.LocationName) ? "Map AO" : d.LocationName));
-                p1.AppendLine("**🌦️ METOC:** " + CompactLine(string.IsNullOrWhiteSpace(d.TerrainAndWeather) ? d.MetocQuickSummary : d.TerrainAndWeather));
-                p1.AppendLine("**🎯 II. MISJA (5W):**\n> " + d.MissionFullStatement);
-                p1.AppendLine("**⚡ III. ZAMIAR:** " + d.CommandersIntent);
-                p1.AppendLine("**⏱️ HARMONOGRAM:** " + CompactLine(d.DaySpecificTasks));
-
-                var p2 = new StringBuilder();
-                p2.AppendLine("### 📡 ŁĄCZNOŚĆ & SARNEG — " + d.DayTitle + " (" + model.TargetFaction + ")");
-                if (!string.IsNullOrWhiteSpace(d.SyncedCommsMatrixSummary))
-                    p2.AppendLine("```text\n" + d.SyncedCommsMatrixSummary + "\n```");
-                if (d.IncludeCustomChannelsTable && !string.IsNullOrWhiteSpace(d.CustomChannelsTableText))
-                    p2.AppendLine("**➕ Dodatkowe kanały:**\n" + d.CustomChannelsTableText);
-
-                p2.AppendLine("**🔐 SARNEG:** `" + d.SarnegKeyWord10 + "` | **Hasła:** " + d.ChallengeAndPassword);
-                p2.AppendLine("**🚑 MEDEVAC:** " + d.MedevacRules + " | **Szpej:** " + d.SquadGearChecklist);
-
-                string s1 = p1.ToString().Trim();
-                string s2 = p2.ToString().Trim();
-
-                if (s1.Length + s2.Length + 2 <= 1850)
+                try
                 {
-                    chunks.Add(s1 + "\n\n" + s2);
+                    byte[] autoBytes = TacticalMapGeneratorView.CaptureCurrentMapSheetForOpordAnnex3Png(win);
+                    if (autoBytes != null && autoBytes.Length > 100)
+                    {
+                        st.ImageBase64 = Convert.ToBase64String(autoBytes);
+                        st.ImageMimeType = "image/png";
+                    }
                 }
-                else
-                {
-                    chunks.Add(s1);
-                    chunks.Add(s2);
-                }
+                catch { }
             }
 
-            string finalMd = string.Empty;
-            if (chunks.Count == 1) finalMd = chunks[0];
+            string E(string s) => System.Net.WebUtility.HtmlEncode(s ?? "");
+            var sb = new StringBuilder();
+            sb.AppendLine("<div style='page-break-before:always;margin-top:16px;'>");
+            sb.AppendLine("<h2>" + BuilderI18n.T("ZA\u0141\u0104CZNIK 3. MAPA TAKTYCZNA OPERACJI (" + (dayTitle ?? "DZIE\u0143 1").ToUpperInvariant() + ")", "ANNEX 3. TACTICAL OPERATION MAP (" + (dayTitle ?? "DAY 1").ToUpperInvariant() + ")") + "</h2>");
+            if (!string.IsNullOrWhiteSpace(st.MapTitle))
+            {
+                sb.AppendLine("<div class='sub-p'><b>" + E(st.MapTitle) + "</b></div>");
+            }
+            if (!string.IsNullOrWhiteSpace(st.ImageBase64))
+            {
+                string mime = string.IsNullOrWhiteSpace(st.ImageMimeType) ? "image/png" : st.ImageMimeType;
+                sb.AppendLine("<div style='text-align:center;margin:10px 0;'><img src='data:" + mime + ";base64," + st.ImageBase64 + "' style='max-width:100%;max-height:230mm;height:auto;border:2px solid #111;border-radius:4px;'/></div>");
+            }
             else
             {
-                var sb = new StringBuilder();
-                for (int i = 0; i < chunks.Count; i++)
-                {
-                    if (i > 0) sb.AppendLine("\n--- ✂️ [WIADOMOŚĆ " + (i + 1) + "/" + chunks.Count + "] ✂️ ---\n");
-                    sb.AppendLine(chunks[i]);
-                }
-                finalMd = sb.ToString();
+                sb.AppendLine("<div class='sub-p'><i>[Brak wczytanego obrazu mapy w Za\u0142\u0105czniku nr 3]</i></div>");
             }
-
-            if (!string.IsNullOrWhiteSpace(finalMd))
+            if (!string.IsNullOrWhiteSpace(st.MapNotes))
             {
-                Clipboard.SetText(finalMd);
-                MessageBox.Show(
-                    "✅ Skopiowano skondensowany rozkaz OPORD bezpośrednio do schowka!\n" +
-                    "Liczba wiadomości Discord (<1900 zn.): " + chunks.Count + "\n\n" +
-                    "Wklej na kanał Discord kombinacją Ctrl + V.",
-                    "💬 Kopiuj na Discorda",
-                    MessageBoxButton.OK,
-                    MessageBoxImage.Information);
+                sb.AppendLine("<div class='sub-p'>" + E(st.MapNotes) + "</div>");
             }
+            sb.AppendLine("</div>");
+            return sb.ToString();
         }
 
-        public static void ExportOpordToFtakAndA4(OpordParagraphModel model)
+        public static string BuildAnnex3DiscordMarkdown(string factionName, string dayTitle)
         {
-            string htmlPath = ExportOpordA4Document(model);
-            V34CleanFtakAndFactionEngine.EnsureSharedFolderStructure();
-            MessageBox.Show(
-                "💾 Zapisano rozkaz OPORD oraz zaktualizowano paczkę .FTAK dla strony '" + model.TargetFaction + "':\n" + htmlPath,
-                "OPORD -> .FTAK",
-                MessageBoxButton.OK,
-                MessageBoxImage.Information);
-        }
+            var st = GetOrCreateState(factionName);
+            if (!st.Enabled) return "";
 
-        private static string CompactLine(string text)
-        {
-            if (string.IsNullOrWhiteSpace(text)) return "-";
-            return string.Join(" • ", text.Split(new char[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries).Select(x => x.Trim()).Where(x => x.Length > 0));
+            var sb = new StringBuilder();
+            sb.AppendLine("## \uD83D\uDDFA\uFE0F " + BuilderI18n.T("ZA\u0141\u0104CZNIK 3. MAPA TAKTYCZNA OPERACJI (" + dayTitle + ")", "ANNEX 3. TACTICAL OPERATION MAP (" + dayTitle + ")"));
+            if (!string.IsNullOrWhiteSpace(st.MapTitle))
+                sb.AppendLine("- **Mapa:** " + st.MapTitle);
+            if (!string.IsNullOrWhiteSpace(st.MapNotes))
+                sb.AppendLine("- **Uwagi do mapy:** " + st.MapNotes);
+            return sb.ToString().TrimEnd();
         }
     }
     // [END_V34_CLEAN_ANNEX3_DISCORD]

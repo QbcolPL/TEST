@@ -1890,6 +1890,11 @@ namespace FieldTakHub.Builder.Services
 
                 html.AppendLine("<h2>" + BuilderI18n.T("ZAŁĄCZNIK 2. OPRACOWANIE ZADAŃ (" + d.DayTitle.ToUpperInvariant() + ")", "ANNEX 2. TASKS BREAKDOWN (" + d.DayTitle.ToUpperInvariant() + ")") + "</h2>");
                 html.AppendLine("<div class='sub-p'>" + E(d.Annex2TasksAnalysis) + "</div>");
+                string annex3Html = V34CleanAnnex3AndDiscordEngine.BuildAnnex3HtmlSection(win, factionName, d.DayTitle);
+                if (!string.IsNullOrWhiteSpace(annex3Html))
+                {
+                    html.AppendLine(annex3Html);
+                }
                 html.AppendLine("<div style='" + classStyle + "margin-top:12px;'>" + E(d.Classification) + " — " + E(d.DayTitle) + " — Field TAK Hub v3.3</div>");
             }
 
@@ -1974,6 +1979,12 @@ namespace FieldTakHub.Builder.Services
                 sb.AppendLine();
                 sb.AppendLine("## 📎 " + BuilderI18n.T("ZAŁĄCZNIK 2. OPRACOWANIE ZADAŃ (" + d.DayTitle + ")", "ANNEX 2. TASKS BREAKDOWN (" + d.DayTitle + ")"));
                 sb.AppendLine(d.Annex2TasksAnalysis);
+                string annex3Md = V34CleanAnnex3AndDiscordEngine.BuildAnnex3DiscordMarkdown(factionName, d.DayTitle);
+                if (!string.IsNullOrWhiteSpace(annex3Md))
+                {
+                    sb.AppendLine();
+                    sb.AppendLine(annex3Md);
+                }
             }
 
             return sb.ToString();

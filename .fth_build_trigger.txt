@@ -1,1 +1,1 @@
-Field TAK Hub OPORD Minus Button UI Fix UTC: 2026-11-02T19:07:29.0507506Z
+Field TAK Hub OPORD Minus UI & Annex 3 Map Trigger UTC: 2026-11-02T19:38:10.9817765Z | RunId: dc2f659a79b8421db393cfef329c3a0d
