@@ -1,1 +1,1 @@
-Field TAK Hub Sector Grid A,B,C / 1,2,3 Build Trigger UTC: 2026-11-02T09:54:57.5553118Z | RunId: 51e75a14e73b4e859a65d73b64bb1122
+Field TAK Hub Map & OPORD Complete Upgrade UTC: 2026-11-02T18:49:37.0414512Z | RunId: da19f3bfe9bb415da0453d847d9c3ca8

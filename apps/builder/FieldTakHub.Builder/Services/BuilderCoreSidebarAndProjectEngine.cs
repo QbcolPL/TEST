@@ -2197,6 +2197,47 @@ private static void CaptureAndCollapseTopMenuBar(List<DependencyObject> allEleme
             var list = new List<V34FactionSnapshot>();
             try
             {
+                var internalFactions = TacticalConfigPanel.GetInternalFactionsList();
+                if (internalFactions != null && internalFactions.Count > 0)
+                {
+                    foreach (var f in internalFactions)
+                    {
+                        if (f == null || string.IsNullOrWhiteSpace(f.Name)) continue;
+                        var snap = new V34FactionSnapshot
+                        {
+                            FactionName = f.Name.Trim(),
+                            ColorHex = string.IsNullOrWhiteSpace(f.ColorHex) ? "#2684FF" : f.ColorHex.Trim().ToUpperInvariant(),
+                            ChannelName = string.IsNullOrWhiteSpace(f.ChannelName) ? (f.Name.Trim().ToUpperInvariant() + "-MESH") : f.ChannelName.Trim(),
+                            Region = string.IsNullOrWhiteSpace(f.LoraRegion) ? "EU_868" : f.LoraRegion.Trim(),
+                            ModemPreset = string.IsNullOrWhiteSpace(f.LoraModemPreset) ? "SHORT_FAST" : f.LoraModemPreset.Trim(),
+                            OtsHost = f.OtsHost ?? "",
+                            EmergencyPhone = string.IsNullOrWhiteSpace(f.EmergencyPhone) ? "Brak / 112" : f.EmergencyPhone.Trim(),
+                            ExpirationHours = f.ValidityHours
+                        };
+                        if (f.VoiceChannels != null)
+                        {
+                            foreach (var vc in f.VoiceChannels)
+                            {
+                                snap.VoiceRows.Add(new V34FactionVoiceChannelRow
+                                {
+                                    Role = string.IsNullOrWhiteSpace(vc.RoleName) ? "Kana\u0142" : vc.RoleName,
+                                    Band = string.IsNullOrWhiteSpace(vc.BandType) ? "PMR" : vc.BandType,
+                                    Freq = string.IsNullOrWhiteSpace(vc.FreqMhz) ? "-" : vc.FreqMhz,
+                                    Tone = string.IsNullOrWhiteSpace(vc.ToneOrCode) ? "Brak tonu" : vc.ToneOrCode
+                                });
+                            }
+                        }
+                        if (snap.VoiceRows.Count == 0)
+                            snap.VoiceRows.Add(new V34FactionVoiceChannelRow());
+                        list.Add(snap);
+                    }
+                    if (list.Count > 0)
+                    {
+                        CachedFactions.Clear();
+                        CachedFactions.AddRange(list);
+                        return CachedFactions;
+                    }
+                }
                 var all = preScanned ?? ScanAllWindowRoots(win ?? Application.Current?.MainWindow);
                 var headers = all.OfType<TextBlock>()
                     .Where(t => (t.Text ?? "").Contains("Generator Stron \u2014", StringComparison.OrdinalIgnoreCase))
@@ -2361,6 +2402,17 @@ private static void CaptureAndCollapseTopMenuBar(List<DependencyObject> allEleme
         {
             try
             {
+                if (TacticalMapGeneratorView.TryGetMarkedAoCenter(out double markedLat, out double markedLon, out _))
+                {
+                    HasExplicitAoMarked = true;
+                    AoCenterLat = markedLat;
+                    AoCenterLon = markedLon;
+                    return;
+                }
+                else
+                {
+                    HasExplicitAoMarked = false;
+                }
                 var w = win ?? Application.Current?.MainWindow;
                 if (w == null) return;
 

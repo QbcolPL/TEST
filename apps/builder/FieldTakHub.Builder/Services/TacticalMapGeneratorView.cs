@@ -122,6 +122,12 @@ namespace FieldTakHub.Builder.Services
             root["offlineDbFormat"] = _offlineDbFormat;
             root["bakeLidarInOffline"] = _bakeLidarInOffline;
             root["includeVectorsWithOffline"] = _includeVectorsWithOffline;
+            root["customLegendTitle"] = _customLegendTitle ?? "";
+            root["customLegendSubtitle"] = _customLegendSubtitle ?? "";
+            root["customLegendExtraNotes"] = _customLegendExtraNotes ?? "";
+            root["groupIdenticalLegendItems"] = _groupIdenticalLegendItems;
+            if (_legendCustomWidth.HasValue) root["legendCustomWidth"] = _legendCustomWidth.Value;
+            if (_legendCustomHeight.HasValue) root["legendCustomHeight"] = _legendCustomHeight.Value;
 
             root["enableSectorGridOverlay"] = _enableSectorGridOverlay;
             root["sectorSizeMeters"] = _sectorSizeMeters;
@@ -160,6 +166,12 @@ namespace FieldTakHub.Builder.Services
             if (root["offlineDbFormat"] != null) _offlineDbFormat = root["offlineDbFormat"].ToString();
             if (bool.TryParse(root["bakeLidarInOffline"]?.ToString(), out bool bl)) _bakeLidarInOffline = bl;
             if (bool.TryParse(root["includeVectorsWithOffline"]?.ToString(), out bool iv)) _includeVectorsWithOffline = iv;
+            if (root["customLegendTitle"] != null) _customLegendTitle = root["customLegendTitle"].ToString();
+            if (root["customLegendSubtitle"] != null) _customLegendSubtitle = root["customLegendSubtitle"].ToString();
+            if (root["customLegendExtraNotes"] != null) _customLegendExtraNotes = root["customLegendExtraNotes"].ToString();
+            if (bool.TryParse(root["groupIdenticalLegendItems"]?.ToString(), out bool gili)) _groupIdenticalLegendItems = gili;
+            _legendCustomWidth = double.TryParse(root["legendCustomWidth"]?.ToString(), NumberStyles.Any, CultureInfo.InvariantCulture, out double lcw) ? lcw : null;
+            _legendCustomHeight = double.TryParse(root["legendCustomHeight"]?.ToString(), NumberStyles.Any, CultureInfo.InvariantCulture, out double lch) ? lch : null;
 
             if (bool.TryParse(root["enableSectorGridOverlay"]?.ToString(), out bool esg)) _enableSectorGridOverlay = esg;
             if (int.TryParse(root["sectorSizeMeters"]?.ToString(), out int ssm)) _sectorSizeMeters = Math.Clamp(ssm, 10, 5000);
@@ -211,6 +223,23 @@ namespace FieldTakHub.Builder.Services
                 if (_statusText != null) _statusText.Text = $"\u2713 Skopiowano meldunek wsp\u00F3\u0142rz\u0119dnych do schowka: {report}";
             }
             catch { }
+        }
+
+                public static bool TryGetMarkedAoCenter(out double aoLat, out double aoLon, out string coordsLabel)
+        {
+            var ao = _mapObjects.FirstOrDefault(o => o.Kind == "AO" && o.Points != null && o.Points.Count >= 3);
+            if (ao != null)
+            {
+                aoLat = ao.Points.Average(p => p.Lat);
+                aoLon = ao.Points.Average(p => p.Lon);
+                var (mgrs, _, _, _, _) = FormatTacticalPointCoordinates(aoLat, aoLon);
+                coordsLabel = $"Obszar AO (MGRS: {mgrs})";
+                return true;
+            }
+            aoLat = 0.0;
+            aoLon = 0.0;
+            coordsLabel = "";
+            return false;
         }
 
         private static void UpdateSheetViewportSize()
@@ -659,47 +688,46 @@ namespace FieldTakHub.Builder.Services
                 sec3.Children.Add(aoMaskRow);
 
                 var matchedSymbol = NatoSymbols.FirstOrDefault(n => n.Code == _selectedNatoSymbolCode) ?? NatoSymbols[0];
-                var natoCombo = new ComboBox { ItemsSource = NatoSymbols, SelectedItem = matchedSymbol, Height = 26, FontSize = 10.5, Margin = new Thickness(0, 0, 0, 4), Tag = "INJECTED" };
+                var natoCombo = new ComboBox
+                {
+                    ItemsSource = NatoSymbols,
+                    SelectedItem = matchedSymbol,
+                    Height = 30,
+                    FontSize = 10.5,
+                    Margin = new Thickness(0, 0, 0, 5),
+                    Tag = "INJECTED"
+                };
                 TacticalConfigPanel.ApplyUnifiedComboBoxTheme(natoCombo, win);
+                natoCombo.ItemTemplate = CreateNatoSymbolVisualDataTemplate();
                 natoCombo.SelectionChanged += (s, e) =>
                 {
                     if (natoCombo.SelectedItem is NatoSymbolOption opt)
                     {
                         _selectedNatoSymbolCode = opt.Code;
-                        if (_objectNameInputBox != null && !_isRebuildingMapControls) _objectNameInputBox.Text = opt.ShortBadge;
                         if (!_isRebuildingMapControls) TacticalConfigPanel.MarkDirty();
                     }
                 };
-                sec3.Children.Add(TacticalConfigPanel.FieldBox("Wybierz kształt (Strzałka, Namiot, Krzyżyk, Koło, Kwadrat, Romb, Trójkąt lub NATO):", natoCombo));
+                sec3.Children.Add(TacticalConfigPanel.FieldBox("Wybierz symbol taktyczny / wektor militarny NATO (36 wzor\u00F3w wektorowych):", natoCombo));
 
-                var objCfgRow = new Grid { Margin = new Thickness(0, 0, 0, 4) };
-                objCfgRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-                objCfgRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(155) });
-                _objectNameInputBox = (TextBox)TacticalConfigPanel.TextCtrl(_savedDefaultObjectName, v => { _savedDefaultObjectName = v; });
-
-                var mapColorSwatch = new Border { Width = 13, Height = 13, CornerRadius = new CornerRadius(3), Background = TacticalConfigPanel.BrushFromHex(_selectedObjectColorHex, Color.FromRgb(38, 132, 255)), BorderBrush = Brushes.White, BorderThickness = new Thickness(1), Margin = new Thickness(0, 0, 6, 0), VerticalAlignment = VerticalAlignment.Center };
-                var mapColorText = new TextBlock { Text = $"Paleta RGB ({_selectedObjectColorHex})", Foreground = Brushes.White, FontSize = 10, FontWeight = FontWeights.Bold, VerticalAlignment = VerticalAlignment.Center };
+                var mapColorSwatch = new Border { Width = 14, Height = 14, CornerRadius = new CornerRadius(3), Background = TacticalConfigPanel.BrushFromHex(_selectedObjectColorHex, Color.FromRgb(38, 132, 255)), BorderBrush = Brushes.White, BorderThickness = new Thickness(1), Margin = new Thickness(0, 0, 7, 0), VerticalAlignment = VerticalAlignment.Center };
+                var mapColorText = new TextBlock { Text = $"Kolor nowego obiektu / symbolu: Paleta RGB ({_selectedObjectColorHex.ToUpperInvariant()})", Foreground = Brushes.White, FontSize = 10, FontWeight = FontWeights.Bold, VerticalAlignment = VerticalAlignment.Center };
                 var mapColorStack = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Center };
                 mapColorStack.Children.Add(mapColorSwatch); mapColorStack.Children.Add(mapColorText);
 
-                var btnPickMapRgb = new Button { Content = mapColorStack, Height = 25, Background = TacticalConfigPanel.BrushInputBg, BorderBrush = TacticalConfigPanel.BrushAccent, BorderThickness = new Thickness(1), Cursor = Cursors.Hand };
+                var btnPickMapRgb = new Button { Content = mapColorStack, Height = 27, Margin = new Thickness(0, 0, 0, 5), Background = TacticalConfigPanel.BrushInputBg, BorderBrush = TacticalConfigPanel.BrushAccent, BorderThickness = new Thickness(1), Cursor = Cursors.Hand };
                 btnPickMapRgb.Click += (s, e) =>
                 {
-                    string picked = TacticalConfigPanel.ShowRgbColorPickerDialog(win, "Kolor nowego kształtu / znacznika / strefy", _selectedObjectColorHex);
+                    string picked = TacticalConfigPanel.ShowRgbColorPickerDialog(win, "Kolor nowego kszta\u0142tu / znacznika / strefy", _selectedObjectColorHex);
                     if (!string.IsNullOrEmpty(picked))
                     {
                         _selectedObjectColorHex = picked;
                         mapColorSwatch.Background = TacticalConfigPanel.BrushFromHex(picked, Color.FromRgb(38, 132, 255));
-                        mapColorText.Text = $"Paleta RGB ({picked.ToUpperInvariant()})";
+                        mapColorText.Text = $"Kolor nowego obiektu / symbolu: Paleta RGB ({picked.ToUpperInvariant()})";
+                        natoCombo.Items.Refresh();
                         TacticalConfigPanel.MarkDirty();
                     }
                 };
-
-                var fNameBox = TacticalConfigPanel.FieldBox("Domyślna nazwa nowego obiektu:", _objectNameInputBox);
-                var fRgbBtn = TacticalConfigPanel.FieldBox("Kolor kształtu / maski (RGB):", btnPickMapRgb);
-                Grid.SetColumn(fNameBox, 0); Grid.SetColumn(fRgbBtn, 1);
-                objCfgRow.Children.Add(fNameBox); objCfgRow.Children.Add(fRgbBtn);
-                sec3.Children.Add(objCfgRow);
+                sec3.Children.Add(btnPickMapRgb);
 
                 var lblTogglesGrid = new UniformGrid { Columns = 2, Margin = new Thickness(0, 0, 0, 6) };
                 var chkGlobalLabels = new CheckBox { Content = "Pokazuj etykiety nazw na mapie", IsChecked = _showAllObjectLabels, Foreground = TacticalConfigPanel.BrushAccent, FontSize = 9.5, FontWeight = FontWeights.Bold };
@@ -775,6 +803,11 @@ namespace FieldTakHub.Builder.Services
                 posGrid.Children.Add(TacticalConfigPanel.FieldBox("Pozycja Legendy (lub przeciągnij):", TacticalConfigPanel.ComboCtrl(corners, _legendPos, win, v => { _legendPos = v; _legendNormX = null; _legendNormY = null; RedrawVectorsOnly(); })));
                 posGrid.Children.Add(TacticalConfigPanel.FieldBox("Tryb GRG w pliku .KMZ:", TacticalConfigPanel.ComboCtrl(new[] { "Przezroczysta siatka", "Pełny podkład + siatka", "Tylko podkład", "Tylko wektory KML (Bez obrazu)" }, _kmzGrgMode, win, v => _kmzGrgMode = v)));
                 sec4.Children.Add(posGrid);
+                var btnEditLegendContent = MakeActionButton("\u270F\uFE0F Edytuj tre\u015B\u0107 i wymiary Legendy (lub przeci\u0105gnij dowolny bok na mapie)", false, () => ShowLegendContentEditorDialog(win));
+                btnEditLegendContent.Height = 27;
+                btnEditLegendContent.Margin = new Thickness(0, 0, 0, 6);
+                btnEditLegendContent.BorderBrush = TacticalConfigPanel.BrushAccent;
+                sec4.Children.Add(btnEditLegendContent);
 
                 var expRow1 = new UniformGrid { Columns = 2, Margin = new Thickness(0, 0, 0, 6) };
                 var btnGpx = MakeActionButton("⌚ Zapisz .GPX jako...", false, async () => await ExportStandaloneFilesAsync(win, "gpx"));
@@ -1390,35 +1423,129 @@ namespace FieldTakHub.Builder.Services
             return b;
         }
 
+        private static TacticalMapObjectItem _newlyAddedObjectToFocus;
+
+        private sealed class NatoSymbolVisualPresenter : Border
+        {
+            public NatoSymbolVisualPresenter()
+            {
+                Padding = new Thickness(2, 1, 2, 1);
+                DataContextChanged += (_, __) => RebuildRow();
+            }
+
+            private void RebuildRow()
+            {
+                if (DataContext is NatoSymbolOption opt)
+                {
+                    var row = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+                    var iconBox = CreateMiniSymbolVectorBadge(opt.Code, _selectedObjectColorHex);
+                    iconBox.Margin = new Thickness(0, 0, 8, 0);
+                    row.Children.Add(iconBox);
+                    row.Children.Add(new TextBlock
+                    {
+                        Text = opt.Label,
+                        Foreground = Brushes.White,
+                        FontSize = 10.5,
+                        FontWeight = FontWeights.SemiBold,
+                        VerticalAlignment = VerticalAlignment.Center
+                    });
+                    Child = row;
+                }
+            }
+        }
+
+        private static DataTemplate CreateNatoSymbolVisualDataTemplate()
+        {
+            return new DataTemplate(typeof(NatoSymbolOption))
+            {
+                VisualTree = new FrameworkElementFactory(typeof(NatoSymbolVisualPresenter))
+            };
+        }
+
+        private static string GetDefaultAutoObjectName(string tool, string symbolCode)
+        {
+            if (tool == "AO") return "Granica Terenu Gry (AO)";
+            if (tool == "SECTOR")
+            {
+                int secCount = _mapObjects.Count(o => o.Kind == "Sector") + 1;
+                return $"Sektor-{secCount}";
+            }
+            if (tool == "ROUTE")
+            {
+                int rtCount = _mapObjects.Count(o => o.Kind == "Route") + 1;
+                return $"Trasa-{rtCount}";
+            }
+            if (tool == "DOT")
+            {
+                int dotCount = _mapObjects.Count(o => o.Kind == "Dot") + 1;
+                return $"Punkt-{dotCount}";
+            }
+
+            var opt = NatoSymbols.FirstOrDefault(n => n.Code == symbolCode);
+            string prefix = opt != null && !string.IsNullOrWhiteSpace(opt.ShortBadge) && opt.ShortBadge.Length <= 4 && char.IsLetter(opt.ShortBadge[0])
+                ? opt.ShortBadge
+                : "Punkt";
+            int sameCount = _mapObjects.Count(o => o.Kind == "Marker" && o.SymbolCode == symbolCode) + 1;
+            return $"{prefix}-{sameCount}";
+        }
+
+        private static string GetDefaultLegendDescriptionForObject(TacticalMapObjectItem obj)
+        {
+            if (obj == null) return "";
+            if (!string.IsNullOrWhiteSpace(obj.LegendDescription)) return obj.LegendDescription;
+            if (obj.Kind == "AO") return "Granica Terenu Gry (strefa poza gr\u0105)";
+            if (obj.Kind == "Sector") return "Sektor / Strefa taktyczna";
+            if (obj.Kind == "Route") return "Trasa / Linia rozgraniczenia";
+            if (obj.Kind == "Dot") return "Punkt orientacyjny";
+            var natoDef = NatoSymbols.FirstOrDefault(n => n.Code == obj.SymbolCode) ?? NatoSymbols[0];
+            return natoDef.NatoMeaning;
+        }
+
         private static void HandleMapClickToolAction(Window win, Point clickPt)
         {
             var (w, h) = GetExactCanvasSize();
-            string objName = string.IsNullOrWhiteSpace(_objectNameInputBox?.Text) ? $"Punkt-{_mapObjects.Count + 1}" : _objectNameInputBox.Text.Trim();
 
             if (_activeTool == "MARKER" || _activeTool == "DOT")
             {
                 var (clickLat, clickLon) = ScreenToLatLon(clickPt.X, clickPt.Y, w, h);
+                string symCode = _activeTool == "MARKER" ? _selectedNatoSymbolCode : "DOT";
+                string autoName = GetDefaultAutoObjectName(_activeTool, symCode);
                 var item = new TacticalMapObjectItem
                 {
                     Kind = _activeTool == "MARKER" ? "Marker" : "Dot",
-                    SymbolCode = _activeTool == "MARKER" ? _selectedNatoSymbolCode : "DOT",
-                    Name = objName, ColorHex = _selectedObjectColorHex, ShowLabel = _newObjectShowLabelDefault, SizeMultiplier = 1.0, RotationDeg = 0.0
+                    SymbolCode = symCode,
+                    Name = autoName,
+                    ColorHex = _selectedObjectColorHex,
+                    ShowLabel = _newObjectShowLabelDefault,
+                    SizeMultiplier = 1.0,
+                    RotationDeg = 0.0
                 };
+                item.LegendDescription = GetDefaultLegendDescriptionForObject(item);
                 item.Points.Add((clickLat, clickLon));
                 _mapObjects.Add(item);
-                _inspectedObject = item; _inspectedVertexIndex = 0;
+                _inspectedObject = item;
+                _inspectedVertexIndex = 0;
+                _newlyAddedObjectToFocus = item;
             }
             else if (_activeTool == "AO" || _activeTool == "SECTOR" || _activeTool == "ROUTE")
             {
                 string kind = _activeTool == "AO" ? "AO" : (_activeTool == "SECTOR" ? "Sector" : "Route");
                 if (_activeDraftPoly == null || _activeDraftPoly.Kind != kind)
                 {
+                    string autoPolyName = GetDefaultAutoObjectName(_activeTool, kind);
                     _activeDraftPoly = new TacticalMapObjectItem
                     {
-                        Kind = kind, SymbolCode = kind, Name = kind == "AO" ? "Granica Terenu Gry (AO)" : objName,
-                        ColorHex = _selectedObjectColorHex, ShowLabel = _newObjectShowLabelDefault, SizeMultiplier = 1.0, RotationDeg = 0.0
+                        Kind = kind,
+                        SymbolCode = kind,
+                        Name = autoPolyName,
+                        ColorHex = _selectedObjectColorHex,
+                        ShowLabel = _newObjectShowLabelDefault,
+                        SizeMultiplier = 1.0,
+                        RotationDeg = 0.0
                     };
+                    _activeDraftPoly.LegendDescription = GetDefaultLegendDescriptionForObject(_activeDraftPoly);
                     _mapObjects.Add(_activeDraftPoly);
+                    _newlyAddedObjectToFocus = _activeDraftPoly;
                 }
 
                 Point effectivePt = clickPt;
@@ -1431,7 +1558,8 @@ namespace FieldTakHub.Builder.Services
 
                 var (ptLat, ptLon) = ScreenToLatLon(effectivePt.X, effectivePt.Y, w, h);
                 _activeDraftPoly.Points.Add((ptLat, ptLon));
-                _inspectedObject = _activeDraftPoly; _inspectedVertexIndex = _activeDraftPoly.Points.Count - 1;
+                _inspectedObject = _activeDraftPoly;
+                _inspectedVertexIndex = _activeDraftPoly.Points.Count - 1;
             }
             TacticalConfigPanel.MarkDirty();
             UpdateSelectedMarkerInspectorUI();
@@ -1450,7 +1578,7 @@ namespace FieldTakHub.Builder.Services
             _objectsListStack.Children.Clear();
             if (_mapObjects.Count == 0)
             {
-                _objectsListStack.Children.Add(new TextBlock { Text = "Brak naniesionych obiektów — kliknij na mapie lub wczytaj plik .KMZ / .GPX", Foreground = TacticalConfigPanel.BrushMutedText, FontSize = 9.5, HorizontalAlignment = HorizontalAlignment.Center, Margin = new Thickness(0, 8, 0, 8) });
+                _objectsListStack.Children.Add(new TextBlock { Text = "Brak naniesionych obiekt\u00F3w \u2014 kliknij na mapie lub wczytaj plik .KMZ / .GPX", Foreground = TacticalConfigPanel.BrushMutedText, FontSize = 9.5, HorizontalAlignment = HorizontalAlignment.Center, Margin = new Thickness(0, 8, 0, 8) });
                 return;
             }
 
@@ -1458,6 +1586,9 @@ namespace FieldTakHub.Builder.Services
             {
                 var captured = obj;
                 if (captured.SizeMultiplier <= 0.1) captured.SizeMultiplier = 1.0;
+                if (string.IsNullOrWhiteSpace(captured.LegendDescription))
+                    captured.LegendDescription = GetDefaultLegendDescriptionForObject(captured);
+
                 bool isMultiPt = captured.Kind == "AO" || captured.Kind == "Sector" || captured.Kind == "Route";
 
                 var itemCard = new Border
@@ -1465,33 +1596,50 @@ namespace FieldTakHub.Builder.Services
                     Background = TacticalConfigPanel.BrushItemBg,
                     BorderBrush = (_inspectedObject == captured) ? TacticalConfigPanel.BrushAccent : TacticalConfigPanel.BrushTileBorder,
                     BorderThickness = new Thickness((_inspectedObject == captured) ? 1.5 : 1.0),
-                    CornerRadius = new CornerRadius(5), Padding = new Thickness(6, 4, 6, 4), Margin = new Thickness(0, 0, 0, 5)
+                    CornerRadius = new CornerRadius(5),
+                    Padding = new Thickness(6, 5, 6, 5),
+                    Margin = new Thickness(0, 0, 0, 5)
                 };
 
                 var itemStack = new StackPanel();
                 var topRow = new Grid { Margin = new Thickness(0, 0, 0, 3) };
                 topRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(20) });
                 topRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(22) });
-                topRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(26) });
-                topRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(54) });
+                topRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(24) });
+                topRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(36) });
                 topRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
                 topRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-                topRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(28) });
+                topRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(26) });
 
-                var chkShowLbl = new CheckBox { IsChecked = captured.ShowLabel, VerticalAlignment = VerticalAlignment.Center, HorizontalAlignment = HorizontalAlignment.Center, Cursor = Cursors.Hand, ToolTip = "Pokaż / ukryj etykietę tekstową tego obiektu na mapie" };
+                var chkShowLbl = new CheckBox { IsChecked = captured.ShowLabel, VerticalAlignment = VerticalAlignment.Center, HorizontalAlignment = HorizontalAlignment.Center, Cursor = Cursors.Hand, ToolTip = "Poka\u017C / ukryj etykiet\u0119 tekstow\u0105 tego punktu na mapie" };
                 chkShowLbl.Checked += (s, e) => { captured.ShowLabel = true; if (!_isRebuildingMapControls) TacticalConfigPanel.MarkDirty(); RedrawVectorsOnly(); };
                 chkShowLbl.Unchecked += (s, e) => { captured.ShowLabel = false; if (!_isRebuildingMapControls) TacticalConfigPanel.MarkDirty(); RedrawVectorsOnly(); };
                 Grid.SetColumn(chkShowLbl, 0); topRow.Children.Add(chkShowLbl);
 
-                var btnCol = new Button { Width = 18, Height = 18, Background = TacticalConfigPanel.BrushFromHex(captured.ColorHex, Color.FromRgb(38, 132, 255)), BorderBrush = Brushes.White, BorderThickness = new Thickness(1), Cursor = Cursors.Hand, ToolTip = "Zmień kolor tego obiektu (Paleta RGB)" };
+                var btnCol = new Button { Width = 18, Height = 18, Background = TacticalConfigPanel.BrushFromHex(captured.ColorHex, Color.FromRgb(38, 132, 255)), BorderBrush = Brushes.White, BorderThickness = new Thickness(1), Cursor = Cursors.Hand, ToolTip = "Zmie\u0144 kolor tego punktu/obiektu (Paleta RGB)" };
+                var visualBadgeHost = new Border { VerticalAlignment = VerticalAlignment.Center, HorizontalAlignment = HorizontalAlignment.Center };
+                void RebuildItemIconBadge()
+                {
+                    string codeForBadge = captured.Kind == "Dot" ? "DOT" : (isMultiPt ? captured.Kind : captured.SymbolCode);
+                    visualBadgeHost.Child = CreateMiniSymbolVectorBadge(codeForBadge, captured.ColorHex);
+                }
+                RebuildItemIconBadge();
+
                 btnCol.Click += (s, e) =>
                 {
-                    string picked = TacticalConfigPanel.ShowRgbColorPickerDialog(win, $"Kolor — {captured.Name}", captured.ColorHex);
-                    if (!string.IsNullOrEmpty(picked)) { captured.ColorHex = picked; btnCol.Background = TacticalConfigPanel.BrushFromHex(picked, Color.FromRgb(38, 132, 255)); TacticalConfigPanel.MarkDirty(); RedrawVectorsOnly(); }
+                    string picked = TacticalConfigPanel.ShowRgbColorPickerDialog(win, $"Kolor \u2014 {captured.Name}", captured.ColorHex);
+                    if (!string.IsNullOrEmpty(picked))
+                    {
+                        captured.ColorHex = picked;
+                        btnCol.Background = TacticalConfigPanel.BrushFromHex(picked, Color.FromRgb(38, 132, 255));
+                        RebuildItemIconBadge();
+                        TacticalConfigPanel.MarkDirty();
+                        RedrawVectorsOnly();
+                    }
                 };
                 Grid.SetColumn(btnCol, 1); topRow.Children.Add(btnCol);
 
-                var btnInspect = new Button { Content = "📍", Width = 22, Height = 20, Padding = new Thickness(0), Background = TacticalConfigPanel.BrushInputBg, Foreground = TacticalConfigPanel.BrushAccent, BorderBrush = TacticalConfigPanel.BrushAccent, BorderThickness = new Thickness(1), FontSize = 10, Cursor = Cursors.Hand, ToolTip = "Wyśrodkuj widok / pokaż współrzędne MGRS tego obiektu" };
+                var btnInspect = new Button { Content = "\uD83D\uDCCD", Width = 22, Height = 20, Padding = new Thickness(0), Background = TacticalConfigPanel.BrushInputBg, Foreground = TacticalConfigPanel.BrushAccent, BorderBrush = TacticalConfigPanel.BrushAccent, BorderThickness = new Thickness(1), FontSize = 10, Cursor = Cursors.Hand, ToolTip = "Wy\u015Brodkuj widok / poka\u017C wsp\u00F3\u0142rz\u0119dne MGRS i Sektor tego obiektu" };
                 btnInspect.Click += (s, e) =>
                 {
                     _inspectedObject = captured;
@@ -1508,23 +1656,48 @@ namespace FieldTakHub.Builder.Services
                 };
                 Grid.SetColumn(btnInspect, 2); topRow.Children.Add(btnInspect);
 
-                var natoOpt = NatoSymbols.FirstOrDefault(n => n.Code == captured.SymbolCode);
-                string badgeTxt = captured.Kind == "AO" ? $"[AO·{captured.Points.Count}]" : (captured.Kind == "Sector" ? $"[SEK·{captured.Points.Count}]" : (captured.Kind == "Route" ? $"[TR·{captured.Points.Count}]" : (natoOpt != null ? $"[{natoOpt.ShortBadge}]" : $"[{captured.SymbolCode}]")));
-                var kindLbl = new TextBlock { Text = badgeTxt, Foreground = TacticalConfigPanel.BrushAccent, FontSize = 8.2, FontWeight = FontWeights.Bold, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(2, 0, 3, 0) };
-                Grid.SetColumn(kindLbl, 3); topRow.Children.Add(kindLbl);
+                Grid.SetColumn(visualBadgeHost, 3); topRow.Children.Add(visualBadgeHost);
 
-                var editNameBox = new TextBox { Text = captured.Name, Height = 22, FontSize = 10, Padding = new Thickness(4, 0, 4, 0), VerticalContentAlignment = VerticalAlignment.Center, Background = TacticalConfigPanel.BrushInputBg, Foreground = Brushes.White, BorderBrush = TacticalConfigPanel.BrushInputBorder, BorderThickness = new Thickness(1) };
-                editNameBox.TextChanged += (s, e) => { captured.Name = editNameBox.Text; if (!_isRebuildingMapControls) TacticalConfigPanel.MarkDirty(); UpdateSelectedMarkerInspectorUI(); RedrawVectorsOnly(); };
+                var editNameBox = new TextBox
+                {
+                    Text = captured.Name,
+                    Height = 23,
+                    FontSize = 10.5,
+                    FontWeight = FontWeights.Bold,
+                    Padding = new Thickness(5, 0, 5, 0),
+                    VerticalContentAlignment = VerticalAlignment.Center,
+                    Background = TacticalConfigPanel.BrushInputBg,
+                    Foreground = Brushes.White,
+                    BorderBrush = TacticalConfigPanel.BrushAccent,
+                    BorderThickness = new Thickness(1),
+                    ToolTip = "Wpisz lub zmie\u0144 nazw\u0119 punktu / obiektu (wy\u015Bwietlan\u0105 na mapie oraz w legendzie)"
+                };
+                editNameBox.TextChanged += (s, e) =>
+                {
+                    captured.Name = editNameBox.Text;
+                    if (!_isRebuildingMapControls) TacticalConfigPanel.MarkDirty();
+                    UpdateSelectedMarkerInspectorUI();
+                    RedrawVectorsOnly();
+                };
                 Grid.SetColumn(editNameBox, 4); topRow.Children.Add(editNameBox);
 
-                // Narzędzia konwersji wielokątów/śladów KMZ i GPX: (🔄 Typ: AO <-> Sektor <-> Trasa) oraz (✂️ Uprość ślad GPS)
+                if (_newlyAddedObjectToFocus == captured)
+                {
+                    _newlyAddedObjectToFocus = null;
+                    editNameBox.Loaded += (_, __) =>
+                    {
+                        editNameBox.Focus();
+                        editNameBox.SelectAll();
+                    };
+                }
+
                 if (isMultiPt)
                 {
                     var polyToolsStack = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(3, 0, 0, 0) };
                     var btnCycleKind = new Button
                     {
-                        Content = "🔄 Typ",
-                        Height = 20,
+                        Content = "\uD83D\uDD04 Typ",
+                        Height = 21,
                         Padding = new Thickness(4, 0, 4, 0),
                         Background = TacticalConfigPanel.BrushInputBg,
                         Foreground = TacticalConfigPanel.BrushAccent,
@@ -1533,12 +1706,13 @@ namespace FieldTakHub.Builder.Services
                         FontSize = 8.5,
                         FontWeight = FontWeights.Bold,
                         Cursor = Cursors.Hand,
-                        ToolTip = "Przełącz typ geometrii: Trasa (Linia) ↔ Granica Terenu Gry (AO) ↔ Sektor (Strefa)"
+                        ToolTip = "Prze\u0142\u0105cz typ geometrii: Trasa (Linia) \u2194 Granica Terenu Gry (AO) \u2194 Sektor (Strefa)"
                     };
                     btnCycleKind.Click += (s, e) =>
                     {
                         captured.Kind = captured.Kind == "Route" ? "AO" : (captured.Kind == "AO" ? "Sector" : "Route");
                         captured.SymbolCode = captured.Kind;
+                        captured.LegendDescription = GetDefaultLegendDescriptionForObject(captured);
                         TacticalConfigPanel.MarkDirty();
                         RefreshObjectsListUI(win);
                         RedrawVectorsOnly();
@@ -1550,9 +1724,9 @@ namespace FieldTakHub.Builder.Services
                     {
                         var btnSimplify = new Button
                         {
-                            Content = "✂️",
+                            Content = "\u2702\uFE0F",
                             Width = 22,
-                            Height = 20,
+                            Height = 21,
                             Margin = new Thickness(2, 0, 0, 0),
                             Background = TacticalConfigPanel.BrushInputBg,
                             Foreground = Brushes.White,
@@ -1560,7 +1734,7 @@ namespace FieldTakHub.Builder.Services
                             BorderThickness = new Thickness(1),
                             FontSize = 9,
                             Cursor = Cursors.Hand,
-                            ToolTip = $"Uprość gęsty ślad GPS / wielokąt (Teraz: {captured.Points.Count} wierzchołków)"
+                            ToolTip = $"Upro\u015B\u0107 g\u0119sty \u015Blad GPS / wielok\u0105t (Teraz: {captured.Points.Count} wierzcho\u0142k\u00F3w)"
                         };
                         btnSimplify.Click += (s, e) =>
                         {
@@ -1570,7 +1744,7 @@ namespace FieldTakHub.Builder.Services
                             {
                                 captured.Points = simp;
                                 TacticalConfigPanel.MarkDirty();
-                                if (_statusText != null) _statusText.Text = $"✂️ Uproszczono geometrię '{captured.Name}': {before} -> {simp.Count} wierzchołków.";
+                                if (_statusText != null) _statusText.Text = $"\u2702\uFE0F Uproszczono geometri\u0119 '{captured.Name}': {before} -> {simp.Count} wierzcho\u0142k\u00F3w.";
                                 RefreshObjectsListUI(win);
                                 RedrawVectorsOnly();
                             }
@@ -1582,7 +1756,7 @@ namespace FieldTakHub.Builder.Services
                     topRow.Children.Add(polyToolsStack);
                 }
 
-                var btnMinusDel = CreateRedMinusDeleteButton($"Usuń obiekt: {captured.Name}", () =>
+                var btnMinusDel = CreateRedMinusDeleteButton($"Usu\u0144 obiekt: {captured.Name}", () =>
                 {
                     _mapObjects.Remove(captured);
                     if (_activeDraftPoly == captured) _activeDraftPoly = null;
@@ -1596,12 +1770,40 @@ namespace FieldTakHub.Builder.Services
                 Grid.SetColumn(btnMinusDel, 6); topRow.Children.Add(btnMinusDel);
                 itemStack.Children.Add(topRow);
 
+                // Wiersz edycji opisu tego punktu w Legendzie
+                var legDescRow = new Grid { Margin = new Thickness(0, 0, 0, 3) };
+                legDescRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(68) });
+                legDescRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+                var legDescLbl = new TextBlock { Text = "W legendzie:", Foreground = TacticalConfigPanel.BrushMutedText, FontSize = 8.8, VerticalAlignment = VerticalAlignment.Center };
+                var editLegDescBox = new TextBox
+                {
+                    Text = captured.LegendDescription,
+                    Height = 20,
+                    FontSize = 9.2,
+                    Padding = new Thickness(4, 0, 4, 0),
+                    VerticalContentAlignment = VerticalAlignment.Center,
+                    Background = TacticalConfigPanel.BrushInputBg,
+                    Foreground = TacticalConfigPanel.BrushMutedText,
+                    BorderBrush = TacticalConfigPanel.BrushInputBorder,
+                    BorderThickness = new Thickness(1),
+                    ToolTip = "Edytuj opis tego punktu wy\u015Bwietlany w Legendzie na mapie"
+                };
+                editLegDescBox.TextChanged += (s, e) =>
+                {
+                    captured.LegendDescription = editLegDescBox.Text;
+                    if (!_isRebuildingMapControls) TacticalConfigPanel.MarkDirty();
+                    RedrawVectorsOnly();
+                };
+                Grid.SetColumn(legDescLbl, 0); Grid.SetColumn(editLegDescBox, 1);
+                legDescRow.Children.Add(legDescLbl); legDescRow.Children.Add(editLegDescBox);
+                itemStack.Children.Add(legDescRow);
+
                 var sliderRow = new Grid { Margin = new Thickness(0, 0, 0, captured.Kind == "Marker" ? 2 : 0) };
                 sliderRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(58) });
                 sliderRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
                 sliderRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(68) });
 
-                var sizeTitle = new TextBlock { Text = "Wielkość:", Foreground = TacticalConfigPanel.BrushMutedText, FontSize = 9, VerticalAlignment = VerticalAlignment.Center };
+                var sizeTitle = new TextBlock { Text = "Wielko\u015B\u0107:", Foreground = TacticalConfigPanel.BrushMutedText, FontSize = 9, VerticalAlignment = VerticalAlignment.Center };
                 Grid.SetColumn(sizeTitle, 0); sliderRow.Children.Add(sizeTitle);
 
                 var sizeValTxt = new TextBlock { Text = FormatObjectSizeLabel(captured), Foreground = TacticalConfigPanel.BrushAccent, FontSize = 9, FontWeight = FontWeights.Bold, HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Center };
@@ -1623,17 +1825,17 @@ namespace FieldTakHub.Builder.Services
                     rotRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
                     rotRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(68) });
 
-                    var rotTitle = new TextBlock { Text = "Obrót (↻):", Foreground = TacticalConfigPanel.BrushMutedText, FontSize = 9, VerticalAlignment = VerticalAlignment.Center };
+                    var rotTitle = new TextBlock { Text = "Obr\u00F3t (\u21BB):", Foreground = TacticalConfigPanel.BrushMutedText, FontSize = 9, VerticalAlignment = VerticalAlignment.Center };
                     Grid.SetColumn(rotTitle, 0); rotRow.Children.Add(rotTitle);
 
-                    var rotValTxt = new TextBlock { Text = $"{captured.RotationDeg:0}°", Foreground = TacticalConfigPanel.BrushAccent, FontSize = 9, FontWeight = FontWeights.Bold, HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Center };
+                    var rotValTxt = new TextBlock { Text = $"{captured.RotationDeg:0}\u00B0", Foreground = TacticalConfigPanel.BrushAccent, FontSize = 9, FontWeight = FontWeights.Bold, HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Center };
                     Grid.SetColumn(rotValTxt, 2); rotRow.Children.Add(rotValTxt);
 
                     var rotSlider = new Slider { Minimum = 0.0, Maximum = 360.0, Value = Math.Clamp(captured.RotationDeg, 0.0, 360.0), IsMoveToPointEnabled = true, SmallChange = 5.0, LargeChange = 15.0, Cursor = Cursors.Hand, VerticalAlignment = VerticalAlignment.Center };
                     void SetRotSlider(MouseEventArgs e) { if (rotSlider.ActualWidth <= 8) return; rotSlider.Value = Math.Round(Math.Clamp(e.GetPosition(rotSlider).X / rotSlider.ActualWidth, 0.0, 1.0) * 360.0); }
                     rotSlider.PreviewMouseLeftButtonDown += (s, e) => SetRotSlider(e);
                     rotSlider.PreviewMouseMove += (s, e) => { if (e.LeftButton == MouseButtonState.Pressed) SetRotSlider(e); };
-                    rotSlider.ValueChanged += (s, e) => { captured.RotationDeg = Math.Round(e.NewValue); rotValTxt.Text = $"{captured.RotationDeg:0}°"; if (!_isRebuildingMapControls) TacticalConfigPanel.MarkDirty(); RedrawVectorsOnly(); };
+                    rotSlider.ValueChanged += (s, e) => { captured.RotationDeg = Math.Round(e.NewValue); rotValTxt.Text = $"{captured.RotationDeg:0}\u00B0"; if (!_isRebuildingMapControls) TacticalConfigPanel.MarkDirty(); RedrawVectorsOnly(); };
                     Grid.SetColumn(rotSlider, 1); rotRow.Children.Add(rotSlider);
                     itemStack.Children.Add(rotRow);
                 }
@@ -1828,6 +2030,261 @@ namespace FieldTakHub.Builder.Services
             _interactiveCanvas.Children.Add(rotBadge);
         }
 
+        internal static Border CreateMiniSymbolVectorBadge(string symbolCode, string colorHex)
+        {
+            Color c = Color.FromRgb(38, 132, 255);
+            try { if (!string.IsNullOrWhiteSpace(colorHex)) c = (Color)ColorConverter.ConvertFromString(colorHex); } catch { }
+            var strokeBrush = TacticalConfigPanel.CreateFrozenBrush(c.R, c.G, c.B);
+            var fillBrush = new SolidColorBrush(Color.FromArgb(195, c.R, c.G, c.B)); fillBrush.Freeze();
+            var darkBgBrush = new SolidColorBrush(Color.FromArgb(230, 8, 16, 20)); darkBgBrush.Freeze();
+
+            var host = new Border
+            {
+                Width = 32,
+                Height = 22,
+                Background = new SolidColorBrush(Color.FromArgb(180, 6, 14, 18)),
+                BorderBrush = TacticalConfigPanel.BrushTileBorder,
+                BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(4),
+                Child = new Viewbox
+                {
+                    Width = 28,
+                    Height = 20,
+                    Stretch = Stretch.Uniform,
+                    Child = BuildSymbolGeometryCanvas(symbolCode, strokeBrush, fillBrush, darkBgBrush)
+                }
+            };
+            return host;
+        }
+
+        private static Canvas BuildSymbolGeometryCanvas(string symbolCode, Brush strokeBrush, Brush fillBrush, Brush darkBgBrush)
+        {
+            const double cx = 18.0, cy = 16.0, fw = 28.0, fh = 18.0;
+            double left = cx - fw / 2.0, top = cy - fh / 2.0;
+            var iconCanvas = new Canvas { Width = 36.0, Height = 32.0, Background = Brushes.Transparent };
+
+            void AddBox()
+            {
+                var halo = new Rectangle { Width = fw + 2, Height = fh + 2, Stroke = Brushes.Black, StrokeThickness = 2.8, Fill = darkBgBrush };
+                Canvas.SetLeft(halo, left - 1); Canvas.SetTop(halo, top - 1); iconCanvas.Children.Add(halo);
+                var rect = new Rectangle { Width = fw, Height = fh, Stroke = strokeBrush, StrokeThickness = 2.0, Fill = fillBrush };
+                Canvas.SetLeft(rect, left); Canvas.SetTop(rect, top); iconCanvas.Children.Add(rect);
+            }
+
+            void AddCenteredTag(string txt, double fSz = 7.8)
+            {
+                var tb = new TextBlock { Text = txt, Foreground = Brushes.White, FontSize = fSz, FontWeight = FontWeights.Bold };
+                tb.Measure(new Size(100, 100));
+                Canvas.SetLeft(tb, cx - tb.DesiredSize.Width / 2.0);
+                Canvas.SetTop(tb, cy - tb.DesiredSize.Height / 2.0);
+                iconCanvas.Children.Add(tb);
+            }
+
+            switch (symbolCode)
+            {
+                case "DOT":
+                    var dEl = new Ellipse { Width = 14, Height = 14, Fill = strokeBrush, Stroke = Brushes.White, StrokeThickness = 2.0 };
+                    Canvas.SetLeft(dEl, cx - 7); Canvas.SetTop(dEl, cy - 7); iconCanvas.Children.Add(dEl);
+                    break;
+                case "AO":
+                    var aoRect = new Rectangle { Width = 26, Height = 18, Stroke = strokeBrush, StrokeThickness = 2.2, StrokeDashArray = new DoubleCollection { 3, 1.5 }, Fill = darkBgBrush };
+                    Canvas.SetLeft(aoRect, cx - 13); Canvas.SetTop(aoRect, cy - 9); iconCanvas.Children.Add(aoRect);
+                    AddCenteredTag("AO", 8.0);
+                    break;
+                case "Sector":
+                    var secPoly = new Polygon { Points = new PointCollection { new Point(cx - 12, cy - 8), new Point(cx + 10, cy - 9), new Point(cx + 13, cy + 8), new Point(cx - 9, cy + 9) }, Stroke = strokeBrush, StrokeThickness = 2.0, Fill = fillBrush };
+                    iconCanvas.Children.Add(secPoly);
+                    AddCenteredTag("SEK", 7.2);
+                    break;
+                case "Route":
+                    iconCanvas.Children.Add(new Polyline { Points = new PointCollection { new Point(4, 24), new Point(14, 10), new Point(22, 20), new Point(32, 7) }, Stroke = strokeBrush, StrokeThickness = 2.8, StrokeDashArray = new DoubleCollection { 3, 1.5 } });
+                    break;
+                case "NATO_HQ":
+                    iconCanvas.Children.Add(new Line { X1 = 6, Y1 = 3, X2 = 6, Y2 = 30, Stroke = Brushes.Black, StrokeThickness = 4.0 });
+                    iconCanvas.Children.Add(new Line { X1 = 6, Y1 = 3, X2 = 6, Y2 = 30, Stroke = strokeBrush, StrokeThickness = 2.2 });
+                    var hqRect = new Rectangle { Width = 24, Height = 15, Stroke = strokeBrush, StrokeThickness = 2.0, Fill = fillBrush };
+                    Canvas.SetLeft(hqRect, 6); Canvas.SetTop(hqRect, 3); iconCanvas.Children.Add(hqRect);
+                    var hqTxt = new TextBlock { Text = "HQ", Foreground = Brushes.White, FontSize = 8.5, FontWeight = FontWeights.Bold };
+                    Canvas.SetLeft(hqTxt, 11); Canvas.SetTop(hqTxt, 4); iconCanvas.Children.Add(hqTxt);
+                    break;
+                case "SHAPE_ARROW":
+                    var arrPts = new PointCollection { new Point(cx, cy - 13), new Point(cx + 10, cy + 1), new Point(cx + 4, cy + 1), new Point(cx + 4, cy + 13), new Point(cx - 4, cy + 13), new Point(cx - 4, cy + 1), new Point(cx - 10, cy + 1) };
+                    iconCanvas.Children.Add(new Polygon { Stroke = Brushes.Black, StrokeThickness = 3.2, Fill = darkBgBrush, Points = arrPts, StrokeLineJoin = PenLineJoin.Round });
+                    iconCanvas.Children.Add(new Polygon { Stroke = Brushes.White, StrokeThickness = 1.3, Fill = strokeBrush, Points = arrPts, StrokeLineJoin = PenLineJoin.Round });
+                    break;
+                case "SHAPE_TENT":
+                    var tentOuter = new PointCollection { new Point(cx, cy - 11), new Point(cx + 13, cy + 10), new Point(cx - 13, cy + 10) };
+                    var tentDoor = new PointCollection { new Point(cx, cy - 1), new Point(cx + 5, cy + 10), new Point(cx - 5, cy + 10) };
+                    iconCanvas.Children.Add(new Polygon { Stroke = Brushes.Black, StrokeThickness = 3.2, Fill = darkBgBrush, Points = tentOuter, StrokeLineJoin = PenLineJoin.Round });
+                    iconCanvas.Children.Add(new Polygon { Stroke = Brushes.White, StrokeThickness = 1.5, Fill = fillBrush, Points = tentOuter, StrokeLineJoin = PenLineJoin.Round });
+                    iconCanvas.Children.Add(new Polygon { Stroke = strokeBrush, StrokeThickness = 1.1, Fill = darkBgBrush, Points = tentDoor });
+                    break;
+                case "SHAPE_CROSS":
+                    iconCanvas.Children.Add(new Line { X1 = cx - 10, Y1 = cy - 10, X2 = cx + 10, Y2 = cy + 10, Stroke = Brushes.Black, StrokeThickness = 5.4, StrokeStartLineCap = PenLineCap.Round, StrokeEndLineCap = PenLineCap.Round });
+                    iconCanvas.Children.Add(new Line { X1 = cx - 10, Y1 = cy + 10, X2 = cx + 10, Y2 = cy - 10, Stroke = Brushes.Black, StrokeThickness = 5.4, StrokeStartLineCap = PenLineCap.Round, StrokeEndLineCap = PenLineCap.Round });
+                    iconCanvas.Children.Add(new Line { X1 = cx - 10, Y1 = cy - 10, X2 = cx + 10, Y2 = cy + 10, Stroke = strokeBrush, StrokeThickness = 3.2, StrokeStartLineCap = PenLineCap.Round, StrokeEndLineCap = PenLineCap.Round });
+                    iconCanvas.Children.Add(new Line { X1 = cx - 10, Y1 = cy + 10, X2 = cx + 10, Y2 = cy - 10, Stroke = strokeBrush, StrokeThickness = 3.2, StrokeStartLineCap = PenLineCap.Round, StrokeEndLineCap = PenLineCap.Round });
+                    break;
+                case "SHAPE_CIRCLE":
+                    var cMain = new Ellipse { Width = 22, Height = 22, Stroke = strokeBrush, StrokeThickness = 2.4, Fill = fillBrush }; Canvas.SetLeft(cMain, cx - 11); Canvas.SetTop(cMain, cy - 11); iconCanvas.Children.Add(cMain);
+                    var cCenter = new Ellipse { Width = 5, Height = 5, Fill = Brushes.White }; Canvas.SetLeft(cCenter, cx - 2.5); Canvas.SetTop(cCenter, cy - 2.5); iconCanvas.Children.Add(cCenter);
+                    break;
+                case "SHAPE_SQUARE":
+                    var sqMain = new Rectangle { Width = 20, Height = 20, Stroke = strokeBrush, StrokeThickness = 2.2, Fill = fillBrush }; Canvas.SetLeft(sqMain, cx - 10); Canvas.SetTop(sqMain, cy - 10); iconCanvas.Children.Add(sqMain);
+                    break;
+                case "SHAPE_RECT":
+                    AddBox();
+                    break;
+                case "SHAPE_DIAMOND":
+                    var dmShapePts = new PointCollection { new Point(cx, cy - 12), new Point(cx + 12, cy), new Point(cx, cy + 12), new Point(cx - 12, cy) };
+                    iconCanvas.Children.Add(new Polygon { Stroke = strokeBrush, StrokeThickness = 2.2, Fill = fillBrush, Points = dmShapePts });
+                    break;
+                case "SHAPE_TRIANGLE":
+                    var trShapePts = new PointCollection { new Point(cx, cy - 11), new Point(cx - 12, cy + 10), new Point(cx + 12, cy + 10) };
+                    iconCanvas.Children.Add(new Polygon { Stroke = strokeBrush, StrokeThickness = 2.2, Fill = fillBrush, Points = trShapePts, StrokeLineJoin = PenLineJoin.Round });
+                    break;
+                case "NATO_INF":
+                    AddBox();
+                    iconCanvas.Children.Add(new Line { X1 = left, Y1 = top, X2 = left + fw, Y2 = top + fh, Stroke = Brushes.White, StrokeThickness = 1.9 });
+                    iconCanvas.Children.Add(new Line { X1 = left, Y1 = top + fh, X2 = left + fw, Y2 = top, Stroke = Brushes.White, StrokeThickness = 1.9 });
+                    break;
+                case "NATO_MECH":
+                    AddBox();
+                    iconCanvas.Children.Add(new Line { X1 = left, Y1 = top, X2 = left + fw, Y2 = top + fh, Stroke = Brushes.White, StrokeThickness = 1.7 });
+                    iconCanvas.Children.Add(new Line { X1 = left, Y1 = top + fh, X2 = left + fw, Y2 = top, Stroke = Brushes.White, StrokeThickness = 1.7 });
+                    var mechTrack = new Ellipse { Width = 18, Height = 9, Stroke = Brushes.White, StrokeThickness = 1.8 };
+                    Canvas.SetLeft(mechTrack, cx - 9); Canvas.SetTop(mechTrack, cy - 4.5); iconCanvas.Children.Add(mechTrack);
+                    break;
+                case "NATO_ARMOR":
+                    AddBox();
+                    var armTrack = new Ellipse { Width = 20, Height = 10, Stroke = Brushes.White, StrokeThickness = 2.2 };
+                    Canvas.SetLeft(armTrack, cx - 10); Canvas.SetTop(armTrack, cy - 5); iconCanvas.Children.Add(armTrack);
+                    break;
+                case "NATO_RECON":
+                    AddBox();
+                    iconCanvas.Children.Add(new Line { X1 = left, Y1 = top + fh, X2 = left + fw, Y2 = top, Stroke = Brushes.White, StrokeThickness = 2.1 });
+                    break;
+                case "NATO_SOF":
+                    AddBox();
+                    iconCanvas.Children.Add(new Line { X1 = left + 3, Y1 = top + fh - 3, X2 = left + fw - 3, Y2 = top + 3, Stroke = Brushes.White, StrokeThickness = 1.6 });
+                    iconCanvas.Children.Add(new Line { X1 = left + 3, Y1 = top + 3, X2 = left + fw - 3, Y2 = top + fh - 3, Stroke = Brushes.White, StrokeThickness = 1.6 });
+                    AddCenteredTag("SOF", 7.2);
+                    break;
+                case "NATO_MED":
+                    AddBox();
+                    iconCanvas.Children.Add(new Line { X1 = cx, Y1 = top + 2, X2 = cx, Y2 = top + fh - 2, Stroke = Brushes.White, StrokeThickness = 2.4 });
+                    iconCanvas.Children.Add(new Line { X1 = left + 4, Y1 = cy, X2 = left + fw - 4, Y2 = cy, Stroke = Brushes.White, StrokeThickness = 2.4 });
+                    break;
+                case "NATO_COMMS":
+                    AddBox();
+                    iconCanvas.Children.Add(new Polyline { Stroke = Brushes.White, StrokeThickness = 2.0, Points = new PointCollection { new Point(left + 5, top + fh - 3), new Point(cx - 1, top + 3), new Point(cx + 2, top + fh - 4), new Point(left + fw - 5, top + 3) } });
+                    break;
+                case "NATO_ENG":
+                    AddBox();
+                    iconCanvas.Children.Add(new Polyline { Stroke = Brushes.White, StrokeThickness = 2.0, Points = new PointCollection { new Point(left + 6, top + fh - 4), new Point(left + 6, top + 5), new Point(left + fw - 6, top + 5), new Point(left + fw - 6, top + fh - 4) } });
+                    iconCanvas.Children.Add(new Line { X1 = cx, Y1 = top + 5, X2 = cx, Y2 = top + fh - 4, Stroke = Brushes.White, StrokeThickness = 1.8 });
+                    break;
+                case "NATO_ARTY":
+                    AddBox();
+                    var artyDot = new Ellipse { Width = 8, Height = 8, Fill = Brushes.White };
+                    Canvas.SetLeft(artyDot, cx - 4); Canvas.SetTop(artyDot, cy - 4); iconCanvas.Children.Add(artyDot);
+                    break;
+                case "NATO_MORTAR":
+                    AddBox();
+                    var morBase = new Ellipse { Width = 6, Height = 6, Stroke = Brushes.White, StrokeThickness = 1.8 };
+                    Canvas.SetLeft(morBase, cx - 3); Canvas.SetTop(morBase, cy + 1); iconCanvas.Children.Add(morBase);
+                    iconCanvas.Children.Add(new Line { X1 = cx, Y1 = cy + 1, X2 = cx, Y2 = top + 3, Stroke = Brushes.White, StrokeThickness = 2.0 });
+                    iconCanvas.Children.Add(new Polyline { Points = new PointCollection { new Point(cx - 3.5, top + 6.5), new Point(cx, top + 2.5), new Point(cx + 3.5, top + 6.5) }, Stroke = Brushes.White, StrokeThickness = 1.8 });
+                    break;
+                case "NATO_ADA":
+                    AddBox();
+                    iconCanvas.Children.Add(new Polyline { Points = new PointCollection { new Point(left + 3, top + fh - 2), new Point(cx - 6, cy - 1), new Point(cx, cy - 3), new Point(cx + 6, cy - 1), new Point(left + fw - 3, top + fh - 2) }, Stroke = Brushes.White, StrokeThickness = 2.0 });
+                    break;
+                case "NATO_AT":
+                    AddBox();
+                    iconCanvas.Children.Add(new Polyline { Points = new PointCollection { new Point(left + 4, top + fh - 2), new Point(cx, top + 3), new Point(left + fw - 4, top + fh - 2) }, Stroke = Brushes.White, StrokeThickness = 2.1 });
+                    break;
+                case "NATO_UAV":
+                    AddBox();
+                    var uavWing = new Polygon { Points = new PointCollection { new Point(left + 4, cy - 2), new Point(cx, cy + 4), new Point(left + fw - 4, cy - 2), new Point(cx, cy - 1) }, Fill = Brushes.White };
+                    iconCanvas.Children.Add(uavWing);
+                    break;
+                case "NATO_SUPPLY":
+                    AddBox();
+                    iconCanvas.Children.Add(new Line { X1 = left, Y1 = top + fh - 4, X2 = left + fw, Y2 = top + fh - 4, Stroke = Brushes.White, StrokeThickness = 2.0 });
+                    AddCenteredTag("SUP", 6.8);
+                    break;
+                case "NATO_VEHICLE":
+                    AddBox();
+                    var w1 = new Ellipse { Width = 5, Height = 5, Fill = Brushes.White }; Canvas.SetLeft(w1, left + 4); Canvas.SetTop(w1, top + fh + 0.5); iconCanvas.Children.Add(w1);
+                    var w2 = new Ellipse { Width = 5, Height = 5, Fill = Brushes.White }; Canvas.SetLeft(w2, left + fw - 9); Canvas.SetTop(w2, top + fh + 0.5); iconCanvas.Children.Add(w2);
+                    AddCenteredTag("VEH", 6.8);
+                    break;
+                case "NATO_OP":
+                    var triPts = new PointCollection { new Point(cx, cy - 11), new Point(cx - 12, cy + 10), new Point(cx + 12, cy + 10) };
+                    iconCanvas.Children.Add(new Polygon { Stroke = Brushes.Black, StrokeThickness = 3.0, Fill = darkBgBrush, Points = triPts });
+                    iconCanvas.Children.Add(new Polygon { Stroke = strokeBrush, StrokeThickness = 2.0, Fill = fillBrush, Points = triPts });
+                    var opDot = new Ellipse { Width = 4, Height = 4, Fill = Brushes.White }; Canvas.SetLeft(opDot, cx - 2); Canvas.SetTop(opDot, cy); iconCanvas.Children.Add(opDot);
+                    break;
+                case "NATO_AMBUSH":
+                    iconCanvas.Children.Add(new Polyline { Points = new PointCollection { new Point(left + 3, cy + 7), new Point(cx, cy + 10), new Point(left + fw - 3, cy + 7) }, Stroke = strokeBrush, StrokeThickness = 2.6 });
+                    for (int a = -1; a <= 1; a++)
+                    {
+                        double ax = cx + a * 7.5;
+                        iconCanvas.Children.Add(new Line { X1 = ax, Y1 = cy + 8, X2 = ax, Y2 = cy - 8, Stroke = Brushes.White, StrokeThickness = 1.9 });
+                        iconCanvas.Children.Add(new Polyline { Points = new PointCollection { new Point(ax - 3, cy - 4), new Point(ax, cy - 9), new Point(ax + 3, cy - 4) }, Stroke = strokeBrush, StrokeThickness = 1.9 });
+                    }
+                    break;
+                case "NATO_SNIPER":
+                    var snCirc = new Ellipse { Width = 20, Height = 20, Stroke = strokeBrush, StrokeThickness = 2.0, Fill = fillBrush }; Canvas.SetLeft(snCirc, cx - 10); Canvas.SetTop(snCirc, cy - 10); iconCanvas.Children.Add(snCirc);
+                    iconCanvas.Children.Add(new Line { X1 = cx - 12, Y1 = cy, X2 = cx + 12, Y2 = cy, Stroke = Brushes.White, StrokeThickness = 1.5 });
+                    iconCanvas.Children.Add(new Line { X1 = cx, Y1 = cy - 12, X2 = cx, Y2 = cy + 12, Stroke = Brushes.White, StrokeThickness = 1.5 });
+                    break;
+                case "NATO_CP":
+                case "NATO_RALLY":
+                case "NATO_INFIL":
+                case "NATO_EXFIL":
+                    var shPts = new PointCollection { new Point(cx - 11, cy - 10), new Point(cx + 11, cy - 10), new Point(cx + 11, cy + 2), new Point(cx, cy + 11), new Point(cx - 11, cy + 2) };
+                    iconCanvas.Children.Add(new Polygon { Stroke = Brushes.Black, StrokeThickness = 2.8, Fill = darkBgBrush, Points = shPts });
+                    iconCanvas.Children.Add(new Polygon { Stroke = strokeBrush, StrokeThickness = 2.0, Fill = fillBrush, Points = shPts });
+                    string tagTxt = symbolCode == "NATO_CP" ? "CP" : (symbolCode == "NATO_RALLY" ? "RP" : (symbolCode == "NATO_INFIL" ? "IN" : "EX"));
+                    AddCenteredTag(tagTxt, 8.0);
+                    break;
+                case "NATO_LZ":
+                    var lzCirc = new Ellipse { Width = 22, Height = 22, Stroke = strokeBrush, StrokeThickness = 2.0, Fill = fillBrush }; Canvas.SetLeft(lzCirc, cx - 11); Canvas.SetTop(lzCirc, cy - 11); iconCanvas.Children.Add(lzCirc);
+                    AddCenteredTag("LZ", 8.2);
+                    break;
+                case "NATO_BREACH":
+                    iconCanvas.Children.Add(new Polyline { Points = new PointCollection { new Point(left + 4, top + 3), new Point(cx - 3, cy), new Point(left + 4, top + fh - 3) }, Stroke = strokeBrush, StrokeThickness = 2.4 });
+                    iconCanvas.Children.Add(new Polyline { Points = new PointCollection { new Point(left + fw - 4, top + 3), new Point(cx + 3, cy), new Point(left + fw - 4, top + fh - 3) }, Stroke = strokeBrush, StrokeThickness = 2.4 });
+                    iconCanvas.Children.Add(new Line { X1 = cx, Y1 = cy + 8, X2 = cx, Y2 = cy - 8, Stroke = Brushes.White, StrokeThickness = 2.0 });
+                    break;
+                case "NATO_OBJ":
+                    var dmPts = new PointCollection { new Point(cx, cy - 12), new Point(cx + 12, cy), new Point(cx, cy + 12), new Point(cx - 12, cy) };
+                    iconCanvas.Children.Add(new Polygon { Stroke = strokeBrush, StrokeThickness = 2.0, Fill = fillBrush, Points = dmPts });
+                    iconCanvas.Children.Add(new Line { X1 = cx - 6, Y1 = cy, X2 = cx + 6, Y2 = cy, Stroke = Brushes.White, StrokeThickness = 1.6 });
+                    iconCanvas.Children.Add(new Line { X1 = cx, Y1 = cy - 6, X2 = cx, Y2 = cy + 6, Stroke = Brushes.White, StrokeThickness = 1.6 });
+                    break;
+                case "NATO_MINE":
+                    var mineCirc = new Ellipse { Width = 18, Height = 18, Stroke = strokeBrush, StrokeThickness = 2.0, Fill = fillBrush };
+                    Canvas.SetLeft(mineCirc, cx - 9); Canvas.SetTop(mineCirc, cy - 9); iconCanvas.Children.Add(mineCirc);
+                    iconCanvas.Children.Add(new Line { X1 = cx - 11, Y1 = cy - 11, X2 = cx + 11, Y2 = cy + 11, Stroke = Brushes.White, StrokeThickness = 1.8 });
+                    iconCanvas.Children.Add(new Line { X1 = cx - 11, Y1 = cy + 11, X2 = cx + 11, Y2 = cy - 11, Stroke = Brushes.White, StrokeThickness = 1.8 });
+                    AddCenteredTag("M", 7.8);
+                    break;
+                case "NATO_HAZARD":
+                    var hzPts = new PointCollection { new Point(cx, cy - 11), new Point(cx - 12, cy + 10), new Point(cx + 12, cy + 10) };
+                    iconCanvas.Children.Add(new Polygon { Stroke = strokeBrush, StrokeThickness = 2.0, Fill = fillBrush, Points = hzPts });
+                    AddCenteredTag("!", 10.0);
+                    break;
+                default:
+                    var defDot = new Ellipse { Width = 14, Height = 14, Fill = strokeBrush, Stroke = Brushes.White, StrokeThickness = 2 };
+                    Canvas.SetLeft(defDot, cx - 7); Canvas.SetTop(defDot, cy - 7); iconCanvas.Children.Add(defDot);
+                    break;
+            }
+            return iconCanvas;
+        }
+
         private static void DrawNatoVectorSymbolOnCanvas(Point pt, TacticalMapObjectItem obj)
         {
             string symbolCode = obj.SymbolCode ?? "NATO_HQ", name = obj.Name, colorHex = obj.ColorHex;
@@ -1843,7 +2300,7 @@ namespace FieldTakHub.Builder.Services
                 var flagTg = new TransformGroup(); flagTg.Children.Add(new ScaleTransform(scale, scale, poleX, poleBottomY));
                 if (Math.Abs(rotDeg) > 0.1) flagTg.Children.Add(new RotateTransform(rotDeg, poleX, poleBottomY));
                 var flagCanvas = new Canvas { Width = 36.0, Height = 36.0, Background = Brushes.Transparent, RenderTransform = flagTg };
-                AttachCenteredMarkerDragHandler(flagCanvas, obj, pt, "dolna część masztu flagi");
+                AttachCenteredMarkerDragHandler(flagCanvas, obj, pt, "dolna cz\u0119\u015B\u0107 masztu flagi");
 
                 flagCanvas.Children.Add(new Line { X1 = poleX, Y1 = poleTopY, X2 = poleX, Y2 = poleBottomY, Stroke = Brushes.Black, StrokeThickness = 4.4 });
                 flagCanvas.Children.Add(new Line { X1 = poleX, Y1 = poleTopY, X2 = poleX, Y2 = poleBottomY, Stroke = strokeBrush, StrokeThickness = 2.4 });
@@ -1864,125 +2321,12 @@ namespace FieldTakHub.Builder.Services
                 return;
             }
 
-            const double cx = 18.0, cy = 16.0, fw = 28.0, fh = 18.0;
-            double left = cx - fw / 2.0, top = cy - fh / 2.0;
+            const double cx = 18.0, cy = 16.0;
             var iconTg = new TransformGroup(); iconTg.Children.Add(new ScaleTransform(scale, scale, cx, cy));
             if (Math.Abs(rotDeg) > 0.1) iconTg.Children.Add(new RotateTransform(rotDeg, cx, cy));
-            var iconCanvas = new Canvas { Width = 36.0, Height = 32.0, Background = Brushes.Transparent, RenderTransform = iconTg };
+            var iconCanvas = BuildSymbolGeometryCanvas(symbolCode, strokeBrush, fillBrush, darkBgBrush);
+            iconCanvas.RenderTransform = iconTg;
             AttachCenteredMarkerDragHandler(iconCanvas, obj, pt);
-
-            void AddBox()
-            {
-                var halo = new Rectangle { Width = fw + 2, Height = fh + 2, Stroke = Brushes.Black, StrokeThickness = 3.0, Fill = darkBgBrush };
-                Canvas.SetLeft(halo, left - 1); Canvas.SetTop(halo, top - 1); iconCanvas.Children.Add(halo);
-                var rect = new Rectangle { Width = fw, Height = fh, Stroke = strokeBrush, StrokeThickness = 2.0, Fill = fillBrush };
-                Canvas.SetLeft(rect, left); Canvas.SetTop(rect, top); iconCanvas.Children.Add(rect);
-            }
-
-            switch (symbolCode)
-            {
-                case "SHAPE_ARROW":
-                    var arrPts = new PointCollection { new Point(cx, cy - 14), new Point(cx + 11, cy + 1), new Point(cx + 4.5, cy + 1), new Point(cx + 4.5, cy + 14), new Point(cx - 4.5, cy + 14), new Point(cx - 4.5, cy + 1), new Point(cx - 11, cy + 1) };
-                    iconCanvas.Children.Add(new Polygon { Stroke = Brushes.Black, StrokeThickness = 3.6, Fill = darkBgBrush, Points = arrPts, StrokeLineJoin = PenLineJoin.Round });
-                    iconCanvas.Children.Add(new Polygon { Stroke = Brushes.White, StrokeThickness = 1.4, Fill = strokeBrush, Points = arrPts, StrokeLineJoin = PenLineJoin.Round });
-                    break;
-                case "SHAPE_TENT":
-                    var tentOuter = new PointCollection { new Point(cx, cy - 12), new Point(cx + 14, cy + 11), new Point(cx - 14, cy + 11) };
-                    var tentDoor = new PointCollection { new Point(cx, cy - 1), new Point(cx + 5.5, cy + 11), new Point(cx - 5.5, cy + 11) };
-                    iconCanvas.Children.Add(new Polygon { Stroke = Brushes.Black, StrokeThickness = 3.6, Fill = darkBgBrush, Points = tentOuter, StrokeLineJoin = PenLineJoin.Round });
-                    iconCanvas.Children.Add(new Polygon { Stroke = Brushes.White, StrokeThickness = 1.6, Fill = fillBrush, Points = tentOuter, StrokeLineJoin = PenLineJoin.Round });
-                    iconCanvas.Children.Add(new Polygon { Stroke = strokeBrush, StrokeThickness = 1.2, Fill = darkBgBrush, Points = tentDoor });
-                    iconCanvas.Children.Add(new Line { X1 = cx - 16, Y1 = cy + 11.5, X2 = cx + 16, Y2 = cy + 11.5, Stroke = Brushes.White, StrokeThickness = 2.0 });
-                    break;
-                case "SHAPE_CROSS":
-                    iconCanvas.Children.Add(new Line { X1 = cx - 11, Y1 = cy - 11, X2 = cx + 11, Y2 = cy + 11, Stroke = Brushes.Black, StrokeThickness = 6.0, StrokeStartLineCap = PenLineCap.Round, StrokeEndLineCap = PenLineCap.Round });
-                    iconCanvas.Children.Add(new Line { X1 = cx - 11, Y1 = cy + 11, X2 = cx + 11, Y2 = cy - 11, Stroke = Brushes.Black, StrokeThickness = 6.0, StrokeStartLineCap = PenLineCap.Round, StrokeEndLineCap = PenLineCap.Round });
-                    iconCanvas.Children.Add(new Line { X1 = cx - 11, Y1 = cy - 11, X2 = cx + 11, Y2 = cy + 11, Stroke = strokeBrush, StrokeThickness = 3.4, StrokeStartLineCap = PenLineCap.Round, StrokeEndLineCap = PenLineCap.Round });
-                    iconCanvas.Children.Add(new Line { X1 = cx - 11, Y1 = cy + 11, X2 = cx + 11, Y2 = cy - 11, Stroke = strokeBrush, StrokeThickness = 3.4, StrokeStartLineCap = PenLineCap.Round, StrokeEndLineCap = PenLineCap.Round });
-                    var crossDot = new Ellipse { Width = 5, Height = 5, Fill = Brushes.White }; Canvas.SetLeft(crossDot, cx - 2.5); Canvas.SetTop(crossDot, cy - 2.5); iconCanvas.Children.Add(crossDot);
-                    break;
-                case "SHAPE_CIRCLE":
-                    var cHalo = new Ellipse { Width = 24, Height = 24, Stroke = Brushes.Black, StrokeThickness = 3.4, Fill = darkBgBrush }; Canvas.SetLeft(cHalo, cx - 12); Canvas.SetTop(cHalo, cy - 12); iconCanvas.Children.Add(cHalo);
-                    var cMain = new Ellipse { Width = 22, Height = 22, Stroke = strokeBrush, StrokeThickness = 2.4, Fill = fillBrush }; Canvas.SetLeft(cMain, cx - 11); Canvas.SetTop(cMain, cy - 11); iconCanvas.Children.Add(cMain);
-                    var cCenter = new Ellipse { Width = 5, Height = 5, Fill = Brushes.White }; Canvas.SetLeft(cCenter, cx - 2.5); Canvas.SetTop(cCenter, cy - 2.5); iconCanvas.Children.Add(cCenter);
-                    break;
-                case "SHAPE_SQUARE":
-                    var sqHalo = new Rectangle { Width = 22, Height = 22, Stroke = Brushes.Black, StrokeThickness = 3.4, Fill = darkBgBrush }; Canvas.SetLeft(sqHalo, cx - 11); Canvas.SetTop(sqHalo, cy - 11); iconCanvas.Children.Add(sqHalo);
-                    var sqMain = new Rectangle { Width = 20, Height = 20, Stroke = strokeBrush, StrokeThickness = 2.2, Fill = fillBrush }; Canvas.SetLeft(sqMain, cx - 10); Canvas.SetTop(sqMain, cy - 10); iconCanvas.Children.Add(sqMain);
-                    break;
-                case "SHAPE_RECT": AddBox(); break;
-                case "SHAPE_DIAMOND":
-                    var dmShapePts = new PointCollection { new Point(cx, cy - 13), new Point(cx + 13, cy), new Point(cx, cy + 13), new Point(cx - 13, cy) };
-                    iconCanvas.Children.Add(new Polygon { Stroke = Brushes.Black, StrokeThickness = 3.4, Fill = darkBgBrush, Points = dmShapePts });
-                    iconCanvas.Children.Add(new Polygon { Stroke = strokeBrush, StrokeThickness = 2.2, Fill = fillBrush, Points = dmShapePts });
-                    break;
-                case "SHAPE_TRIANGLE":
-                    var trShapePts = new PointCollection { new Point(cx, cy - 12), new Point(cx - 13, cy + 11), new Point(cx + 13, cy + 11) };
-                    iconCanvas.Children.Add(new Polygon { Stroke = Brushes.Black, StrokeThickness = 3.4, Fill = darkBgBrush, Points = trShapePts, StrokeLineJoin = PenLineJoin.Round });
-                    iconCanvas.Children.Add(new Polygon { Stroke = strokeBrush, StrokeThickness = 2.2, Fill = fillBrush, Points = trShapePts, StrokeLineJoin = PenLineJoin.Round });
-                    break;
-                case "NATO_INF":
-                    AddBox();
-                    iconCanvas.Children.Add(new Line { X1 = left, Y1 = top, X2 = left + fw, Y2 = top + fh, Stroke = Brushes.White, StrokeThickness = 1.8 });
-                    iconCanvas.Children.Add(new Line { X1 = left, Y1 = top + fh, X2 = left + fw, Y2 = top, Stroke = Brushes.White, StrokeThickness = 1.8 });
-                    break;
-                case "NATO_RECON":
-                    AddBox();
-                    iconCanvas.Children.Add(new Line { X1 = left, Y1 = top + fh, X2 = left + fw, Y2 = top, Stroke = Brushes.White, StrokeThickness = 2.0 });
-                    break;
-                case "NATO_MED":
-                    AddBox();
-                    iconCanvas.Children.Add(new Line { X1 = cx, Y1 = top, X2 = cx, Y2 = top + fh, Stroke = Brushes.White, StrokeThickness = 2.2 });
-                    iconCanvas.Children.Add(new Line { X1 = left, Y1 = cy, X2 = left + fw, Y2 = cy, Stroke = Brushes.White, StrokeThickness = 2.2 });
-                    break;
-                case "NATO_COMMS":
-                    AddBox();
-                    iconCanvas.Children.Add(new Polyline { Stroke = Brushes.White, StrokeThickness = 2.0, Points = new PointCollection { new Point(left + 5, top + fh - 3), new Point(cx - 1, top + 3), new Point(cx + 2, top + fh - 4), new Point(left + fw - 5, top + 3) } });
-                    break;
-                case "NATO_SUPPLY":
-                    AddBox();
-                    iconCanvas.Children.Add(new Line { X1 = left, Y1 = top + fh - 4, X2 = left + fw, Y2 = top + fh - 4, Stroke = Brushes.White, StrokeThickness = 2.0 });
-                    break;
-                case "NATO_OP":
-                    var triPts = new PointCollection { new Point(cx, cy - 11), new Point(cx - 12, cy + 10), new Point(cx + 12, cy + 10) };
-                    iconCanvas.Children.Add(new Polygon { Stroke = Brushes.Black, StrokeThickness = 3.2, Fill = darkBgBrush, Points = triPts });
-                    iconCanvas.Children.Add(new Polygon { Stroke = strokeBrush, StrokeThickness = 2.0, Fill = fillBrush, Points = triPts });
-                    var opDot = new Ellipse { Width = 4, Height = 4, Fill = Brushes.White }; Canvas.SetLeft(opDot, cx - 2); Canvas.SetTop(opDot, cy); iconCanvas.Children.Add(opDot);
-                    break;
-                case "NATO_SNIPER":
-                    var snHalo = new Ellipse { Width = 22, Height = 22, Stroke = Brushes.Black, StrokeThickness = 3.0, Fill = darkBgBrush }; Canvas.SetLeft(snHalo, cx - 11); Canvas.SetTop(snHalo, cy - 11); iconCanvas.Children.Add(snHalo);
-                    var snCirc = new Ellipse { Width = 20, Height = 20, Stroke = strokeBrush, StrokeThickness = 2.0, Fill = fillBrush }; Canvas.SetLeft(snCirc, cx - 10); Canvas.SetTop(snCirc, cy - 10); iconCanvas.Children.Add(snCirc);
-                    iconCanvas.Children.Add(new Line { X1 = cx - 13, Y1 = cy, X2 = cx + 13, Y2 = cy, Stroke = Brushes.White, StrokeThickness = 1.5 });
-                    iconCanvas.Children.Add(new Line { X1 = cx, Y1 = cy - 13, X2 = cx, Y2 = cy + 13, Stroke = Brushes.White, StrokeThickness = 1.5 });
-                    break;
-                case "NATO_CP":
-                    var shPts = new PointCollection { new Point(cx - 11, cy - 10), new Point(cx + 11, cy - 10), new Point(cx + 11, cy + 2), new Point(cx, cy + 11), new Point(cx - 11, cy + 2) };
-                    iconCanvas.Children.Add(new Polygon { Stroke = Brushes.Black, StrokeThickness = 3.0, Fill = darkBgBrush, Points = shPts });
-                    iconCanvas.Children.Add(new Polygon { Stroke = strokeBrush, StrokeThickness = 2.0, Fill = fillBrush, Points = shPts });
-                    var cpTxt = new TextBlock { Text = "CP", Foreground = Brushes.White, FontSize = 8.5, FontWeight = FontWeights.Bold }; Canvas.SetLeft(cpTxt, cx - 6); Canvas.SetTop(cpTxt, cy - 6); iconCanvas.Children.Add(cpTxt);
-                    break;
-                case "NATO_LZ":
-                    var lzHalo = new Ellipse { Width = 24, Height = 24, Stroke = Brushes.Black, StrokeThickness = 3.0, Fill = darkBgBrush }; Canvas.SetLeft(lzHalo, cx - 12); Canvas.SetTop(lzHalo, cy - 12); iconCanvas.Children.Add(lzHalo);
-                    var lzCirc = new Ellipse { Width = 22, Height = 22, Stroke = strokeBrush, StrokeThickness = 2.0, Fill = fillBrush }; Canvas.SetLeft(lzCirc, cx - 11); Canvas.SetTop(lzCirc, cy - 11); iconCanvas.Children.Add(lzCirc);
-                    var lzTxt = new TextBlock { Text = "LZ", Foreground = Brushes.White, FontSize = 8.5, FontWeight = FontWeights.Bold }; Canvas.SetLeft(lzTxt, cx - 5.5); Canvas.SetTop(lzTxt, cy - 5.5); iconCanvas.Children.Add(lzTxt);
-                    break;
-                case "NATO_OBJ":
-                    var dmPts = new PointCollection { new Point(cx, cy - 12), new Point(cx + 12, cy), new Point(cx, cy + 12), new Point(cx - 12, cy) };
-                    iconCanvas.Children.Add(new Polygon { Stroke = Brushes.Black, StrokeThickness = 3.0, Fill = darkBgBrush, Points = dmPts });
-                    iconCanvas.Children.Add(new Polygon { Stroke = strokeBrush, StrokeThickness = 2.0, Fill = fillBrush, Points = dmPts });
-                    iconCanvas.Children.Add(new Line { X1 = cx - 6, Y1 = cy, X2 = cx + 6, Y2 = cy, Stroke = Brushes.White, StrokeThickness = 1.6 });
-                    iconCanvas.Children.Add(new Line { X1 = cx, Y1 = cy - 6, X2 = cx, Y2 = cy + 6, Stroke = Brushes.White, StrokeThickness = 1.6 });
-                    break;
-                case "NATO_HAZARD":
-                    var hzPts = new PointCollection { new Point(cx, cy - 11), new Point(cx - 12, cy + 10), new Point(cx + 12, cy + 10) };
-                    iconCanvas.Children.Add(new Polygon { Stroke = Brushes.Black, StrokeThickness = 3.2, Fill = darkBgBrush, Points = hzPts });
-                    iconCanvas.Children.Add(new Polygon { Stroke = strokeBrush, StrokeThickness = 2.0, Fill = fillBrush, Points = hzPts });
-                    var hzTxt = new TextBlock { Text = "!", Foreground = Brushes.White, FontSize = 10.5, FontWeight = FontWeights.Bold }; Canvas.SetLeft(hzTxt, cx - 2); Canvas.SetTop(hzTxt, cy - 4); iconCanvas.Children.Add(hzTxt);
-                    break;
-                default:
-                    var dot = new Ellipse { Width = 14, Height = 14, Fill = strokeBrush, Stroke = Brushes.White, StrokeThickness = 2 }; Canvas.SetLeft(dot, cx - 7); Canvas.SetTop(dot, cy - 7); iconCanvas.Children.Add(dot);
-                    break;
-            }
 
             Canvas.SetLeft(iconCanvas, pt.X - cx); Canvas.SetTop(iconCanvas, pt.Y - cy);
             _interactiveCanvas.Children.Add(iconCanvas);
@@ -2009,6 +2353,181 @@ namespace FieldTakHub.Builder.Services
                 }
                 else DrawNatoVectorSymbolOnCanvas(pt, obj);
             }
+        }
+
+        private static string _customLegendTitle = "";
+        private static string _customLegendSubtitle = "";
+        private static string _customLegendExtraNotes = "";
+        private static bool _groupIdenticalLegendItems = true;
+        private static double? _legendCustomWidth;
+        private static double? _legendCustomHeight;
+
+        private static void ShowLegendContentEditorDialog(Window owner)
+        {
+            var dlg = new Window
+            {
+                Title = "Edycja tre\u015Bci i rozmiaru Legendy Mapy",
+                Width = 520,
+                Height = 560,
+                WindowStartupLocation = WindowStartupLocation.CenterOwner,
+                Owner = owner,
+                Background = TacticalConfigPanel.BrushCardBg,
+                Foreground = Brushes.White,
+                ResizeMode = ResizeMode.CanResize,
+                WindowStyle = WindowStyle.ToolWindow
+            };
+
+            var rootGrid = new Grid { Margin = new Thickness(14) };
+            rootGrid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+            rootGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+
+            var scroll = new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
+            var stack = new StackPanel { Margin = new Thickness(0, 0, 6, 0) };
+
+            stack.Children.Add(new TextBlock
+            {
+                Text = "\u270F\uFE0F EDYTOR TRE\u015ACI I ROZMIARU LEGENDY",
+                Foreground = TacticalConfigPanel.BrushAccent,
+                FontWeight = FontWeights.Bold,
+                FontSize = 13,
+                Margin = new Thickness(0, 0, 0, 8)
+            });
+
+            string defaultTitle = $"MAPA TAKTYCZNA ({_selectedSheet.Name.Split('\u2014')[0].Trim()} | 1:{_targetScaleDenominator:N0})";
+            string secLegSuffix = (_enableSectorGridOverlay || _coordSystem.StartsWith("Sektorowa")) ? $" + Sektory A-Z/1-9 ({_sectorSizeMeters}m)" : "";
+            string defaultSub = (_coordSystem.StartsWith("MGRS") ? $"Siatka: MGRS ({_effectiveMgrsStepMeters} m) | {_subGridDivision}" : $"Siatka: {_coordSystem.Split(' ')[0]}") + secLegSuffix;
+
+            var titleBox = (TextBox)TacticalConfigPanel.TextCtrl(string.IsNullOrWhiteSpace(_customLegendTitle) ? defaultTitle : _customLegendTitle, v => { });
+            stack.Children.Add(TacticalConfigPanel.FieldBox("Nag\u0142\u00F3wek g\u0142\u00F3wny legendy (zostaw domy\u015Blny lub wpisz w\u0142asny):", titleBox));
+
+            var subBox = (TextBox)TacticalConfigPanel.TextCtrl(string.IsNullOrWhiteSpace(_customLegendSubtitle) ? defaultSub : _customLegendSubtitle, v => { });
+            stack.Children.Add(TacticalConfigPanel.FieldBox("Podtytu\u0142 / informacje o siatce:", subBox));
+
+            var extraBox = new TextBox
+            {
+                Text = _customLegendExtraNotes ?? "",
+                Height = 58,
+                AcceptsReturn = true,
+                TextWrapping = TextWrapping.Wrap,
+                VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+                Background = TacticalConfigPanel.BrushInputBg,
+                Foreground = Brushes.White,
+                BorderBrush = TacticalConfigPanel.BrushInputBorder,
+                BorderThickness = new Thickness(1),
+                FontSize = 10,
+                Padding = new Thickness(5)
+            };
+            stack.Children.Add(TacticalConfigPanel.FieldBox("Dodatkowe notatki / kana\u0142y / zasady na dole legendy (opcjonalnie):", extraBox));
+
+            var chkGroup = new CheckBox
+            {
+                Content = "Grupuj punkty o tej samej nazwie i symbolu w jeden wiersz (np. Infil \u00D72, Kod \u00D76)",
+                IsChecked = _groupIdenticalLegendItems,
+                Foreground = TacticalConfigPanel.BrushAccent,
+                FontWeight = FontWeights.SemiBold,
+                FontSize = 10,
+                Margin = new Thickness(0, 4, 0, 8),
+                Cursor = Cursors.Hand
+            };
+            stack.Children.Add(chkGroup);
+
+            var sizeRow = new UniformGrid { Columns = 3, Margin = new Thickness(0, 0, 0, 8) };
+            var wBox = (TextBox)TacticalConfigPanel.TextCtrl((_legendCustomWidth ?? 285).ToString("0"), v => { });
+            var hBox = (TextBox)TacticalConfigPanel.TextCtrl(_legendCustomHeight.HasValue ? _legendCustomHeight.Value.ToString("0") : "Auto", v => { });
+            var btnResetSize = MakeActionButton("\uD83D\uDD04 Auto-rozmiar", false, () =>
+            {
+                _legendCustomWidth = null;
+                _legendCustomHeight = null;
+                wBox.Text = "285";
+                hBox.Text = "Auto";
+            });
+            btnResetSize.Height = 25;
+            btnResetSize.Margin = new Thickness(4, 14, 0, 0);
+            sizeRow.Children.Add(TacticalConfigPanel.FieldBox("Szeroko\u015B\u0107 (px):", wBox));
+            sizeRow.Children.Add(TacticalConfigPanel.FieldBox("Wysoko\u015B\u0107 (px lub Auto):", hBox));
+            sizeRow.Children.Add(btnResetSize);
+            stack.Children.Add(sizeRow);
+
+            var objEdits = new List<(TacticalMapObjectItem Obj, TextBox NameTb, TextBox DescTb)>();
+            if (_mapObjects.Count > 0)
+            {
+                stack.Children.Add(new TextBlock
+                {
+                    Text = "Edycja nazw i opis\u00F3w obiekt\u00F3w widocznych w legendzie:",
+                    Foreground = TacticalConfigPanel.BrushAccent,
+                    FontWeight = FontWeights.Bold,
+                    FontSize = 10.5,
+                    Margin = new Thickness(0, 4, 0, 4)
+                });
+
+                foreach (var mo in _mapObjects)
+                {
+                    if (string.IsNullOrWhiteSpace(mo.LegendDescription))
+                        mo.LegendDescription = GetDefaultLegendDescriptionForObject(mo);
+
+                    var rGrid = new Grid { Margin = new Thickness(0, 0, 0, 4) };
+                    rGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(36) });
+                    rGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(0.9, GridUnitType.Star) });
+                    rGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1.4, GridUnitType.Star) });
+
+                    string bCode = mo.Kind == "Dot" ? "DOT" : ((mo.Kind == "AO" || mo.Kind == "Sector" || mo.Kind == "Route") ? mo.Kind : mo.SymbolCode);
+                    var iconBadge = CreateMiniSymbolVectorBadge(bCode, mo.ColorHex);
+                    Grid.SetColumn(iconBadge, 0);
+                    rGrid.Children.Add(iconBadge);
+
+                    var nTb = new TextBox { Text = mo.Name, Height = 23, FontSize = 10, FontWeight = FontWeights.Bold, Margin = new Thickness(4, 0, 4, 0), Padding = new Thickness(4, 0, 4, 0), VerticalContentAlignment = VerticalAlignment.Center, Background = TacticalConfigPanel.BrushInputBg, Foreground = Brushes.White, BorderBrush = TacticalConfigPanel.BrushInputBorder };
+                    var dTb = new TextBox { Text = mo.LegendDescription, Height = 23, FontSize = 10, Padding = new Thickness(4, 0, 4, 0), VerticalContentAlignment = VerticalAlignment.Center, Background = TacticalConfigPanel.BrushInputBg, Foreground = Brushes.White, BorderBrush = TacticalConfigPanel.BrushInputBorder };
+                    Grid.SetColumn(nTb, 1);
+                    Grid.SetColumn(dTb, 2);
+                    rGrid.Children.Add(nTb);
+                    rGrid.Children.Add(dTb);
+                    stack.Children.Add(rGrid);
+                    objEdits.Add((mo, nTb, dTb));
+                }
+            }
+
+            scroll.Content = stack;
+            Grid.SetRow(scroll, 0);
+            rootGrid.Children.Add(scroll);
+
+            var bottomBar = new UniformGrid { Columns = 2, Margin = new Thickness(0, 10, 0, 0) };
+            var btnCancel = MakeActionButton("Anuluj", false, () => dlg.Close());
+            var btnSave = MakeActionButton("\u2713 Zapisz zmiany w Legendzie", true, () =>
+            {
+                string tVal = titleBox.Text.Trim();
+                _customLegendTitle = (tVal == defaultTitle) ? "" : tVal;
+                string sVal = subBox.Text.Trim();
+                _customLegendSubtitle = (sVal == defaultSub) ? "" : sVal;
+                _customLegendExtraNotes = extraBox.Text.Trim();
+                _groupIdenticalLegendItems = chkGroup.IsChecked == true;
+
+                if (double.TryParse(wBox.Text.Trim(), NumberStyles.Any, CultureInfo.InvariantCulture, out double parsedW) && parsedW >= 150)
+                    _legendCustomWidth = Math.Clamp(parsedW, 150, 750);
+                if (double.TryParse(hBox.Text.Trim(), NumberStyles.Any, CultureInfo.InvariantCulture, out double parsedH) && parsedH >= 70)
+                    _legendCustomHeight = Math.Clamp(parsedH, 70, 900);
+                else if (hBox.Text.Trim().Equals("Auto", StringComparison.OrdinalIgnoreCase))
+                    _legendCustomHeight = null;
+
+                foreach (var entry in objEdits)
+                {
+                    entry.Obj.Name = entry.NameTb.Text.Trim();
+                    entry.Obj.LegendDescription = entry.DescTb.Text.Trim();
+                }
+
+                TacticalConfigPanel.MarkDirty();
+                RefreshObjectsListUI(owner);
+                RedrawVectorsOnly();
+                dlg.Close();
+            });
+            btnCancel.Height = 30; btnCancel.Margin = new Thickness(0, 0, 5, 0);
+            btnSave.Height = 30; btnSave.Margin = new Thickness(5, 0, 0, 0);
+            bottomBar.Children.Add(btnCancel);
+            bottomBar.Children.Add(btnSave);
+            Grid.SetRow(bottomBar, 1);
+            rootGrid.Children.Add(bottomBar);
+
+            dlg.Content = rootGrid;
+            dlg.ShowDialog();
         }
 
         private static void PlaceDraggableHudElement(FrameworkElement el, string hudId, string cornerPreset, double? normX, double? normY, double viewW, double viewH, double elemW, double elemH)
@@ -2039,7 +2558,7 @@ namespace FieldTakHub.Builder.Services
                 var compass = new Border { Width = nw, Height = nh, Background = new SolidColorBrush(Color.FromArgb(228, 8, 19, 22)), BorderBrush = TacticalConfigPanel.BrushAccent, BorderThickness = new Thickness(1.2), CornerRadius = new CornerRadius(6) };
                 var cs = new StackPanel { HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
                 cs.Children.Add(new TextBlock { Text = "N", Foreground = TacticalConfigPanel.BrushAccent, FontWeight = FontWeights.Bold, FontSize = isCompactWrist ? 11 : 14, HorizontalAlignment = HorizontalAlignment.Center });
-                cs.Children.Add(new TextBlock { Text = "▲", Foreground = Brushes.White, FontSize = isCompactWrist ? 14 : 18, HorizontalAlignment = HorizontalAlignment.Center, Margin = new Thickness(0, -4, 0, -2) });
+                cs.Children.Add(new TextBlock { Text = "\u25B2", Foreground = Brushes.White, FontSize = isCompactWrist ? 14 : 18, HorizontalAlignment = HorizontalAlignment.Center, Margin = new Thickness(0, -4, 0, -2) });
                 cs.Children.Add(new TextBlock { Text = "MGRS", Foreground = TacticalConfigPanel.BrushMutedText, FontSize = 7.5, HorizontalAlignment = HorizontalAlignment.Center });
                 compass.Child = cs;
                 PlaceDraggableHudElement(compass, "NORTH", _northArrowPos, _northNormX, _northNormY, w, h, nw, nh);
@@ -2074,11 +2593,51 @@ namespace FieldTakHub.Builder.Services
 
             if (_showLegend)
             {
-                double lw = isCompactWrist ? 215 : 275;
+                double defaultLw = isCompactWrist ? 220 : 288;
+                double lw = _legendCustomWidth.HasValue ? Math.Clamp(_legendCustomWidth.Value, 160, Math.Max(180, w - 16)) : defaultLw;
                 var ls = new StackPanel();
-                ls.Children.Add(new TextBlock { Text = $"MAPA TAKTYCZNA ({_selectedSheet.Name.Split('—')[0].Trim()} | 1:{_targetScaleDenominator:N0})", Foreground = TacticalConfigPanel.BrushAccent, FontWeight = FontWeights.Bold, FontSize = isCompactWrist ? 9 : 10 });
-                string secLegSuffix = (_enableSectorGridOverlay || _coordSystem.StartsWith("Sektorowa")) ? $" + Sektory A-Z/1-9 ({_sectorSizeMeters}m | {_sectorSubDivision.Split(' ')[0]})" : ""; string gridSummary = (_coordSystem.StartsWith("MGRS") ? $"Siatka: MGRS ({_effectiveMgrsStepMeters} m) | {_subGridDivision}" : $"Siatka: {_coordSystem.Split(' ')[0]}") + secLegSuffix;
-                ls.Children.Add(new TextBlock { Text = gridSummary, Foreground = TacticalConfigPanel.BrushMutedText, FontSize = 8.5, Margin = new Thickness(0, 1, 0, 4) });
+
+                string autoTitle = $"MAPA TAKTYCZNA ({_selectedSheet.Name.Split('\u2014')[0].Trim()} | 1:{_targetScaleDenominator:N0})";
+                string displayTitle = string.IsNullOrWhiteSpace(_customLegendTitle) ? autoTitle : _customLegendTitle;
+
+                var titleDock = new DockPanel();
+                if (!_isExportingCleanMap)
+                {
+                    var btnEditLeg = new Border
+                    {
+                        Background = TacticalConfigPanel.BrushItemBg,
+                        BorderBrush = TacticalConfigPanel.BrushAccent,
+                        BorderThickness = new Thickness(1),
+                        CornerRadius = new CornerRadius(3),
+                        Padding = new Thickness(5, 1, 5, 1),
+                        Margin = new Thickness(6, 0, 0, 0),
+                        Cursor = Cursors.Hand,
+                        ToolTip = "Edytuj tre\u015B\u0107, opisy i wymiary Legendy",
+                        Child = new TextBlock { Text = "\u270F\uFE0F Edytuj", Foreground = TacticalConfigPanel.BrushAccent, FontSize = 8, FontWeight = FontWeights.Bold }
+                    };
+                    btnEditLeg.MouseLeftButtonDown += (s, e) =>
+                    {
+                        e.Handled = true;
+                        if (_hostWindow != null) ShowLegendContentEditorDialog(_hostWindow);
+                    };
+                    DockPanel.SetDock(btnEditLeg, Dock.Right);
+                    titleDock.Children.Add(btnEditLeg);
+                }
+
+                titleDock.Children.Add(new TextBlock
+                {
+                    Text = displayTitle,
+                    Foreground = TacticalConfigPanel.BrushAccent,
+                    FontWeight = FontWeights.Bold,
+                    FontSize = isCompactWrist ? 9 : 10,
+                    TextWrapping = TextWrapping.Wrap
+                });
+                ls.Children.Add(titleDock);
+
+                string secLegSuffix = (_enableSectorGridOverlay || _coordSystem.StartsWith("Sektorowa")) ? $" + Sektory A-Z/1-9 ({_sectorSizeMeters}m | {_sectorSubDivision.Split(' ')[0]})" : "";
+                string autoSub = (_coordSystem.StartsWith("MGRS") ? $"Siatka: MGRS ({_effectiveMgrsStepMeters} m) | {_subGridDivision}" : $"Siatka: {_coordSystem.Split(' ')[0]}") + secLegSuffix;
+                string displaySub = string.IsNullOrWhiteSpace(_customLegendSubtitle) ? autoSub : _customLegendSubtitle;
+                ls.Children.Add(new TextBlock { Text = displaySub, Foreground = TacticalConfigPanel.BrushMutedText, FontSize = 8.5, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 1, 0, 4) });
 
                 var activeFacs = GetActiveMapFactions();
                 if (activeFacs.Count > 0)
@@ -2101,40 +2660,198 @@ namespace FieldTakHub.Builder.Services
                     ls.Children.Add(new Border { Height = 1, Background = TacticalConfigPanel.BrushTileBorder, Margin = new Thickness(0, 2, 0, 4) });
                     ls.Children.Add(new TextBlock { Text = "OZNACZENIA I SYMBOLE NA MAPIE:", Foreground = TacticalConfigPanel.BrushAccent, FontSize = 8.5, FontWeight = FontWeights.Bold, Margin = new Thickness(0, 0, 0, 3) });
 
-                    void AddLegendRow(string badge, string desc, string hex)
+                    void AddVectorLegendRow(string symCode, string desc, string hex)
                     {
                         dynamicRows++;
-                        var r = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 2.5) };
-                        var b = new Border { MinWidth = 28, Height = 14, CornerRadius = new CornerRadius(2), Background = TacticalConfigPanel.BrushFromHex(hex, Color.FromRgb(38, 132, 255)), BorderBrush = Brushes.White, BorderThickness = new Thickness(0.8), Margin = new Thickness(0, 0, 6, 0), Padding = new Thickness(3, 0, 3, 0), Child = new TextBlock { Text = badge, Foreground = Brushes.White, FontSize = 7.5, FontWeight = FontWeights.Bold, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center } };
-                        r.Children.Add(b);
-                        r.Children.Add(new TextBlock { Text = desc, Foreground = Brushes.White, FontSize = 8, VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis, MaxWidth = lw - 52 });
+                        var r = new Grid { Margin = new Thickness(0, 0, 0, 3) };
+                        r.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(36) });
+                        r.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+
+                        var iconEl = CreateMiniSymbolVectorBadge(symCode, hex);
+                        iconEl.Margin = new Thickness(0, 0, 6, 0);
+                        Grid.SetColumn(iconEl, 0);
+                        r.Children.Add(iconEl);
+
+                        var descTb = new TextBlock
+                        {
+                            Text = desc,
+                            Foreground = Brushes.White,
+                            FontSize = 8.4,
+                            VerticalAlignment = VerticalAlignment.Center,
+                            TextWrapping = TextWrapping.Wrap
+                        };
+                        Grid.SetColumn(descTb, 1);
+                        r.Children.Add(descTb);
                         ls.Children.Add(r);
                     }
 
                     if (_mapObjects.Count > 0)
                     {
-                        foreach (var obj in _mapObjects.Take(isCompactWrist ? 5 : 9))
+                        var sourceList = _mapObjects.AsEnumerable();
+                        if (_groupIdenticalLegendItems)
                         {
-                            if (obj.Kind == "AO") AddLegendRow("AO", $"{obj.Name} — Granica Terenu Gry", obj.ColorHex);
-                            else if (obj.Kind == "Sector") AddLegendRow("SEK", $"{obj.Name} — Sektor / Strefa taktyczna", obj.ColorHex);
-                            else if (obj.Kind == "Route") AddLegendRow("───", $"{obj.Name} — Trasa / Linia rozgraniczenia", obj.ColorHex);
-                            else if (obj.Kind == "Dot") AddLegendRow("●", $"{obj.Name} — Punkt orientacyjny", obj.ColorHex);
-                            else { var natoDef = NatoSymbols.FirstOrDefault(n => n.Code == obj.SymbolCode) ?? NatoSymbols[0]; AddLegendRow(natoDef.ShortBadge, $"{obj.Name} — {natoDef.NatoMeaning}", obj.ColorHex); }
+                            var grouped = _mapObjects
+                                .GroupBy(o => $"{o.Kind}|{(o.Kind == "Dot" ? "DOT" : o.SymbolCode)}|{o.ColorHex.ToUpperInvariant()}|{(o.Name ?? "").Trim()}|{GetDefaultLegendDescriptionForObject(o).Trim()}")
+                                .Take(isCompactWrist ? 8 : 16);
+
+                            foreach (var grp in grouped)
+                            {
+                                var obj = grp.First();
+                                int cnt = grp.Count();
+                                string sym = obj.Kind == "Dot" ? "DOT" : ((obj.Kind == "AO" || obj.Kind == "Sector" || obj.Kind == "Route") ? obj.Kind : obj.SymbolCode);
+                                string legDesc = GetDefaultLegendDescriptionForObject(obj);
+                                string countBadge = cnt > 1 ? $" (\u00D7{cnt})" : "";
+                                string combinedText = string.Equals(obj.Name?.Trim(), legDesc?.Trim(), StringComparison.OrdinalIgnoreCase)
+                                    ? $"{obj.Name}{countBadge}"
+                                    : $"{obj.Name}{countBadge} \u2014 {legDesc}";
+                                AddVectorLegendRow(sym, combinedText, obj.ColorHex);
+                            }
+                        }
+                        else
+                        {
+                            foreach (var obj in sourceList.Take(isCompactWrist ? 8 : 14))
+                            {
+                                string sym = obj.Kind == "Dot" ? "DOT" : ((obj.Kind == "AO" || obj.Kind == "Sector" || obj.Kind == "Route") ? obj.Kind : obj.SymbolCode);
+                                string legDesc = GetDefaultLegendDescriptionForObject(obj);
+                                string combinedText = string.Equals(obj.Name?.Trim(), legDesc?.Trim(), StringComparison.OrdinalIgnoreCase)
+                                    ? obj.Name
+                                    : $"{obj.Name} \u2014 {legDesc}";
+                                AddVectorLegendRow(sym, combinedText, obj.ColorHex);
+                            }
                         }
                     }
                     else
                     {
-                        AddLegendRow("HQ", "Sztab / Dowództwo strony", "#2684FF");
-                        AddLegendRow("⛺", "Namiot / Baza polowa / Respawn", "#2ECC71");
-                        AddLegendRow("➤", "Kierunek natarcia / Ruch", "#F5B82E");
-                        AddLegendRow("AO", "Granica Terenu Gry (strefa poza grą)", "#EB4034");
+                        AddVectorLegendRow("NATO_HQ", "HQ \u2014 Sztab / Dow\u00F3dztwo strony", "#2684FF");
+                        AddVectorLegendRow("SHAPE_TENT", "Respawn \u2014 Namiot / Baza polowa", "#2ECC71");
+                        AddVectorLegendRow("SHAPE_ARROW", "O\u015B natarcia \u2014 Kierunek ruchu", "#F5B82E");
+                        AddVectorLegendRow("AO", "Granica Terenu Gry (strefa poza gr\u0105)", "#EB4034");
                     }
                 }
 
-                double lh = 64 + (_showNatoSymbolsInLegend ? (22 + dynamicRows * 17) : 0);
-                var legBorder = new Border { Width = lw, Height = lh, Background = new SolidColorBrush(Color.FromArgb(228, 8, 19, 22)), BorderBrush = TacticalConfigPanel.BrushAccent, BorderThickness = new Thickness(1.2), CornerRadius = new CornerRadius(6), Padding = new Thickness(8, 6, 8, 6), Child = ls };
-                PlaceDraggableHudElement(legBorder, "LEGEND", _legendPos, _legendNormX, _legendNormY, w, h, lw, lh);
+                if (!string.IsNullOrWhiteSpace(_customLegendExtraNotes))
+                {
+                    ls.Children.Add(new Border { Height = 1, Background = TacticalConfigPanel.BrushTileBorder, Margin = new Thickness(0, 3, 0, 3) });
+                    ls.Children.Add(new TextBlock
+                    {
+                        Text = _customLegendExtraNotes,
+                        Foreground = TacticalConfigPanel.BrushAccent,
+                        FontSize = 8.4,
+                        TextWrapping = TextWrapping.Wrap
+                    });
+                }
+
+                double autoLh = 72 + (_showNatoSymbolsInLegend ? (24 + dynamicRows * 25) : 0) + (string.IsNullOrWhiteSpace(_customLegendExtraNotes) ? 0 : 28);
+                double lh = _legendCustomHeight.HasValue ? Math.Clamp(_legendCustomHeight.Value, 75, Math.Max(90, h - 16)) : autoLh;
+
+                var legContainer = new Grid { Width = lw, Height = lh };
+                var legBorder = new Border
+                {
+                    Background = new SolidColorBrush(Color.FromArgb(230, 8, 19, 22)),
+                    BorderBrush = TacticalConfigPanel.BrushAccent,
+                    BorderThickness = new Thickness(1.3),
+                    CornerRadius = new CornerRadius(6),
+                    Padding = new Thickness(9, 7, 9, 7),
+                    Child = new ScrollViewer
+                    {
+                        VerticalScrollBarVisibility = _legendCustomHeight.HasValue ? ScrollBarVisibility.Auto : ScrollBarVisibility.Disabled,
+                        HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+                        Content = ls
+                    }
+                };
+                legContainer.Children.Add(legBorder);
+
+                PlaceDraggableHudElement(legContainer, "LEGEND", _legendPos, _legendNormX, _legendNormY, w, h, lw, lh);
+                legContainer.ToolTip = "Przeci\u0105gnij \u015Brodek = przesu\u0144 Legend\u0119  |  Przeci\u0105gnij dowoln\u0105 kraw\u0119d\u017A lub naro\u017Cnik = zmie\u0144 rozmiar  |  Kliknij '\u270F\uFE0F Edytuj' = edytuj tre\u015B\u0107";
+
+                if (!_isExportingCleanMap)
+                {
+                    AttachFourSidedResizeThumbsToLegend(legContainer, w, h);
+                }
             }
+        }
+
+        private static void AttachFourSidedResizeThumbsToLegend(Grid legContainer, double viewW, double viewH)
+        {
+            void AddResizeThumb(HorizontalAlignment ha, VerticalAlignment va, double thW, double thH, Cursor cur, int dirX, int dirY)
+            {
+                var thumb = new Thumb
+                {
+                    HorizontalAlignment = ha,
+                    VerticalAlignment = va,
+                    Width = double.IsNaN(thW) ? double.NaN : thW,
+                    Height = double.IsNaN(thH) ? double.NaN : thH,
+                    Cursor = cur,
+                    Opacity = 0.01,
+                    Background = Brushes.Transparent,
+                    ToolTip = "Przeci\u0105gnij kraw\u0119d\u017A / naro\u017Cnik, aby zmieni\u0107 rozmiar Legendy"
+                };
+
+                if (double.IsNaN(thW)) thumb.Margin = new Thickness(8, 0, 8, 0);
+                if (double.IsNaN(thH)) thumb.Margin = new Thickness(0, 8, 0, 8);
+
+                thumb.DragDelta += (s, e) =>
+                {
+                    double curLeft = Canvas.GetLeft(legContainer);
+                    double curTop = Canvas.GetTop(legContainer);
+                    double curW = legContainer.Width;
+                    double curH = legContainer.Height;
+
+                    if (dirX == 1)
+                    {
+                        double newW = Math.Clamp(curW + e.HorizontalChange, 160.0, Math.Max(160.0, viewW - curLeft - 4.0));
+                        legContainer.Width = newW;
+                        _legendCustomWidth = newW;
+                    }
+                    else if (dirX == -1)
+                    {
+                        double rightEdge = curLeft + curW;
+                        double newLeft = Math.Clamp(curLeft + e.HorizontalChange, 4.0, Math.Max(4.0, rightEdge - 160.0));
+                        double newW = rightEdge - newLeft;
+                        Canvas.SetLeft(legContainer, newLeft);
+                        legContainer.Width = newW;
+                        _legendCustomWidth = newW;
+                        _legendNormX = newLeft / viewW;
+                    }
+
+                    if (dirY == 1)
+                    {
+                        double newH = Math.Clamp(curH + e.VerticalChange, 75.0, Math.Max(75.0, viewH - curTop - 4.0));
+                        legContainer.Height = newH;
+                        _legendCustomHeight = newH;
+                    }
+                    else if (dirY == -1)
+                    {
+                        double bottomEdge = curTop + curH;
+                        double newTop = Math.Clamp(curTop + e.VerticalChange, 4.0, Math.Max(4.0, bottomEdge - 75.0));
+                        double newH = bottomEdge - newTop;
+                        Canvas.SetTop(legContainer, newTop);
+                        legContainer.Height = newH;
+                        _legendCustomHeight = newH;
+                        _legendNormY = newTop / viewH;
+                    }
+
+                    if (legContainer.Children.Count > 0 && legContainer.Children[0] is Border b && b.Child is ScrollViewer sv)
+                    {
+                        sv.VerticalScrollBarVisibility = ScrollBarVisibility.Auto;
+                    }
+                    TacticalConfigPanel.MarkDirty();
+                };
+
+                legContainer.Children.Add(thumb);
+            }
+
+            // 4 boki (Lewy, Prawy, Gorny, Dolny)
+            AddResizeThumb(HorizontalAlignment.Left, VerticalAlignment.Stretch, 7, double.NaN, Cursors.SizeWE, -1, 0);
+            AddResizeThumb(HorizontalAlignment.Right, VerticalAlignment.Stretch, 7, double.NaN, Cursors.SizeWE, 1, 0);
+            AddResizeThumb(HorizontalAlignment.Stretch, VerticalAlignment.Top, double.NaN, 7, Cursors.SizeNS, 0, -1);
+            AddResizeThumb(HorizontalAlignment.Stretch, VerticalAlignment.Bottom, double.NaN, 7, Cursors.SizeNS, 0, 1);
+
+            // 4 narozniki (Lewy-Gorny, Prawy-Gorny, Lewy-Dolny, Prawy-Dolny)
+            AddResizeThumb(HorizontalAlignment.Left, VerticalAlignment.Top, 11, 11, Cursors.SizeNWSE, -1, -1);
+            AddResizeThumb(HorizontalAlignment.Right, VerticalAlignment.Top, 11, 11, Cursors.SizeNESW, 1, -1);
+            AddResizeThumb(HorizontalAlignment.Left, VerticalAlignment.Bottom, 11, 11, Cursors.SizeNESW, -1, 1);
+            AddResizeThumb(HorizontalAlignment.Right, VerticalAlignment.Bottom, 11, 11, Cursors.SizeNWSE, 1, 1);
         }
 
         private static byte[] CaptureMapCanvasPngBytes()

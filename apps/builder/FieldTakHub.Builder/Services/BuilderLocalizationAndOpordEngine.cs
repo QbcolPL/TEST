@@ -1804,21 +1804,13 @@ namespace FieldTakHub.Builder.Services
                 string classStyle = "text-align:center;font-weight:bold;font-size:12px;letter-spacing:1.2px;border-top:2px solid " + classBannerBorder + ";border-bottom:2px solid " + classBannerBorder + ";color:" + classBannerColor + ";padding:4px;margin-bottom:10px;background:" + classBannerBg + ";";
 
                 var radioRowsHtml = new StringBuilder();
-                radioRowsHtml.AppendLine("<tr><td><b>" + BuilderI18n.T("Kanał główny (" + d.DayTitle + ")", "Primary Channel (" + d.DayTitle + ")") + "</b></td><td>PMR/VHF</td><td colspan='2'><b>" + E(d.PrimaryRadioFreq) + "</b></td></tr>");
-                radioRowsHtml.AppendLine("<tr><td><b>" + BuilderI18n.T("Kanał zapasowy (" + d.DayTitle + ")", "Backup Channel (" + d.DayTitle + ")") + "</b></td><td>PMR/VHF</td><td colspan='2'><b>" + E(d.BackupRadioFreq) + "</b></td></tr>");
-                radioRowsHtml.AppendLine("<tr><td><b>" + BuilderI18n.T("Kanał HQ (" + d.DayTitle + ")", "HQ Channel (" + d.DayTitle + ")") + "</b></td><td>PMR/VHF</td><td colspan='2'><b>" + E(d.HqRadioFreq) + "</b></td></tr>");
-
-                var vArr = (facJson?["VoiceChannels"] ?? facJson?["voiceChannels"]) as JsonArray;
-                if (vArr != null && vArr.Count > 0)
+                foreach (var chRow in V34CleanOpordCommsStore.GetEffectiveChannelsForFaction(factionName))
                 {
-                    foreach (var vo in vArr.OfType<JsonObject>())
-                    {
-                        radioRowsHtml.AppendLine(
-                            "<tr><td><b>" + E(vo["roleName"]?.ToString() ?? vo["RoleName"]?.ToString()) + "</b></td>" +
-                            "<td>" + E(vo["bandType"]?.ToString() ?? vo["BandType"]?.ToString()) + "</td>" +
-                            "<td><b>" + E(vo["freqMhz"]?.ToString() ?? vo["FreqMhz"]?.ToString()) + "</b></td>" +
-                            "<td>" + E(vo["toneOrCode"]?.ToString() ?? vo["ToneOrCode"]?.ToString()) + "</td></tr>");
-                    }
+                    radioRowsHtml.AppendLine(
+                        "<tr><td><b>" + E(chRow.RoleName) + "</b></td>" +
+                        "<td>" + E(chRow.BandType) + "</td>" +
+                        "<td><b>" + E(chRow.FreqMhz) + "</b></td>" +
+                        "<td>" + E(chRow.ToneOrCode) + "</td></tr>");
                 }
 
                 string sarnegClean = SarnegDictionaryService.NormalizePolishChars(d.SarnegKeyWord10 ?? "PRZEDMIOTY").Trim().PadRight(10, 'X').Substring(0, 10);
@@ -2013,13 +2005,7 @@ namespace FieldTakHub.Builder.Services
                 {
                     _isRefreshingOpord = true;
                     SyncFactionsAndMapToOpordModel(w);
-                    var mRebuild = typeof(OpordBuilderManager).GetMethod(
-                        "RebuildOpordForm",
-                        System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic);
-                    if (mRebuild != null)
-                    {
-                        mRebuild.Invoke(null, new object[] { w });
-                    }
+                    OpordBuilderManager.RebuildActiveOpordViewAction?.Invoke();
                 }
                 catch { }
                 finally

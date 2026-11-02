@@ -58,6 +58,7 @@ namespace FieldTakHub.Builder.Services
         public string Kind { get; set; } = "Marker";
         public string SymbolCode { get; set; } = "NATO_HQ";
         public string Name { get; set; } = "HQ";
+        public string LegendDescription { get; set; } = "";
         public string ColorHex { get; set; } = "#2684FF";
         public bool ShowLabel { get; set; } = true;
         public double SizeMultiplier { get; set; } = 1.0;
@@ -186,26 +187,42 @@ namespace FieldTakHub.Builder.Services
 
         public static readonly List<NatoSymbolOption> NatoSymbols = new List<NatoSymbolOption>
         {
-            new NatoSymbolOption { Code = "SHAPE_ARROW",    ShortBadge = "➤",   NatoMeaning = "Strzałka kierunkowa / Kierunek natarcia", Label = "➤ Strzałka kierunkowa (Obracana 360°)" },
-            new NatoSymbolOption { Code = "SHAPE_TENT",     ShortBadge = "⛺",  NatoMeaning = "Namiot / Baza polowa / Respawn / Safezone", Label = "⛺ Namiot / Obóz / Respawn" },
-            new NatoSymbolOption { Code = "SHAPE_CROSS",    ShortBadge = "✖",   NatoMeaning = "Krzyżyk taktyczny / Punkt celowania",      Label = "✖ Krzyżyk (Cross)" },
-            new NatoSymbolOption { Code = "SHAPE_CIRCLE",   ShortBadge = "⭕",  NatoMeaning = "Koło / Punkt orientacyjny",                Label = "⭕ Koło / Okrąg" },
-            new NatoSymbolOption { Code = "SHAPE_SQUARE",   ShortBadge = "⬛",  NatoMeaning = "Kwadrat / Obiekt umocniony",               Label = "⬛ Kwadrat" },
-            new NatoSymbolOption { Code = "SHAPE_RECT",     ShortBadge = "▬",   NatoMeaning = "Prostokąt / Budynek / Pojazd",             Label = "▬ Prostokąt (Obracany 360°)" },
-            new NatoSymbolOption { Code = "SHAPE_DIAMOND",  ShortBadge = "◆",   NatoMeaning = "Romb / Punkt kluczowy",                    Label = "◆ Romb" },
-            new NatoSymbolOption { Code = "SHAPE_TRIANGLE", ShortBadge = "▲",   NatoMeaning = "Trójkąt ostrzegawczy / Stanowisko",        Label = "▲ Trójkąt (Obracany 360°)" },
-            new NatoSymbolOption { Code = "NATO_HQ",        ShortBadge = "HQ",  NatoMeaning = "Sztab / Dowództwo (stopka masztu)",        Label = "🚩 [HQ] NATO Sztab / Dowództwo (Flaga)" },
-            new NatoSymbolOption { Code = "NATO_INF",       ShortBadge = "X",   NatoMeaning = "Piechota / Drużyna szturmowa",             Label = "[X] NATO Piechota / Drużyna" },
-            new NatoSymbolOption { Code = "NATO_RECON",     ShortBadge = "/",   NatoMeaning = "Zwiad / Rozpoznanie (Recon)",              Label = "[/] NATO Zwiad / Recon" },
-            new NatoSymbolOption { Code = "NATO_MED",       ShortBadge = "+",   NatoMeaning = "Punkt Medyczny / MEDEVAC",                 Label = "[+] NATO Punkt Medyczny / MEDEVAC" },
-            new NatoSymbolOption { Code = "NATO_COMMS",     ShortBadge = "⚡",  NatoMeaning = "Węzeł Łączności / Przekaźnik",             Label = "[⚡] NATO Węzeł Łączności / LoRa" },
-            new NatoSymbolOption { Code = "NATO_SUPPLY",    ShortBadge = "SUP", NatoMeaning = "Punkt Amunicyjny / Logistyka",             Label = "[SUP] NATO Punkt Amunicyjny / Logistyka" },
-            new NatoSymbolOption { Code = "NATO_OP",        ShortBadge = "△",   NatoMeaning = "Punkt Obserwacyjny (OP)",                  Label = "[△] NATO Punkt Obserwacyjny (OP)" },
-            new NatoSymbolOption { Code = "NATO_SNIPER",    ShortBadge = "⊕",   NatoMeaning = "Snajper / Strzelec Wyborowy",              Label = "[⊕] NATO Snajper / Strzelec" },
-            new NatoSymbolOption { Code = "NATO_CP",        ShortBadge = "CP",  NatoMeaning = "Punkt Kontrolny / Checkpoint",             Label = "[CP] NATO Punkt Kontrolny / Checkpoint" },
-            new NatoSymbolOption { Code = "NATO_LZ",        ShortBadge = "LZ",  NatoMeaning = "Strefa Lądowania / Zrzutu",                Label = "[LZ] NATO Strefa Lądowania / Zrzutu" },
-            new NatoSymbolOption { Code = "NATO_OBJ",       ShortBadge = "OBJ", NatoMeaning = "Cel Operacji (Objective)",                 Label = "[OBJ] NATO Cel Operacji (Objective)" },
-            new NatoSymbolOption { Code = "NATO_HAZARD",    ShortBadge = "!",   NatoMeaning = "Zagrożenie / Strefa No-Go",                Label = "[!] NATO Zagrożenie / Strefa No-Go" }
+            new NatoSymbolOption { Code = "SHAPE_ARROW",    ShortBadge = "\u27A4",  NatoMeaning = "Strza\u0142ka kierunkowa / Kierunek natarcia",       Label = "Strza\u0142ka kierunkowa (Obracana 360\u00B0)" },
+            new NatoSymbolOption { Code = "SHAPE_TENT",     ShortBadge = "\u26FA",  NatoMeaning = "Namiot / Baza polowa / Respawn / Safezone",          Label = "Namiot / Ob\u00F3z / Respawn" },
+            new NatoSymbolOption { Code = "SHAPE_CROSS",    ShortBadge = "\u2716",  NatoMeaning = "Krzy\u017Cyk taktyczny / Punkt celowania",            Label = "Krzy\u017Cyk taktyczny (Cross)" },
+            new NatoSymbolOption { Code = "SHAPE_CIRCLE",   ShortBadge = "\u2B55",  NatoMeaning = "Ko\u0142o / Punkt orientacyjny",                      Label = "Ko\u0142o / Okr\u0105g" },
+            new NatoSymbolOption { Code = "SHAPE_SQUARE",   ShortBadge = "\u2B1B",  NatoMeaning = "Kwadrat / Obiekt umocniony",                         Label = "Kwadrat / Punkt umocniony" },
+            new NatoSymbolOption { Code = "SHAPE_RECT",     ShortBadge = "\u25AC",  NatoMeaning = "Prostok\u0105t / Budynek / Okop",                     Label = "Prostok\u0105t / Budynek (Obracany 360\u00B0)" },
+            new NatoSymbolOption { Code = "SHAPE_DIAMOND",  ShortBadge = "\u25C6",  NatoMeaning = "Romb / Punkt kluczowy",                              Label = "Romb taktyczny" },
+            new NatoSymbolOption { Code = "SHAPE_TRIANGLE", ShortBadge = "\u25B2",  NatoMeaning = "Tr\u00F3jk\u0105t ostrzegawczy / Stanowisko",         Label = "Tr\u00F3jk\u0105t (Obracany 360\u00B0)" },
+            new NatoSymbolOption { Code = "NATO_HQ",        ShortBadge = "HQ",      NatoMeaning = "Sztab / Dow\u00F3dztwo (stopka masztu)",              Label = "[HQ] NATO Sztab / Dow\u00F3dztwo (Flaga)" },
+            new NatoSymbolOption { Code = "NATO_INF",       ShortBadge = "INF",     NatoMeaning = "Piechota / Dru\u017Cyna szturmowa",                   Label = "[X] NATO Piechota / Dru\u017Cyna" },
+            new NatoSymbolOption { Code = "NATO_MECH",      ShortBadge = "MECH",    NatoMeaning = "Piechota Zmechanizowana / KTO / BWP",                Label = "[MX] NATO Piechota Zmechanizowana / BWP" },
+            new NatoSymbolOption { Code = "NATO_ARMOR",     ShortBadge = "ARM",     NatoMeaning = "Bro\u0144 Pancerna / Czo\u0142g / Pojazd Ci\u0119\u017Cki", Label = "[ARM] NATO Bro\u0144 Pancerna / Czo\u0142g" },
+            new NatoSymbolOption { Code = "NATO_RECON",     ShortBadge = "REC",     NatoMeaning = "Zwiad / Rozpoznanie (Recon)",                        Label = "[/] NATO Zwiad / Recon" },
+            new NatoSymbolOption { Code = "NATO_SOF",       ShortBadge = "SOF",     NatoMeaning = "Si\u0142y Specjalne / Komandosi (SOF)",               Label = "[SOF] NATO Si\u0142y Specjalne / Jednostka Spec." },
+            new NatoSymbolOption { Code = "NATO_SNIPER",    ShortBadge = "SNP",     NatoMeaning = "Snajper / Strzelec Wyborowy",                        Label = "[\u2295] NATO Snajper / Strzelec Wyborowy" },
+            new NatoSymbolOption { Code = "NATO_MED",       ShortBadge = "MED",     NatoMeaning = "Punkt Medyczny / MEDEVAC",                           Label = "[+] NATO Punkt Medyczny / MEDEVAC" },
+            new NatoSymbolOption { Code = "NATO_COMMS",     ShortBadge = "COM",     NatoMeaning = "W\u0119ze\u0142 \u0141\u0105czno\u015Bci / Przeka\u017Anik LoRa", Label = "[\u26A1] NATO W\u0119ze\u0142 \u0141\u0105czno\u015Bci / Przeka\u017Anik" },
+            new NatoSymbolOption { Code = "NATO_ENG",       ShortBadge = "ENG",     NatoMeaning = "Saperzy / In\u017Cynieria Wojskowa",                  Label = "[E] NATO Saperzy / In\u017Cynieria" },
+            new NatoSymbolOption { Code = "NATO_ARTY",      ShortBadge = "ART",     NatoMeaning = "Artyleria / Wsparcie Ogniowe",                       Label = "[\u25CF] NATO Artyleria / Wsparcie Ogniowe" },
+            new NatoSymbolOption { Code = "NATO_MORTAR",    ShortBadge = "MOR",     NatoMeaning = "Stanowisko Mo\u017Adzierza",                          Label = "[MOR] NATO Stanowisko Mo\u017Adzierza" },
+            new NatoSymbolOption { Code = "NATO_ADA",       ShortBadge = "ADA",     NatoMeaning = "Obrona Przeciwlotnicza (OPL)",                       Label = "[ADA] NATO Obrona Przeciwlotnicza (OPL)" },
+            new NatoSymbolOption { Code = "NATO_AT",        ShortBadge = "AT",      NatoMeaning = "Obrona Przeciwpancerna / PPK",                       Label = "[AT] NATO Przeciwpancerna / PPK" },
+            new NatoSymbolOption { Code = "NATO_UAV",       ShortBadge = "UAV",     NatoMeaning = "Dron / Rozpoznanie Powietrzne (UAV)",                Label = "[UAV] NATO Dron / Zwiad Lotniczy" },
+            new NatoSymbolOption { Code = "NATO_SUPPLY",    ShortBadge = "SUP",     NatoMeaning = "Punkt Amunicyjny / Logistyka",                       Label = "[SUP] NATO Punkt Amunicyjny / Logistyka" },
+            new NatoSymbolOption { Code = "NATO_VEHICLE",   ShortBadge = "VEH",     NatoMeaning = "Pojazd Taktyczny / Kolumna Transportowa",            Label = "[VEH] NATO Pojazd / Transport" },
+            new NatoSymbolOption { Code = "NATO_OP",        ShortBadge = "OP",      NatoMeaning = "Punkt Obserwacyjny (OP)",                            Label = "[\u25B3] NATO Punkt Obserwacyjny (OP)" },
+            new NatoSymbolOption { Code = "NATO_AMBUSH",    ShortBadge = "AMB",     NatoMeaning = "Zasadzka / Strefa Ogniowa (Ambush)",                 Label = "[AMB] NATO Zasadzka (Obracana 360\u00B0)" },
+            new NatoSymbolOption { Code = "NATO_CP",        ShortBadge = "CP",      NatoMeaning = "Punkt Kontrolny / Checkpoint (CP)",                  Label = "[CP] NATO Punkt Kontrolny / Checkpoint" },
+            new NatoSymbolOption { Code = "NATO_RALLY",     ShortBadge = "RP",      NatoMeaning = "Punkt Zbi\u00F3rki / Rally Point (RP)",               Label = "[RP] NATO Punkt Zbi\u00F3rki (Rally Point)" },
+            new NatoSymbolOption { Code = "NATO_INFIL",     ShortBadge = "IN",      NatoMeaning = "Punkt Wej\u015Bcia / Infiltracji (INFIL)",            Label = "[IN] NATO Punkt Wej\u015Bcia (INFIL)" },
+            new NatoSymbolOption { Code = "NATO_EXFIL",     ShortBadge = "EX",      NatoMeaning = "Punkt Wyj\u015Bcia / Ewakuacji (EXFIL)",              Label = "[EX] NATO Punkt Ewakuacji (EXFIL)" },
+            new NatoSymbolOption { Code = "NATO_LZ",        ShortBadge = "LZ",      NatoMeaning = "Strefa L\u0105dowania / Zrzutu (LZ)",                 Label = "[LZ] NATO Strefa L\u0105dowania / Zrzutu (LZ)" },
+            new NatoSymbolOption { Code = "NATO_BREACH",    ShortBadge = "BRH",     NatoMeaning = "Punkt Wy\u0142omu / Przej\u015Bcia (Breach)",         Label = "[BRH] NATO Punkt Wy\u0142omu (Obracany 360\u00B0)" },
+            new NatoSymbolOption { Code = "NATO_OBJ",       ShortBadge = "OBJ",     NatoMeaning = "Cel Operacji (Objective)",                           Label = "[OBJ] NATO Cel Operacji (Objective)" },
+            new NatoSymbolOption { Code = "NATO_MINE",      ShortBadge = "IED",     NatoMeaning = "Pole Minowe / IED / Pu\u0142apka",                    Label = "[IED] NATO Pole Minowe / IED" },
+            new NatoSymbolOption { Code = "NATO_HAZARD",    ShortBadge = "!",       NatoMeaning = "Zagro\u017Cenie / Strefa No-Go",                      Label = "[!] NATO Zagro\u017Cenie / Strefa No-Go" }
         };
 
         public static readonly List<TacticalMapLayerDef> Layers = new List<TacticalMapLayerDef>
@@ -1714,7 +1731,7 @@ namespace FieldTakHub.Builder.Services
             foreach (var o in _mapObjects)
             {
                 var pts = new JsonArray(); foreach (var p in o.Points) pts.Add(new JsonObject { ["lat"] = p.Lat, ["lon"] = p.Lon });
-                arr.Add(new JsonObject { ["kind"] = o.Kind, ["symbol"] = o.SymbolCode, ["name"] = o.Name, ["color"] = o.ColorHex, ["showLabel"] = o.ShowLabel, ["sizeMultiplier"] = o.SizeMultiplier, ["rotationDeg"] = o.RotationDeg, ["points"] = pts });
+                arr.Add(new JsonObject { ["kind"] = o.Kind, ["symbol"] = o.SymbolCode, ["name"] = o.Name, ["legendDesc"] = o.LegendDescription ?? "", ["color"] = o.ColorHex, ["showLabel"] = o.ShowLabel, ["sizeMultiplier"] = o.SizeMultiplier, ["rotationDeg"] = o.RotationDeg, ["points"] = pts });
             }
             root["objects"] = arr; ExportExtraMapUiState(root); return root;
         }
@@ -1770,7 +1787,7 @@ namespace FieldTakHub.Builder.Services
                         bool shLbl = !bool.TryParse(node["showLabel"]?.ToString(), out bool parsedLbl) || parsedLbl;
                         double szMult = double.TryParse(node["sizeMultiplier"]?.ToString(), NumberStyles.Any, CultureInfo.InvariantCulture, out double sm) ? Math.Clamp(sm, 0.35, 3.0) : 1.0;
                         double rotDeg = double.TryParse(node["rotationDeg"]?.ToString(), NumberStyles.Any, CultureInfo.InvariantCulture, out double rd) ? ((rd % 360.0 + 360.0) % 360.0) : 0.0;
-                        var item = new TacticalMapObjectItem { Kind = node["kind"]?.ToString() ?? "Marker", SymbolCode = node["symbol"]?.ToString() ?? "NATO_HQ", Name = node["name"]?.ToString() ?? "Punkt", ColorHex = node["color"]?.ToString() ?? "#2684FF", ShowLabel = shLbl, SizeMultiplier = szMult, RotationDeg = rotDeg };
+                        var item = new TacticalMapObjectItem { Kind = node["kind"]?.ToString() ?? "Marker", SymbolCode = node["symbol"]?.ToString() ?? "NATO_HQ", Name = node["name"]?.ToString() ?? "Punkt", LegendDescription = node["legendDesc"]?.ToString() ?? "", ColorHex = node["color"]?.ToString() ?? "#2684FF", ShowLabel = shLbl, SizeMultiplier = szMult, RotationDeg = rotDeg };
                         if (node["points"] is JsonArray pts)
                             foreach (var p in pts.OfType<JsonObject>())
                                 if (double.TryParse(p["lat"]?.ToString(), NumberStyles.Any, CultureInfo.InvariantCulture, out double pla) && double.TryParse(p["lon"]?.ToString(), NumberStyles.Any, CultureInfo.InvariantCulture, out double plo))

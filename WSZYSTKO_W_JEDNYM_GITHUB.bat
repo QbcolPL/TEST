@@ -5,28 +5,29 @@ cd /d "%~dp0"
 set "BAT_FILE=%~f0"
 
 echo ============================================================================
-echo [KROK 2/2] Wdrazanie UI i renderowania Podzialki Sektorowej (A,B,C / 1,2,3)
-echo            z wyborem rozmiaru (m) oraz Cwiartek/Keypad + Wysylka na GitHub...
+echo [KROK 2B/2] Wdrazanie poprawek w Generatorze OPORD (przycisk Pobierz na
+echo             gorze, auto-odswiezanie stron, walidacja AO w METOC, nowa Tabela
+echo             Lacznosci z opcja edycji recznej) + Wysylka na GitHub Actions...
 echo ============================================================================
-powershell -NoProfile -ExecutionPolicy Bypass -Command "Add-Type -TypeDefinition ([System.Text.RegularExpressions.Regex]::Split([System.IO.File]::ReadAllText([System.Environment]::GetEnvironmentVariable('BAT_FILE'), [System.Text.Encoding]::UTF8), '//===' + 'STEP2_SECTOR_AIO_CS===')[1]); [FthStep2SectorAndGitHub]::Run()"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "Add-Type -TypeDefinition ([System.Text.RegularExpressions.Regex]::Split([System.IO.File]::ReadAllText([System.Environment]::GetEnvironmentVariable('BAT_FILE'), [System.Text.Encoding]::UTF8), '//===' + 'STEP2B_OPORD_AND_GITHUB_CS===')[1]); [FthStep2BOpordAndGitHub]::Run()"
 
 if errorlevel 1 (
     echo.
-    echo [BLAD] Wystapil blad podczas wykonywania Kroku 2/2 lub wysylki na GitHub!
+    echo [BLAD] Wystapil blad podczas wykonywania Kroku 2B/2 lub wysylki na GitHub!
     pause
     exit /b 1
 )
 
 echo.
 echo ============================================================================
-echo [SUKCES - KROK 2/2] Podzialka sektorowa (A,B,C / 1,2,3 + Cwiartki/Keypad)
-echo zostala wdrożona i wyslana na GitHub (QbcolPL/TEST)!
+echo [SUKCES - KROK 2B/2] Wszystkie zmiany w Generatorze Map i Generatorze OPORD
+echo zostaly wdrozone i wyslane na GitHub (QbcolPL/TEST)!
 echo Kompilacja na GitHub Actions zostala uruchomiona.
 echo ============================================================================
 pause
 exit /b 0
 
-//===STEP2_SECTOR_AIO_CS===
+//===STEP2B_OPORD_AND_GITHUB_CS===
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -35,7 +36,7 @@ using System.Linq;
 using System.Text;
 using System.Text.RegularExpressions;
 
-public static class FthStep2SectorAndGitHub
+public static class FthStep2BOpordAndGitHub
 {
     private const string RepoRemoteUrl = "https://github.com/QbcolPL/TEST.git";
     private const string RepoActionsUrl = "https://github.com/QbcolPL/TEST/actions";
@@ -49,32 +50,30 @@ public static class FthStep2SectorAndGitHub
         string batFile = Environment.GetEnvironmentVariable("BAT_FILE");
         string rawBat = File.ReadAllText(batFile, Encoding.UTF8);
 
-        string[] s1 = Regex.Split(rawBat, "//===" + "BLOCK1_TMG_STATE_CS===");
-        if (s1.Length < 2) throw new Exception("Brak bloku BLOCK1_TMG_STATE_CS!");
-        string[] s2 = Regex.Split(s1[1], "//===" + "BLOCK2_ENGINE_SEC2_CS===");
-        if (s2.Length < 2) throw new Exception("Brak bloku BLOCK2_ENGINE_SEC2_CS!");
-        string[] s3 = Regex.Split(s2[1], "//===" + "END_SECTOR_BLOCKS===");
+        string[] p1 = Regex.Split(rawBat, "//===" + "PAYLOAD_OPORD_TRANSFORMER_CS===");
+        if (p1.Length < 2) throw new Exception("Brak bloku PAYLOAD_OPORD_TRANSFORMER_CS!");
+        string[] p2 = Regex.Split(p1[1], "//===" + "END_STEP2B_PAYLOADS===");
 
-        string block1StateCode = s2[0].Trim();
-        string block2EngineSec2Code = s3[0].Trim();
-
+        string payloadOpordTransformer = p2[0].Trim();
         UTF8Encoding utf8NoBom = new UTF8Encoding(false);
+        string servicesDir = Path.Combine(targetDir, @"apps\builder\FieldTakHub.Builder\Services");
 
-        // 1. Upewnij sie, ze Krok 1 w TacticalMapGeneratorView.cs oraz opis w Legendzie sa zaaplikowane
-        ApplyStep1AndLegendToMapView(targetDir, block1StateCode, utf8NoBom);
+        // 1. Dodaj metode TryGetMarkedAoCenter w TacticalMapGeneratorView.cs
+        PatchTacticalMapGeneratorAoHelper(servicesDir, utf8NoBom);
 
-        // 2. Zaaplikuj Krok 2 w TacticalMapGeneratorView.Engine.cs (UI + renderowanie podzialki A,B,C / 1,2,3 + Cwiartki/Keypad)
-        ApplyStep2ToMapEngine(targetDir, block2EngineSec2Code, utf8NoBom);
+        // 2. Zaktualizuj V34CleanFtakAndFactionEngine.RefreshCachedFactions oraz V34CleanMapStudioBridge w BuilderCoreSidebarAndProjectEngine.cs,
+        //    aby zawsze odczytywaly zywa liste stron i kanalow glosowych z TacticalConfigPanel.GetInternalFactionsList()
+        PatchCoreSidebarFactionAndAoSync(servicesDir, utf8NoBom);
 
-        // 3. Dodaj test jednostkowy weryfikujacy indeksowanie kolumn sektorowych (A, B, C... Z, AA)
-        UpdateUnitTestsWithSectorTest(targetDir, utf8NoBom);
+        // 3. Zaktualizuj BuilderLocalizationAndOpordEngine.UiPart.cs oraz BuilderLocalizationAndOpordEngine.cs
+        PatchOpordUiAndDataEngine(servicesDir, payloadOpordTransformer, utf8NoBom);
 
-        // 4. Zapisz unikalny znacznik wyzwalajacy dla GitHub Actions
+        // 4. Zaktualizuj znacznik wyzwalajacy GitHub Actions
         string triggerPath = Path.Combine(targetDir, ".fth_build_trigger.txt");
-        string triggerContent = "Field TAK Hub Sector Grid A,B,C / 1,2,3 Build Trigger UTC: " + DateTime.UtcNow.ToString("O") + " | RunId: " + Guid.NewGuid().ToString("N") + "\n";
+        string triggerContent = "Field TAK Hub Map & OPORD Complete Upgrade UTC: " + DateTime.UtcNow.ToString("O") + " | RunId: " + Guid.NewGuid().ToString("N") + "\n";
         File.WriteAllText(triggerPath, triggerContent, utf8NoBom);
 
-        // 5. Wyslij całość na GitHub i uruchom GitHub Actions
+        // 5. Wyslij calosc na GitHub i uruchom GitHub Actions
         PushAndTriggerGitHubActions(targetDir);
     }
 
@@ -96,194 +95,239 @@ public static class FthStep2SectorAndGitHub
         throw new Exception("Nie znaleziono projektu FieldTakHub.Builder w katalogu: " + baseDir);
     }
 
-    private static void ApplyStep1AndLegendToMapView(string targetDir, string block1StateCode, UTF8Encoding utf8NoBom)
+    private static void PatchTacticalMapGeneratorAoHelper(string servicesDir, UTF8Encoding utf8NoBom)
     {
-        string tmgPath = Path.Combine(targetDir, @"apps\builder\FieldTakHub.Builder\Services\TacticalMapGeneratorView.cs");
+        string tmgPath = Path.Combine(servicesDir, "TacticalMapGeneratorView.cs");
         if (!File.Exists(tmgPath))
             throw new Exception("Nie znaleziono pliku TacticalMapGeneratorView.cs!");
 
         string tmg = File.ReadAllText(tmgPath, Encoding.UTF8);
 
-        int startIdx = tmg.IndexOf("private static double _dotMarkerSizePx = 14.0;", StringComparison.Ordinal);
-        int endIdx = tmg.IndexOf("private static void UpdateSheetViewportSize()", StringComparison.Ordinal);
-        if (startIdx >= 0 && endIdx > startIdx)
+        if (!tmg.Contains("public static bool TryGetMarkedAoCenter("))
         {
-            tmg = tmg.Substring(0, startIdx) + block1StateCode + "\r\n\r\n        " + tmg.Substring(endIdx);
+            string aoHelperMethod = @"        public static bool TryGetMarkedAoCenter(out double aoLat, out double aoLon, out string coordsLabel)
+        {
+            var ao = _mapObjects.FirstOrDefault(o => o.Kind == ""AO"" && o.Points != null && o.Points.Count >= 3);
+            if (ao != null)
+            {
+                aoLat = ao.Points.Average(p => p.Lat);
+                aoLon = ao.Points.Average(p => p.Lon);
+                var (mgrs, _, _, _, _) = FormatTacticalPointCoordinates(aoLat, aoLon);
+                coordsLabel = $""Obszar AO (MGRS: {mgrs})"";
+                return true;
+            }
+            aoLat = 0.0;
+            aoLon = 0.0;
+            coordsLabel = """";
+            return false;
         }
 
-        // Odczyt sektora pod kursorem myszy
-        tmg = tmg.Replace(
-            @"_coordsBadge.Text = $""MGRS: {hMgrs} ({hKp})  |  WGS84: {hoverLat:0.00000}, {hoverLon:0.00000}  |  Skala 1:{_targetScaleDenominator:N0}"";",
-            @"string secHover = FormatSectorCoordinateForLatLon(hoverLat, hoverLon, w, h); _coordsBadge.Text = $""{secHover}  |  MGRS: {hMgrs} ({hKp})  |  WGS84: {hoverLat:0.00000}, {hoverLon:0.00000}  |  1:{_targetScaleDenominator:N0}"";");
-
-        // Odczyt sektora w dymku nad kliknietym punktem
-        tmg = tmg.Replace(
-            @"stack.Children.Add(new TextBlock { Text = kpInfo, Foreground = TacticalConfigPanel.BrushAccent, FontFamily = new FontFamily(""Consolas""), FontSize = 9.2, FontWeight = FontWeights.SemiBold });",
-            @"string secPopup = FormatSectorCoordinateForLatLon(latLon.Lat, latLon.Lon, viewW, viewH); stack.Children.Add(new TextBlock { Text = $""{secPopup}  •  {kpInfo}"", Foreground = TacticalConfigPanel.BrushAccent, FontFamily = new FontFamily(""Consolas""), FontSize = 9.0, FontWeight = FontWeights.SemiBold, TextTrimming = TextTrimming.CharacterEllipsis });");
-
-        // Dodaj informacje o podzialce sektorowej do Legendy na mapie
-        tmg = tmg.Replace(
-            @"string gridSummary = _coordSystem.StartsWith(""MGRS"") ? $""Siatka: MGRS ({_effectiveMgrsStepMeters} m) | {_subGridDivision}"" : $""Siatka: {_coordSystem.Split(' ')[0]}"";",
-            @"string secLegSuffix = (_enableSectorGridOverlay || _coordSystem.StartsWith(""Sektorowa"")) ? $"" + Sektory A-Z/1-9 ({_sectorSizeMeters}m | {_sectorSubDivision.Split(' ')[0]})"" : """"; string gridSummary = (_coordSystem.StartsWith(""MGRS"") ? $""Siatka: MGRS ({_effectiveMgrsStepMeters} m) | {_subGridDivision}"" : $""Siatka: {_coordSystem.Split(' ')[0]}"") + secLegSuffix;");
-
-        File.WriteAllText(tmgPath, tmg, utf8NoBom);
-        Console.WriteLine("[OK] Zaktualizowano TacticalMapGeneratorView.cs (silnik sektorowy, kursor, inspektor i legenda).");
+        ";
+            int anchor = tmg.IndexOf("private static void UpdateSheetViewportSize()", StringComparison.Ordinal);
+            if (anchor > 0)
+            {
+                tmg = tmg.Substring(0, anchor) + aoHelperMethod + tmg.Substring(anchor);
+                File.WriteAllText(tmgPath, tmg, utf8NoBom);
+            }
+        }
+        Console.WriteLine("[OK] Dodano TryGetMarkedAoCenter w TacticalMapGeneratorView.cs.");
     }
 
-    private static void ApplyStep2ToMapEngine(string targetDir, string block2EngineSec2Code, UTF8Encoding utf8NoBom)
+    private static void PatchCoreSidebarFactionAndAoSync(string servicesDir, UTF8Encoding utf8NoBom)
     {
-        string engPath = Path.Combine(targetDir, @"apps\builder\FieldTakHub.Builder\Services\TacticalMapGeneratorView.Engine.cs");
-        if (!File.Exists(engPath))
-            throw new Exception("Nie znaleziono pliku TacticalMapGeneratorView.Engine.cs!");
+        string corePath = Path.Combine(servicesDir, "BuilderCoreSidebarAndProjectEngine.cs");
+        if (!File.Exists(corePath)) return;
 
-        string eng = File.ReadAllText(engPath, Encoding.UTF8);
+        string core = File.ReadAllText(corePath, Encoding.UTF8);
 
-        // 1. Podmien BuildSection2GridAndColorsUI (lub wczesniejszy blok od UpdateSectorSizePresetHighlights)
-        int s2Start = eng.IndexOf("private static void UpdateSectorSizePresetHighlights()", StringComparison.Ordinal);
-        if (s2Start < 0)
-            s2Start = eng.IndexOf("private static StackPanel BuildSection2GridAndColorsUI(Window win)", StringComparison.Ordinal);
+        // Spraw, aby RefreshCachedFactions zawsze w pierwszej kolejnosci pobieralo zywa liste stron i ich kanalow glosowych z TacticalConfigPanel.GetInternalFactionsList()
+        string oldRefreshStart = @"        public static List<V34FactionSnapshot> RefreshCachedFactions(Window win, List<DependencyObject> preScanned = null)
+        {
+            var list = new List<V34FactionSnapshot>();
+            try
+            {";
 
-        int s2End = eng.IndexOf("private static (double W, double H) GetExactCanvasSize()", StringComparison.Ordinal);
-        if (s2Start < 0 || s2End <= s2Start)
-            throw new Exception("Nie znaleziono metody BuildSection2GridAndColorsUI w TacticalMapGeneratorView.Engine.cs!");
-
-        eng = eng.Substring(0, s2Start) + block2EngineSec2Code + "\r\n\r\n        " + eng.Substring(s2End);
-
-        // 2. Zastap stary sztywny blok 8x8 "Sektorowa" w RenderFastGridAndMasksOnContext
-        string oldSektorowaBlock = @"                if (_coordSystem.StartsWith(""Sektorowa"") && _mainGridOpacity > 0.02)
+        string newRefreshStart = @"        public static List<V34FactionSnapshot> RefreshCachedFactions(Window win, List<DependencyObject> preScanned = null)
+        {
+            var list = new List<V34FactionSnapshot>();
+            try
+            {
+                var internalFactions = TacticalConfigPanel.GetInternalFactionsList();
+                if (internalFactions != null && internalFactions.Count > 0)
                 {
-                    int cols = 8, rows = 8; double cw = w / cols, ch = h / rows;
-                    for (int c = 1; c < cols; c++) dc.DrawLine(mainPen, new Point(c * cw, 0), new Point(c * cw, h));
-                    for (int r = 1; r < rows; r++) dc.DrawLine(mainPen, new Point(0, r * ch), new Point(w, r * ch));
-                    for (int r = 0; r < rows; r++)
-                        for (int c = 0; c < cols; c++)
-                            DrawFastBadgeOnContext(dc, $""{(char)('A' + r)}{c + 1}"", c * cw + 6, r * ch + 4, mainBrush, 10 * _fontScaleMultiplier, _mainGridOpacity, $""MAIN_{_mainGridColorHex}_{_mainGridOpacity:0.00}"");
+                    foreach (var f in internalFactions)
+                    {
+                        if (f == null || string.IsNullOrWhiteSpace(f.Name)) continue;
+                        var snap = new V34FactionSnapshot
+                        {
+                            FactionName = f.Name.Trim(),
+                            ColorHex = string.IsNullOrWhiteSpace(f.ColorHex) ? ""#2684FF"" : f.ColorHex.Trim().ToUpperInvariant(),
+                            ChannelName = string.IsNullOrWhiteSpace(f.ChannelName) ? (f.Name.Trim().ToUpperInvariant() + ""-MESH"") : f.ChannelName.Trim(),
+                            Region = string.IsNullOrWhiteSpace(f.LoraRegion) ? ""EU_868"" : f.LoraRegion.Trim(),
+                            ModemPreset = string.IsNullOrWhiteSpace(f.LoraModemPreset) ? ""SHORT_FAST"" : f.LoraModemPreset.Trim(),
+                            OtsHost = f.OtsHost ?? """",
+                            EmergencyPhone = string.IsNullOrWhiteSpace(f.EmergencyPhone) ? ""Brak / 112"" : f.EmergencyPhone.Trim(),
+                            ExpirationHours = f.ValidityHours
+                        };
+                        if (f.VoiceChannels != null)
+                        {
+                            foreach (var vc in f.VoiceChannels)
+                            {
+                                snap.VoiceRows.Add(new V34FactionVoiceChannelRow
+                                {
+                                    Role = string.IsNullOrWhiteSpace(vc.RoleName) ? ""Kana\u0142"" : vc.RoleName,
+                                    Band = string.IsNullOrWhiteSpace(vc.BandType) ? ""PMR"" : vc.BandType,
+                                    Freq = string.IsNullOrWhiteSpace(vc.FreqMhz) ? ""-"" : vc.FreqMhz,
+                                    Tone = string.IsNullOrWhiteSpace(vc.ToneOrCode) ? ""Brak tonu"" : vc.ToneOrCode
+                                });
+                            }
+                        }
+                        if (snap.VoiceRows.Count == 0)
+                            snap.VoiceRows.Add(new V34FactionVoiceChannelRow());
+                        list.Add(snap);
+                    }
+                    if (list.Count > 0)
+                    {
+                        CachedFactions.Clear();
+                        CachedFactions.AddRange(list);
+                        return CachedFactions;
+                    }
                 }";
 
-        if (eng.Contains(oldSektorowaBlock))
+        if (!core.Contains("var internalFactions = TacticalConfigPanel.GetInternalFactionsList();") && core.Contains(oldRefreshStart))
         {
-            eng = eng.Replace(
-                oldSektorowaBlock,
-                @"                if (_coordSystem.StartsWith(""Sektorowa""))
+            core = core.Replace(oldRefreshStart, newRefreshStart);
+        }
+
+        // Spraw, aby SyncMapStudioState uzywalo bezposrednio TacticalMapGeneratorView.TryGetMarkedAoCenter
+        string oldSyncMapStart = @"        public static void SyncMapStudioState(Window win)
+        {
+            try
+            {";
+
+        string newSyncMapStart = @"        public static void SyncMapStudioState(Window win)
+        {
+            try
+            {
+                if (TacticalMapGeneratorView.TryGetMarkedAoCenter(out double markedLat, out double markedLon, out _))
                 {
-                    // Renderowane przez metryczny silnik podzialki sektorowej RenderMetricSectorGridAndRulersOnContext
-                }");
-        }
+                    HasExplicitAoMarked = true;
+                    AoCenterLat = markedLat;
+                    AoCenterLon = markedLon;
+                    return;
+                }
+                else
+                {
+                    HasExplicitAoMarked = false;
+                }";
 
-        // 3. Wywolaj RenderMetricSectorGridAndRulersOnContext(dc, w, h) w RenderFastGridAndMasksOnContext (zarowno gdy wybrano Siatke Sektorowa, jak i gdy wlaczono dodatkowa podzialke na siatce MGRS/WGS84)
-        if (!eng.Contains("RenderMetricSectorGridAndRulersOnContext(dc, w, h);"))
+        if (!core.Contains("TacticalMapGeneratorView.TryGetMarkedAoCenter") && core.Contains(oldSyncMapStart))
         {
-            eng = eng.Replace(
-                "if (_rulerStart != null && _rulerEnd != null)",
-                "RenderMetricSectorGridAndRulersOnContext(dc, w, h);\r\n\r\n            if (_rulerStart != null && _rulerEnd != null)");
+            core = core.Replace(oldSyncMapStart, newSyncMapStart);
         }
 
-        int openBraces = eng.Count(c => c == '{');
-        int closeBraces = eng.Count(c => c == '}');
-        Console.WriteLine("[WERYFIKACJA] Nawiasy klamrowe w TacticalMapGeneratorView.Engine.cs: { = " + openBraces + ", } = " + closeBraces);
-
-        File.WriteAllText(engPath, eng, utf8NoBom);
-        Console.WriteLine("[OK] Zaktualizowano TacticalMapGeneratorView.Engine.cs (UI sekcji 2 + renderowanie podzialki A,B,C / 1,2,3 + Cwiartki/Keypad).");
+        File.WriteAllText(corePath, core, utf8NoBom);
+        Console.WriteLine("[OK] Zaktualizowano synchronizacje stron i AO w BuilderCoreSidebarAndProjectEngine.cs.");
     }
 
-    private static void UpdateUnitTestsWithSectorTest(string targetDir, UTF8Encoding utf8NoBom)
+    private static void PatchOpordUiAndDataEngine(string servicesDir, string payloadOpordTransformer, UTF8Encoding utf8NoBom)
     {
-        string testFilePath = Path.Combine(targetDir, @"apps\builder\FieldTakHub.Builder.Tests\V34CleanRefactorTests.cs");
-        if (!File.Exists(testFilePath)) return;
+        // A. BuilderLocalizationAndOpordEngine.UiPart.cs
+        string uiPartPath = Path.Combine(servicesDir, "BuilderLocalizationAndOpordEngine.UiPart.cs");
+        if (!File.Exists(uiPartPath))
+            throw new Exception("Nie znaleziono pliku BuilderLocalizationAndOpordEngine.UiPart.cs!");
 
-        string cleanTestsCode = string.Join("\r\n", new string[]
+        string uiPart = File.ReadAllText(uiPartPath, Encoding.UTF8);
+
+        // 1. Dodaj statyczny delegat RebuildActiveOpordViewAction i wywoluj go przy kazdym otwarciu widoku OPORD
+        if (!uiPart.Contains("public static Action RebuildActiveOpordViewAction;"))
         {
-            "#nullable disable",
-            "using System;",
-            "using System.IO;",
-            "using Xunit;",
-            "using FieldTakHub.Builder.Models;",
-            "using FieldTakHub.Builder.Services;",
-            "",
-            "namespace FieldTakHub.Builder.Tests",
-            "{",
-            "    [Collection(\"SequentialBuilderTests\")]",
-            "    public sealed class V34CleanRefactorTests",
-            "    {",
-            "        [Fact]",
-            "        public void ZeroExpiryHours_ShouldMeanIndefiniteValidityInProjectAndManifest()",
-            "        {",
-            "            var dir = Path.Combine(Path.GetTempPath(), \"fth-indef-\" + Guid.NewGuid().ToString(\"N\"));",
-            "            var source = Path.Combine(dir, \"source\");",
-            "            var output = Path.Combine(dir, \"out\");",
-            "            Directory.CreateDirectory(Path.Combine(source, \"atak\"));",
-            "            File.WriteAllText(Path.Combine(source, \"atak\", \"hello.txt\"), \"test\");",
-            "",
-            "            var p = new FieldTakProject",
-            "            {",
-            "                Name = \"IndefiniteTest\",",
-            "                PackageId = \"test.indefinite\",",
-            "                PackageVersion = \"1.0.0\",",
-            "                SourceDirectory = source,",
-            "                OutputDirectory = output,",
-            "                ExpiryHours = 0,",
-            "                QrExpiryHours = 0,",
-            "                Server = new ServerProfile { Host = \"127.0.0.1\" }",
-            "            };",
-            "",
-            "            Assert.Equal(0, p.ExpiryHours);",
-            "            Assert.Equal(0, p.QrExpiryHours);",
-            "",
-            "            var items = new SourceAnalyzer().Analyze(source);",
-            "            var ftak = new FtakPackageBuilder().Build(p, items);",
-            "            Assert.True(File.Exists(ftak));",
-            "        }",
-            "",
-            "        [Fact]",
-            "        public void SectorGrid_ShouldGenerateHorizontalLettersAndVerticalNumbers()",
-            "        {",
-            "            Assert.Equal(\"A\", TacticalMapGeneratorView.GetSectorColumnLetters(0));",
-            "            Assert.Equal(\"B\", TacticalMapGeneratorView.GetSectorColumnLetters(1));",
-            "            Assert.Equal(\"C\", TacticalMapGeneratorView.GetSectorColumnLetters(2));",
-            "            Assert.Equal(\"Z\", TacticalMapGeneratorView.GetSectorColumnLetters(25));",
-            "            Assert.Equal(\"AA\", TacticalMapGeneratorView.GetSectorColumnLetters(26));",
-            "        }",
-            "",
-            "        [Fact]",
-            "        public void UniqueFactionColors_ShouldReturnDistinctValidHexColors()",
-            "        {",
-            "            string c1 = V34CleanFtakAndFactionEngine.GetNextUniqueFactionColorHex(null);",
-            "            string c2 = V34CleanFtakAndFactionEngine.GetNextUniqueFactionColorHex(null);",
-            "            string c3 = V34CleanFtakAndFactionEngine.GetNextUniqueFactionColorHex(null);",
-            "",
-            "            Assert.StartsWith(\"#\", c1);",
-            "            Assert.Equal(7, c1.Length);",
-            "            Assert.NotEqual(c1, c2, StringComparer.OrdinalIgnoreCase);",
-            "            Assert.NotEqual(c2, c3, StringComparer.OrdinalIgnoreCase);",
-            "        }",
-            "",
-            "        [Fact]",
-            "        public void MapStudioBridge_ShouldConvertCoordinatesToMilitaryMgrs()",
-            "        {",
-            "            double lat = 49.849444;",
-            "            double lon = 18.812667;",
-            "",
-            "            string mgrs = V34CleanMapStudioBridge.LatLonToMgrs(lat, lon);",
-            "            Assert.False(string.IsNullOrWhiteSpace(mgrs));",
-            "            Assert.Contains(\"34U\", mgrs);",
-            "        }",
-            "",
-            "        [Fact]",
-            "        public void GarbageFactionFilter_ShouldRejectPliAndGeoChat()",
-            "        {",
-            "            Assert.True(V34CleanOpordDataEngine.IsGarbageFactionName(\"PLI\"));",
-            "            Assert.True(V34CleanOpordDataEngine.IsGarbageFactionName(\"GeoChat\"));",
-            "            Assert.True(V34CleanOpordDataEngine.IsGarbageFactionName(\"TAK\"));",
-            "            Assert.False(V34CleanOpordDataEngine.IsGarbageFactionName(\"ORGA\"));",
-            "            Assert.False(V34CleanOpordDataEngine.IsGarbageFactionName(\"STRONA-2\"));",
-            "        }",
-            "    }",
-            "}",
-            ""
-        });
+            uiPart = uiPart.Replace(
+                "public static Border CreateOrGetOpordOverlayView(Window win)",
+                "public static Action RebuildActiveOpordViewAction;\r\n\r\n        public static Border CreateOrGetOpordOverlayView(Window win)");
+        }
 
-        File.WriteAllText(testFilePath, cleanTestsCode, utf8NoBom);
-        Console.WriteLine("[OK] Zaktualizowano testy jednostkowe V34CleanRefactorTests.cs.");
+        // 2. Wewnatrz RebuildOpordForm() zarejestruj RebuildActiveOpordViewAction i wywolaj V34CleanOpordUiTransformer.ApplyToOpordForm
+        if (!uiPart.Contains("V34CleanOpordUiTransformer.ApplyToOpordForm"))
+        {
+            uiPart = uiPart.Replace(
+                "void RebuildOpordForm()\r\n            {\r\n                mainStack.Children.Clear();",
+                "void RebuildOpordForm()\r\n            {\r\n                RebuildActiveOpordViewAction = RebuildOpordForm;\r\n                mainStack.Children.Clear();\r\n                win?.Dispatcher.BeginInvoke(new Action(() => V34CleanOpordUiTransformer.ApplyToOpordForm(win, mainStack, _activeOpordFaction, RebuildOpordForm)), System.Windows.Threading.DispatcherPriority.Loaded);");
+
+            uiPart = uiPart.Replace(
+                "void RebuildOpordForm()\n            {\n                mainStack.Children.Clear();",
+                "void RebuildOpordForm()\n            {\n                RebuildActiveOpordViewAction = RebuildOpordForm;\n                mainStack.Children.Clear();\n                win?.Dispatcher.BeginInvoke(new Action(() => V34CleanOpordUiTransformer.ApplyToOpordForm(win, mainStack, _activeOpordFaction, RebuildOpordForm)), System.Windows.Threading.DispatcherPriority.Loaded);");
+        }
+
+        // 3. Podmien blok V34CleanOpordUiTransformer w BuilderLocalizationAndOpordEngine.UiPart.cs
+        int trStart = uiPart.IndexOf("// [START_V34_CLEAN_OPORD_UI_TRANSFORMER]", StringComparison.Ordinal);
+        int trEnd = uiPart.IndexOf("// [END_V34_CLEAN_OPORD_UI_TRANSFORMER]", StringComparison.Ordinal);
+        if (trStart > 0 && trEnd > trStart)
+        {
+            int afterEnd = trEnd + "// [END_V34_CLEAN_OPORD_UI_TRANSFORMER]".Length;
+            uiPart = uiPart.Substring(0, trStart) + payloadOpordTransformer + uiPart.Substring(afterEnd);
+        }
+
+        int openUi = uiPart.Count(c => c == '{');
+        int closeUi = uiPart.Count(c => c == '}');
+        Console.WriteLine("[WERYFIKACJA] Nawiasy klamrowe w BuilderLocalizationAndOpordEngine.UiPart.cs: { = " + openUi + ", } = " + closeUi);
+        File.WriteAllText(uiPartPath, uiPart, utf8NoBom);
+        Console.WriteLine("[OK] Zaktualizowano BuilderLocalizationAndOpordEngine.UiPart.cs.");
+
+        // B. BuilderLocalizationAndOpordEngine.cs
+        string opEnginePath = Path.Combine(servicesDir, "BuilderLocalizationAndOpordEngine.cs");
+        if (File.Exists(opEnginePath))
+        {
+            string opEng = File.ReadAllText(opEnginePath, Encoding.UTF8);
+
+            // 1. W OnSwitchedToOpordTab wywolaj bezposrednio OpordBuilderManager.RebuildActiveOpordViewAction?.Invoke()
+            opEng = opEng.Replace(
+                @"var mRebuild = typeof(OpordBuilderManager).GetMethod(
+                        ""RebuildOpordForm"",
+                        System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic);
+                    if (mRebuild != null)
+                    {
+                        mRebuild.Invoke(null, new object[] { w });
+                    }",
+                @"OpordBuilderManager.RebuildActiveOpordViewAction?.Invoke();");
+
+            // 2. W GeneratePrintableOpordHtml uzyj pelnej listy kanalow z V34CleanOpordCommsStore.GetEffectiveChannelsForFaction(factionName)
+            string oldHtmlRadio = @"                var radioRowsHtml = new StringBuilder();
+                radioRowsHtml.AppendLine(""<tr><td><b>"" + BuilderI18n.T(""Kanał główny ("" + d.DayTitle + "")"", ""Primary Channel ("" + d.DayTitle + "")"") + ""</b></td><td>PMR/VHF</td><td colspan='2'><b>"" + E(d.PrimaryRadioFreq) + ""</b></td></tr>"");
+                radioRowsHtml.AppendLine(""<tr><td><b>"" + BuilderI18n.T(""Kanał zapasowy ("" + d.DayTitle + "")"", ""Backup Channel ("" + d.DayTitle + "")"") + ""</b></td><td>PMR/VHF</td><td colspan='2'><b>"" + E(d.BackupRadioFreq) + ""</b></td></tr>"");
+                radioRowsHtml.AppendLine(""<tr><td><b>"" + BuilderI18n.T(""Kanał HQ ("" + d.DayTitle + "")"", ""HQ Channel ("" + d.DayTitle + "")"") + ""</b></td><td>PMR/VHF</td><td colspan='2'><b>"" + E(d.HqRadioFreq) + ""</b></td></tr>"");
+
+                var vArr = (facJson?[""VoiceChannels""] ?? facJson?[""voiceChannels""]) as JsonArray;
+                if (vArr != null && vArr.Count > 0)
+                {
+                    foreach (var vo in vArr.OfType<JsonObject>())
+                    {
+                        radioRowsHtml.AppendLine(
+                            ""<tr><td><b>"" + E(vo[""roleName""]?.ToString() ?? vo[""RoleName""]?.ToString()) + ""</b></td>"" +
+                            ""<td>"" + E(vo[""bandType""]?.ToString() ?? vo[""BandType""]?.ToString()) + ""</td>"" +
+                            ""<td><b>"" + E(vo[""freqMhz""]?.ToString() ?? vo[""FreqMhz""]?.ToString()) + ""</b></td>"" +
+                            ""<td>"" + E(vo[""toneOrCode""]?.ToString() ?? vo[""ToneOrCode""]?.ToString()) + ""</td></tr>"");
+                    }
+                }";
+
+            string newHtmlRadio = @"                var radioRowsHtml = new StringBuilder();
+                foreach (var chRow in V34CleanOpordCommsStore.GetEffectiveChannelsForFaction(factionName))
+                {
+                    radioRowsHtml.AppendLine(
+                        ""<tr><td><b>"" + E(chRow.RoleName) + ""</b></td>"" +
+                        ""<td>"" + E(chRow.BandType) + ""</td>"" +
+                        ""<td><b>"" + E(chRow.FreqMhz) + ""</b></td>"" +
+                        ""<td>"" + E(chRow.ToneOrCode) + ""</td></tr>"");
+                }";
+
+            if (opEng.Contains(oldHtmlRadio))
+            {
+                opEng = opEng.Replace(oldHtmlRadio, newHtmlRadio);
+            }
+
+            File.WriteAllText(opEnginePath, opEng, utf8NoBom);
+            Console.WriteLine("[OK] Zaktualizowano BuilderLocalizationAndOpordEngine.cs.");
+        }
     }
 
     private static void PushAndTriggerGitHubActions(string targetDir)
@@ -313,7 +357,7 @@ public static class FthStep2SectorAndGitHub
         RunProcess(gitExe, "remote set-url origin " + RepoRemoteUrl, targetDir, ignoreError: false);
 
         RunProcess(gitExe, "add -A", targetDir, ignoreError: false);
-        RunProcess(gitExe, "commit -m \"Add customizable metric Sector Grid & Rulers (A,B,C horizontal / 1,2,3 vertical) with Quarters and Keypad subdivisions\" --allow-empty", targetDir, ignoreError: false);
+        RunProcess(gitExe, "commit -m \"Upgrade Map Generator (36 military vectors, visual dropdown, 4-sided resizable & editable Legend, inline point naming) and OPORD (top pull button, auto-refresh factions, AO-only METOC guard, remodeled Comms Table with manual checkbox)\" --allow-empty", targetDir, ignoreError: false);
 
         int pushExitCode = RunProcess(gitExe, "push -u origin main --force", targetDir, ignoreError: false);
         if (pushExitCode != 0)
@@ -351,599 +395,688 @@ public static class FthStep2SectorAndGitHub
         }
     }
 }
-//===STEP2_SECTOR_AIO_CS===
+//===STEP2B_OPORD_AND_GITHUB_CS===
 
-//===BLOCK1_TMG_STATE_CS===
-        private static double _dotMarkerSizePx = 14.0;
-        private static double _natoMarkerScale = 1.0;
-        private static string _savedSearchQuery = "Czechowice-Dziedzice";
-        private static string _savedDefaultObjectName = "\u27A4";
-        private static ScrollViewer _leftControlScrollViewer;
-        private static bool _isRebuildingMapControls;
-        private static DispatcherTimer _wheelZoomDebounceTimer;
+//===PAYLOAD_OPORD_TRANSFORMER_CS===
+// [START_V34_CLEAN_OPORD_UI_TRANSFORMER]
+    public sealed class OpordManualChannelItem
+    {
+        public string RoleName { get; set; } = "Kana\u0142 Taktyczny";
+        public string BandType { get; set; } = "PMR";
+        public string FreqMhz { get; set; } = "CH 1 (446.00625)";
+        public string ToneOrCode { get; set; } = "CTCSS 67.0 Hz";
+    }
 
-        // Parametry dodatkowej podzialki i siatki sektorowej (Poziomo: A, B, C... | Pionowo: 1, 2, 3...)
-        private static bool _enableSectorGridOverlay = true;
-        private static int _sectorSizeMeters = 100;
-        private static string _sectorSubDivision = "Keypad 1-9 (3\u00D73)";
-        private static bool _showSectorEdgeRulers = true;
-        private static bool _showSectorCornerCodes = true;
-        private static string _sectorGridColorHex = "#FAD02C";
-        private static TextBox _sectorSizeInputBox;
-        private static readonly List<Button> _sectorSizePresetButtons = new List<Button>();
+    public static class V34CleanOpordCommsStore
+    {
+        private static readonly Dictionary<string, bool> ManualOverrideByFaction = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
+        private static readonly Dictionary<string, List<OpordManualChannelItem>> ManualChannelsByFaction = new Dictionary<string, List<OpordManualChannelItem>>(StringComparer.OrdinalIgnoreCase);
 
-        public static string GetSectorColumnLetters(int colIndexZeroBased)
+        public static bool IsManualOverrideEnabled(string factionName)
         {
-            if (colIndexZeroBased < 0) return "A";
-            int n = colIndexZeroBased;
-            string res = "";
-            while (n >= 0)
-            {
-                res = (char)('A' + (n % 26)) + res;
-                n = (n / 26) - 1;
-            }
-            return res;
+            string key = string.IsNullOrWhiteSpace(factionName) ? "BLUFOR" : factionName.Trim();
+            return ManualOverrideByFaction.TryGetValue(key, out bool val) && val;
         }
 
-        public static string FormatSectorCoordinateForLatLon(double lat, double lon, double viewW, double viewH)
+        public static void SetManualOverrideEnabled(string factionName, bool enabled)
+        {
+            string key = string.IsNullOrWhiteSpace(factionName) ? "BLUFOR" : factionName.Trim();
+            ManualOverrideByFaction[key] = enabled;
+            if (enabled && !ManualChannelsByFaction.ContainsKey(key))
+            {
+                ManualChannelsByFaction[key] = PullLiveChannelsFromFactionGenerator(key);
+            }
+        }
+
+        public static List<OpordManualChannelItem> PullLiveChannelsFromFactionGenerator(string factionName)
+        {
+            var result = new List<OpordManualChannelItem>();
+            try
+            {
+                var list = TacticalConfigPanel.GetInternalFactionsList();
+                var fac = list.FirstOrDefault(f => string.Equals(f.Name, factionName, StringComparison.OrdinalIgnoreCase)) ?? list.FirstOrDefault();
+                if (fac != null && fac.VoiceChannels != null && fac.VoiceChannels.Count > 0)
+                {
+                    foreach (var vc in fac.VoiceChannels)
+                    {
+                        result.Add(new OpordManualChannelItem
+                        {
+                            RoleName = string.IsNullOrWhiteSpace(vc.RoleName) ? "Kana\u0142" : vc.RoleName,
+                            BandType = string.IsNullOrWhiteSpace(vc.BandType) ? "PMR" : vc.BandType,
+                            FreqMhz = string.IsNullOrWhiteSpace(vc.FreqMhz) ? "-" : vc.FreqMhz,
+                            ToneOrCode = string.IsNullOrWhiteSpace(vc.ToneOrCode) ? "Brak tonu" : vc.ToneOrCode
+                        });
+                    }
+                }
+            }
+            catch { }
+
+            if (result.Count == 0)
+            {
+                result.Add(new OpordManualChannelItem { RoleName = "Dowodzenie HQ", BandType = "PMR", FreqMhz = "CH 1 (446.00625)", ToneOrCode = "CTCSS 67.0 Hz" });
+            }
+            return result;
+        }
+
+        public static List<OpordManualChannelItem> GetEffectiveChannelsForFaction(string factionName)
+        {
+            string key = string.IsNullOrWhiteSpace(factionName) ? "BLUFOR" : factionName.Trim();
+            if (IsManualOverrideEnabled(key))
+            {
+                if (!ManualChannelsByFaction.TryGetValue(key, out var manualList) || manualList == null)
+                {
+                    manualList = PullLiveChannelsFromFactionGenerator(key);
+                    ManualChannelsByFaction[key] = manualList;
+                }
+                return manualList;
+            }
+            return PullLiveChannelsFromFactionGenerator(key);
+        }
+
+        public static void ForceResyncFromFactionGenerator(string factionName)
+        {
+            string key = string.IsNullOrWhiteSpace(factionName) ? "BLUFOR" : factionName.Trim();
+            ManualChannelsByFaction[key] = PullLiveChannelsFromFactionGenerator(key);
+        }
+    }
+
+    internal static class V34CleanOpordUiTransformer
+    {
+        public static void ApplyToOpordForm(Window win, StackPanel mainOpordStack, string activeFactionName, Action rebuildCallback)
         {
             try
             {
-                Point pt = LatLonToScreen(lat, lon, viewW, viewH);
-                double metersPerPx = GetExactMetersPerPixel();
-                int secMeters = Math.Clamp(_sectorSizeMeters, 10, 5000);
-                double sectorPx = Math.Max(24.0, secMeters / metersPerPx);
+                var w = win ?? Application.Current?.MainWindow;
+                if (mainOpordStack == null) return;
 
-                int colIdx = Math.Max(0, (int)Math.Floor(Math.Max(0.0, pt.X) / sectorPx));
-                int rowIdx = Math.Max(0, (int)Math.Floor(Math.Max(0.0, pt.Y) / sectorPx));
+                var model = V34CleanOpordDataEngine.GetLiveOpordModel();
+                OpordDayPlanModel activeDay = null;
+                if (model != null && model.Days != null && model.Days.Count > 0)
+                {
+                    int idx = Math.Clamp(model.ActiveDayIndex, 0, model.Days.Count - 1);
+                    activeDay = model.Days[idx];
+                }
 
-                string colStr = GetSectorColumnLetters(colIdx);
-                string rowStr = (rowIdx + 1).ToString();
-                string sectorCode = colStr + rowStr;
+                // 1. Pasek gorny: Aktualizacja listy stron + dodanie przycisku "Pobierz z Generatora Stron" obok wyboru strony
+                UpgradeTopActionBarWithPullButton(w, mainOpordStack, activeFactionName, activeDay, rebuildCallback);
 
-                double relX = Math.Clamp((pt.X - (colIdx * sectorPx)) / sectorPx, 0.0, 0.9999);
-                double relY = Math.Clamp((pt.Y - (rowIdx * sectorPx)) / sectorPx, 0.0, 0.9999);
+                // 2. Sekcja METOC: Pobieranie wspolrzednych wylacznie z zaznaczonego AO lub miejscowosci (blokada domyslnego arkusza mapy)
+                UpgradeMetocSectionValidation(w, mainOpordStack, activeDay);
 
-                int kpCol = Math.Clamp((int)Math.Floor(relX * 3.0), 0, 2);
-                int kpRowTop = Math.Clamp((int)Math.Floor(relY * 3.0), 0, 2);
-                int[,] kpGrid = { { 7, 8, 9 }, { 4, 5, 6 }, { 1, 2, 3 } };
-                int kpNum = kpGrid[kpRowTop, kpCol];
+                // 3. Sekcja III.E Tabela lacznosci: Automatyczne pobieranie kanalow z Generatora Stron + opcjonalna edycja reczna na "ptaszek"
+                RebuildCommunicationsTableSection(w, mainOpordStack, activeFactionName, activeDay, rebuildCallback);
 
-                int qCol = relX >= 0.5 ? 1 : 0;
-                int qRow = relY >= 0.5 ? 1 : 0;
-                string[,] qLetters = { { "A", "B" }, { "C", "D" } };
-                string[,] qCardinals = { { "NW", "NE" }, { "SW", "SE" } };
-                string qLet = qLetters[qRow, qCol];
-                string qCard = qCardinals[qRow, qCol];
-
-                return $"Sektor: {sectorCode} ({secMeters}m | KP-{kpNum} | \u0106w:{qLet}/{qCard})";
-            }
-            catch
-            {
-                return "Sektor: A1";
-            }
-        }
-
-        private static void ExportExtraMapUiState(JsonObject root)
-        {
-            if (root == null) return;
-            root["searchQuery"] = _searchPlaceBox != null ? _searchPlaceBox.Text : _savedSearchQuery;
-            root["selectedObjectColorHex"] = _selectedObjectColorHex;
-            root["selectedNatoSymbolCode"] = _selectedNatoSymbolCode;
-            root["defaultObjectName"] = _objectNameInputBox != null ? _objectNameInputBox.Text : _savedDefaultObjectName;
-            root["newObjectShowLabelDefault"] = _newObjectShowLabelDefault;
-            root["dotMarkerSizePx"] = _dotMarkerSizePx;
-            root["natoMarkerScale"] = _natoMarkerScale;
-            root["northArrowPos"] = _northArrowPos;
-            root["scaleBarPos"] = _scaleBarPos;
-            root["legendPos"] = _legendPos;
-            if (_northNormX.HasValue) root["northNormX"] = _northNormX.Value;
-            if (_northNormY.HasValue) root["northNormY"] = _northNormY.Value;
-            if (_scaleNormX.HasValue) root["scaleNormX"] = _scaleNormX.Value;
-            if (_scaleNormY.HasValue) root["scaleNormY"] = _scaleNormY.Value;
-            if (_legendNormX.HasValue) root["legendNormX"] = _legendNormX.Value;
-            if (_legendNormY.HasValue) root["legendNormY"] = _legendNormY.Value;
-            root["kmzGrgMode"] = _kmzGrgMode;
-            root["offlineMinZoom"] = _offlineMinZoom;
-            root["offlineMaxZoom"] = _offlineMaxZoom;
-            root["offlineBoundsMode"] = _offlineBoundsMode;
-            root["offlineDbFormat"] = _offlineDbFormat;
-            root["bakeLidarInOffline"] = _bakeLidarInOffline;
-            root["includeVectorsWithOffline"] = _includeVectorsWithOffline;
-
-            root["enableSectorGridOverlay"] = _enableSectorGridOverlay;
-            root["sectorSizeMeters"] = _sectorSizeMeters;
-            root["sectorSubDivision"] = _sectorSubDivision;
-            root["showSectorEdgeRulers"] = _showSectorEdgeRulers;
-            root["showSectorCornerCodes"] = _showSectorCornerCodes;
-            root["sectorGridColorHex"] = _sectorGridColorHex;
-        }
-
-        private static void ImportExtraMapUiState(JsonObject root)
-        {
-            if (root == null) return;
-            if (root["searchQuery"] != null) _savedSearchQuery = root["searchQuery"].ToString();
-            if (root["selectedObjectColorHex"] != null) _selectedObjectColorHex = root["selectedObjectColorHex"].ToString();
-            if (root["selectedNatoSymbolCode"] != null) _selectedNatoSymbolCode = root["selectedNatoSymbolCode"].ToString();
-            if (root["defaultObjectName"] != null) _savedDefaultObjectName = root["defaultObjectName"].ToString();
-            if (bool.TryParse(root["newObjectShowLabelDefault"]?.ToString(), out bool nld)) _newObjectShowLabelDefault = nld;
-            if (double.TryParse(root["dotMarkerSizePx"]?.ToString(), NumberStyles.Any, CultureInfo.InvariantCulture, out double dms)) _dotMarkerSizePx = Math.Clamp(dms, 4.0, 48.0);
-            if (double.TryParse(root["natoMarkerScale"]?.ToString(), NumberStyles.Any, CultureInfo.InvariantCulture, out double nms)) _natoMarkerScale = Math.Clamp(nms, 0.4, 3.0);
-
-            if (root["northArrowPos"] != null) _northArrowPos = root["northArrowPos"].ToString();
-            if (root["scaleBarPos"] != null) _scaleBarPos = root["scaleBarPos"].ToString();
-            if (root["legendPos"] != null) _legendPos = root["legendPos"].ToString();
-
-            _northNormX = double.TryParse(root["northNormX"]?.ToString(), NumberStyles.Any, CultureInfo.InvariantCulture, out double nnx) ? nnx : null;
-            _northNormY = double.TryParse(root["northNormY"]?.ToString(), NumberStyles.Any, CultureInfo.InvariantCulture, out double nny) ? nny : null;
-            _scaleNormX = double.TryParse(root["scaleNormX"]?.ToString(), NumberStyles.Any, CultureInfo.InvariantCulture, out double snx) ? snx : null;
-            _scaleNormY = double.TryParse(root["scaleNormY"]?.ToString(), NumberStyles.Any, CultureInfo.InvariantCulture, out double sny) ? sny : null;
-            _legendNormX = double.TryParse(root["legendNormX"]?.ToString(), NumberStyles.Any, CultureInfo.InvariantCulture, out double lnx) ? lnx : null;
-            _legendNormY = double.TryParse(root["legendNormY"]?.ToString(), NumberStyles.Any, CultureInfo.InvariantCulture, out double lny) ? lny : null;
-
-            if (root["kmzGrgMode"] != null) _kmzGrgMode = root["kmzGrgMode"].ToString();
-            if (int.TryParse(root["offlineMinZoom"]?.ToString(), out int omin)) _offlineMinZoom = Math.Clamp(omin, 10, 18);
-            if (int.TryParse(root["offlineMaxZoom"]?.ToString(), out int omax)) _offlineMaxZoom = Math.Clamp(omax, _offlineMinZoom, 19);
-            if (root["offlineBoundsMode"] != null) _offlineBoundsMode = root["offlineBoundsMode"].ToString();
-            if (root["offlineDbFormat"] != null) _offlineDbFormat = root["offlineDbFormat"].ToString();
-            if (bool.TryParse(root["bakeLidarInOffline"]?.ToString(), out bool bl)) _bakeLidarInOffline = bl;
-            if (bool.TryParse(root["includeVectorsWithOffline"]?.ToString(), out bool iv)) _includeVectorsWithOffline = iv;
-
-            if (bool.TryParse(root["enableSectorGridOverlay"]?.ToString(), out bool esg)) _enableSectorGridOverlay = esg;
-            if (int.TryParse(root["sectorSizeMeters"]?.ToString(), out int ssm)) _sectorSizeMeters = Math.Clamp(ssm, 10, 5000);
-            if (root["sectorSubDivision"] != null) _sectorSubDivision = root["sectorSubDivision"].ToString();
-            if (bool.TryParse(root["showSectorEdgeRulers"]?.ToString(), out bool sser)) _showSectorEdgeRulers = sser;
-            if (bool.TryParse(root["showSectorCornerCodes"]?.ToString(), out bool sscc)) _showSectorCornerCodes = sscc;
-            if (root["sectorGridColorHex"] != null) _sectorGridColorHex = root["sectorGridColorHex"].ToString();
-
-            if (_dimmerRect != null) _dimmerRect.Opacity = _mapDimmerOpacity;
-            if (_lidarTileCanvas != null) _lidarTileCanvas.Opacity = _lidarOpacity;
-
-            if (_hostWindow != null && _leftControlScrollViewer != null)
-                RebuildLeftControlsPanel(_hostWindow);
-        }
-
-        private static void UpdateSelectedMarkerInspectorUI()
-        {
-            if (_inspectorTitleLabel == null || _inspectorMgrsLabel == null || _inspectorWgsUtmLabel == null) return;
-            if (_inspectedObject == null || _inspectedObject.Points.Count == 0 || !_mapObjects.Contains(_inspectedObject))
-            {
-                _inspectorTitleLabel.Text = "\uD83D\uDCCD Kliknij dowolny znacznik lub wierzcho\u0142ek na mapie, aby odczyta\u0107 wsp\u00F3\u0142rz\u0119dne";
-                _inspectorMgrsLabel.Text = "Sektor: \u2014   |   MGRS: \u2014   |   Keypad / \u0106wiartka: \u2014";
-                _inspectorWgsUtmLabel.Text = "WGS84: \u2014   |   UTM: \u2014";
-                return;
-            }
-            int idx = Math.Clamp(_inspectedVertexIndex, 0, _inspectedObject.Points.Count - 1);
-            var pt = _inspectedObject.Points[idx];
-            var (vw, vh) = GetExactCanvasSize();
-            string secInfo = FormatSectorCoordinateForLatLon(pt.Lat, pt.Lon, vw, vh);
-            var (fullMgrs, _, kpInfo, utmTxt, wgsTxt) = FormatTacticalPointCoordinates(pt.Lat, pt.Lon);
-            string ptSuffix = _inspectedObject.Points.Count > 1 ? $" (Wierzcho\u0142ek #{idx + 1}/{_inspectedObject.Points.Count})" : "";
-            _inspectorTitleLabel.Text = $"\uD83C\uDFAF {_inspectedObject.Name}{ptSuffix}  [{_inspectedObject.SymbolCode.Replace("NATO_", "").Replace("SHAPE_", "")}]";
-            _inspectorMgrsLabel.Text = $"{secInfo}   \u2022   MGRS: {fullMgrs}";
-            _inspectorWgsUtmLabel.Text = $"{kpInfo}   \u2022   WGS84: {wgsTxt}";
-        }
-
-        private static void CopySelectedMarkerCoordsToClipboard()
-        {
-            if (_inspectedObject == null || _inspectedObject.Points.Count == 0) return;
-            try
-            {
-                int idx = Math.Clamp(_inspectedVertexIndex, 0, _inspectedObject.Points.Count - 1);
-                var pt = _inspectedObject.Points[idx];
-                var (vw, vh) = GetExactCanvasSize();
-                string secInfo = FormatSectorCoordinateForLatLon(pt.Lat, pt.Lon, vw, vh);
-                var (fullMgrs, _, kpInfo, utmTxt, wgsTxt) = FormatTacticalPointCoordinates(pt.Lat, pt.Lon);
-                string report = $"{_inspectedObject.Name} | {secInfo} | MGRS: {fullMgrs} ({kpInfo}) | WGS84: {wgsTxt} | UTM: {utmTxt}";
-                Clipboard.SetText(report);
-                if (_statusText != null) _statusText.Text = $"\u2713 Skopiowano meldunek wsp\u00F3\u0142rz\u0119dnych do schowka: {report}";
+                // 4. Zalacznik 3 i integracja eksportu
+                if (model != null && activeDay != null)
+                {
+                    V34CleanAnnex3AndDiscordEngine.AttachToOpordForm(w, mainOpordStack, model, activeDay);
+                }
             }
             catch { }
         }
 
-//===BLOCK2_ENGINE_SEC2_CS===
-        private static void UpdateSectorSizePresetHighlights()
+        private static void UpgradeTopActionBarWithPullButton(Window win, StackPanel mainOpordStack, string activeFactionName, OpordDayPlanModel activeDay, Action rebuildCallback)
         {
-            foreach (var b in _sectorSizePresetButtons)
+            if (mainOpordStack.Children.Count == 0) return;
+            var topCard = mainOpordStack.Children[0] as Border;
+            if (topCard == null) return;
+
+            var topNodes = V34CleanSidebarAndHeaderEngine.GetLogicalTreeNodes(topCard);
+            var facCombo = topNodes.OfType<ComboBox>().FirstOrDefault();
+            if (facCombo != null)
             {
-                bool isCur = b.Content?.ToString() == $"{_sectorSizeMeters} m";
-                b.Background = isCur ? TacticalConfigPanel.BrushButtonAccent : TacticalConfigPanel.BrushInputBg;
-                b.Foreground = isCur ? TacticalConfigPanel.BrushDarkFg : Brushes.White;
-                b.BorderBrush = isCur ? TacticalConfigPanel.BrushAccent : TacticalConfigPanel.BrushInputBorder;
+                var liveFactions = TacticalConfigPanel.GetInternalFactionsList();
+                var validNames = liveFactions.Select(f => f.Name).Where(n => !string.IsNullOrWhiteSpace(n) && !V34CleanOpordDataEngine.IsGarbageFactionName(n)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+                if (validNames.Count > 0)
+                {
+                    facCombo.Items.Clear();
+                    foreach (string fn in validNames) facCombo.Items.Add(fn);
+                    string targetSel = validNames.FirstOrDefault(n => string.Equals(n, activeFactionName, StringComparison.OrdinalIgnoreCase)) ?? validNames[0];
+                    facCombo.SelectedItem = targetSel;
+                }
+
+                if (LogicalTreeHelper.GetParent(facCombo) is Grid actionBar && actionBar.ColumnDefinitions.Count >= 5)
+                {
+                    bool alreadyHasTopPullBtn = actionBar.Children.OfType<FrameworkElement>().Any(fe => fe.Tag?.ToString() == "TOP_OPORD_PULL_FACTIONS_BTN");
+                    if (!alreadyHasTopPullBtn)
+                    {
+                        actionBar.ColumnDefinitions[0].Width = new GridLength(335);
+                        actionBar.Children.Remove(facCombo);
+
+                        var comboAndPullGrid = new Grid { Tag = "TOP_OPORD_PULL_FACTIONS_BTN", Margin = new Thickness(0, 0, 6, 0) };
+                        comboAndPullGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(135) });
+                        comboAndPullGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+
+                        facCombo.Margin = new Thickness(0, 0, 5, 0);
+                        Grid.SetColumn(facCombo, 0);
+                        comboAndPullGrid.Children.Add(facCombo);
+
+                        var btnPullTop = new Button
+                        {
+                            Content = "\uD83D\uDD04 Pobierz z Generatora Stron",
+                            Height = 32,
+                            Background = new SolidColorBrush(Color.FromRgb(18, 52, 64)),
+                            Foreground = TacticalConfigPanel.BrushAccent,
+                            BorderBrush = TacticalConfigPanel.BrushAccent,
+                            BorderThickness = new Thickness(1.3),
+                            FontWeight = FontWeights.Bold,
+                            FontSize = 10.5,
+                            Cursor = Cursors.Hand,
+                            ToolTip = "Od\u015Bwie\u017C list\u0119 stron konfliktu, cz\u0119stotliwo\u015Bci radiowe, parametry LoRa Meshtastic oraz obszar AO"
+                        };
+                        btnPullTop.Click += (_, __) =>
+                        {
+                            V34CleanOpordCommsStore.ForceResyncFromFactionGenerator(activeFactionName);
+                            SyncChannelsIntoDayModel(activeFactionName, activeDay);
+                            V34CleanOpordDataEngine.SyncFactionsAndMapToOpordModel(win);
+                            rebuildCallback?.Invoke();
+                        };
+                        Grid.SetColumn(btnPullTop, 1);
+                        comboAndPullGrid.Children.Add(btnPullTop);
+
+                        Grid.SetColumn(comboAndPullGrid, 0);
+                        actionBar.Children.Add(comboAndPullGrid);
+                    }
+                }
+            }
+
+            // Ukryj stary przycisk "Pobierz z Generatora Stron" w dolnych sekcjach formularza
+            var allOpordBtns = V34CleanSidebarAndHeaderEngine.GetLogicalTreeNodes(mainOpordStack).OfType<Button>().ToList();
+            foreach (var b in allOpordBtns)
+            {
+                if (IsDescendantOf(topCard, b)) continue;
+                string bt = V34CleanFtakAndFactionEngine.ExtractButtonTextSafe(b);
+                if (bt.Contains("Pobierz z Generatora Stron", StringComparison.OrdinalIgnoreCase) ||
+                    bt.Contains("Pull from Faction", StringComparison.OrdinalIgnoreCase))
+                {
+                    b.Visibility = Visibility.Collapsed;
+                    b.Width = 0;
+                    b.Height = 0;
+                    b.Margin = new Thickness(0);
+                }
             }
         }
 
-        private static void ApplySectorSizeMeters(int meters)
+        private static void UpgradeMetocSectionValidation(Window win, StackPanel mainOpordStack, OpordDayPlanModel activeDay)
         {
-            _sectorSizeMeters = Math.Clamp(meters, 10, 5000);
-            if (_sectorSizeInputBox != null && _sectorSizeInputBox.Text != _sectorSizeMeters.ToString())
-                _sectorSizeInputBox.Text = _sectorSizeMeters.ToString();
-            UpdateSectorSizePresetHighlights();
-            UpdateSelectedMarkerInspectorUI();
-            RedrawVectorsOnly();
-        }
+            bool hasAo = TacticalMapGeneratorView.TryGetMarkedAoCenter(out double aoLat, out double aoLon, out string aoLabel);
 
-        private static void RenderMetricSectorGridAndRulersOnContext(DrawingContext dc, double w, double h)
-        {
-            if (!_enableSectorGridOverlay && !_coordSystem.StartsWith("Sektorowa")) return;
-            if (_mainGridOpacity <= 0.02) return;
-
-            double metersPerPixel = GetExactMetersPerPixel();
-            int secMeters = Math.Clamp(_sectorSizeMeters, 10, 5000);
-            double sectorPx = Math.Max(24.0, secMeters / metersPerPixel);
-
-            int cols = Math.Min(64, (int)Math.Ceiling(w / sectorPx));
-            int rows = Math.Min(64, (int)Math.Ceiling(h / sectorPx));
-
-            string secHex = !string.IsNullOrWhiteSpace(_sectorGridColorHex) ? _sectorGridColorHex : _mainGridColorHex;
-            var secMainBrush = CreateAlphaHexBrush(secHex, _mainGridOpacity, Color.FromRgb(250, 208, 44));
-            var subLineBrush = CreateAlphaHexBrush(_subGridLineColorHex, _subGridOpacity, Color.FromRgb(31, 224, 197));
-            var subTextBrush = CreateAlphaHexBrush(_subLabelTextColorHex, _subGridOpacity, Colors.White);
-            var subBgBrush = CreateAlphaHexBrush(_subLabelBgColorHex, _subLabelBgOpacity * _subGridOpacity, Color.FromRgb(6, 16, 20));
-            var subShadowBrush = CreateAlphaHexBrush("#000000", _subGridOpacity * 0.9, Colors.Black);
-
-            Pen subBoxBorderPen = (_labelBgStyle.StartsWith("Kaseton") && _subLabelBgOpacity > 0.05)
-                ? GetCachedSolidPen($"SEC_SUBBOX_{_subGridOpacity:0.00}", CreateAlphaHexBrush("#000000", _subGridOpacity * 0.85, Colors.Black), 0.9) : null;
-
-            byte mainHaloAlpha = (byte)Math.Clamp((int)Math.Round((_gridHaloMode.StartsWith("Pe\u0142ny") ? 220 : 130) * _mainGridOpacity), 0, 255);
-            byte subHaloAlpha = (byte)Math.Clamp((int)Math.Round((_gridHaloMode.StartsWith("Pe\u0142ny") ? 180 : 100) * _subGridOpacity), 0, 255);
-            var haloBrush = GetCachedRgbaBrush(mainHaloAlpha, 0, 0, 0);
-            var subHaloBrush = GetCachedRgbaBrush(subHaloAlpha, 0, 0, 0);
-            bool useHalo = !_gridHaloMode.StartsWith("Brak");
-
-            double mainThick = Math.Max(0.9, 1.55 * _gridThicknessMultiplier);
-            double subThick = Math.Max(0.7, 0.95 * _gridThicknessMultiplier);
-            var secMainPen = GetCachedSolidPen($"SEC_MP_{secHex}_{_mainGridOpacity:0.00}", secMainBrush, mainThick);
-            var mainHaloPen = GetCachedSolidPen($"SEC_MHP_{mainHaloAlpha}", haloBrush, mainThick + 1.8);
-            var subHaloPen = GetCachedSolidPen($"SEC_SHP_{subHaloAlpha}", subHaloBrush, subThick + 1.2);
-            var subPen = new Pen(subLineBrush, subThick) { DashStyle = new DashStyle(new double[] { 4, 2 }, 0) };
-            subPen.Freeze();
-
-            int subDiv = 1;
-            bool isKeypad = _sectorSubDivision.Contains("Keypad");
-            bool isQuartersAbcd = _sectorSubDivision.Contains("A, B, C, D") || _sectorSubDivision.Contains("A,B,C,D");
-            bool isQuartersNwSe = _sectorSubDivision.Contains("NW");
-            bool isGrid4x4 = _sectorSubDivision.Contains("4\u00D74") || _sectorSubDivision.Contains("4x4");
-
-            if (isKeypad) subDiv = 3;
-            else if (isQuartersAbcd || isQuartersNwSe) subDiv = 2;
-            else if (isGrid4x4) subDiv = 4;
-
-            // 1. Wewnetrzny podzial kazdego sektora (Cwiartki 2x2 / Keypad 3x3 / Siatka 4x4)
-            if (subDiv > 1 && _subGridOpacity > 0.02 && sectorPx >= 44.0)
+            foreach (var border in mainOpordStack.Children.OfType<Border>())
             {
-                double subStepPx = sectorPx / subDiv;
-                for (int c = 0; c < cols; c++)
+                var nodes = V34CleanSidebarAndHeaderEngine.GetLogicalTreeNodes(border);
+                var texts = nodes.OfType<TextBlock>().Select(t => t.Text ?? "").ToList();
+                bool isMetocCard = texts.Any(t => t.Contains("METOC", StringComparison.OrdinalIgnoreCase) || t.Contains("Prognoza pogody", StringComparison.OrdinalIgnoreCase));
+                if (!isMetocCard) continue;
+
+                var textBoxes = nodes.OfType<TextBox>().ToList();
+                TextBox locNameBox = null, latBox = null, lonBox = null;
+
+                foreach (var tb in textBoxes)
                 {
-                    double x0 = c * sectorPx;
-                    for (int i = 1; i < subDiv; i++)
+                    if (LogicalTreeHelper.GetParent(tb) is Panel p)
                     {
-                        double sx = x0 + i * subStepPx;
-                        if (sx <= 0 || sx >= w) continue;
-                        if (useHalo) dc.DrawLine(subHaloPen, new Point(sx, 0), new Point(sx, h));
-                        dc.DrawLine(subPen, new Point(sx, 0), new Point(sx, h));
+                        string lbl = string.Join(" ", p.Children.OfType<TextBlock>().Select(x => x.Text ?? ""));
+                        if (lbl.Contains("Miejscowo", StringComparison.OrdinalIgnoreCase) || lbl.Contains("Rejon AO", StringComparison.OrdinalIgnoreCase) || lbl.Contains("Location", StringComparison.OrdinalIgnoreCase))
+                            locNameBox = tb;
+                        else if (lbl.Contains("Szer", StringComparison.OrdinalIgnoreCase) || lbl.Contains("Lat", StringComparison.OrdinalIgnoreCase))
+                            latBox = tb;
+                        else if (lbl.Contains("D\u0142", StringComparison.OrdinalIgnoreCase) || lbl.Contains("Lon", StringComparison.OrdinalIgnoreCase))
+                            lonBox = tb;
                     }
                 }
 
-                for (int r = 0; r < rows; r++)
+                if (hasAo)
                 {
-                    double y0 = r * sectorPx;
-                    for (int j = 1; j < subDiv; j++)
+                    string latS = aoLat.ToString("0.0000", CultureInfo.InvariantCulture);
+                    string lonS = aoLon.ToString("0.0000", CultureInfo.InvariantCulture);
+                    if (activeDay != null)
                     {
-                        double sy = y0 + j * subStepPx;
-                        if (sy <= 0 || sy >= h) continue;
-                        if (useHalo) dc.DrawLine(subHaloPen, new Point(0, sy), new Point(w, sy));
-                        dc.DrawLine(subPen, new Point(0, sy), new Point(w, sy));
+                        activeDay.LocationLat = latS;
+                        activeDay.LocationLon = lonS;
+                        if (string.IsNullOrWhiteSpace(activeDay.LocationName))
+                            activeDay.LocationName = aoLabel;
                     }
+                    if (latBox != null) latBox.Text = latS;
+                    if (lonBox != null) lonBox.Text = lonS;
+                    if (locNameBox != null && string.IsNullOrWhiteSpace(locNameBox.Text))
+                        locNameBox.Text = aoLabel;
                 }
-
-                if (!_gridLabelsMode.StartsWith("Brak") && !_gridLabelsMode.StartsWith("Tylko") && sectorPx >= (subDiv == 4 ? 76.0 : 54.0))
+                else
                 {
-                    string[,] keypad3x3 = { { "7", "8", "9" }, { "4", "5", "6" }, { "1", "2", "3" } };
-                    string[,] quartersAbcd = { { "A", "B" }, { "C", "D" } };
-                    string[,] quartersNwSe = { { "NW", "NE" }, { "SW", "SE" } };
-                    string subCacheKey = $"SECSUB_{_subLabelTextColorHex}_{_subGridOpacity:0.00}";
-                    double subFontSz = (subDiv == 4 ? 7.8 : 8.6) * _fontScaleMultiplier;
-
-                    for (int r = 0; r < rows; r++)
+                    // Brak zaznaczonego AO na mapie -> wyczysc domyslne wspolrzedne arkusza mapy, jesli nie wpisano miejscowosci
+                    bool noTownTyped = locNameBox == null || string.IsNullOrWhiteSpace(locNameBox.Text) || locNameBox.Text.Contains("Obszar AO", StringComparison.OrdinalIgnoreCase);
+                    if (noTownTyped)
                     {
-                        double y0 = r * sectorPx;
-                        for (int c = 0; c < cols; c++)
+                        if (locNameBox != null && locNameBox.Text.Contains("Obszar AO", StringComparison.OrdinalIgnoreCase))
+                            locNameBox.Text = "";
+                        if (latBox != null) latBox.Text = "";
+                        if (lonBox != null) lonBox.Text = "";
+                        if (activeDay != null)
                         {
-                            double x0 = c * sectorPx;
-                            for (int sr = 0; sr < subDiv; sr++)
+                            if (activeDay.LocationName != null && activeDay.LocationName.Contains("Obszar AO", StringComparison.OrdinalIgnoreCase))
+                                activeDay.LocationName = "";
+                            activeDay.LocationLat = "";
+                            activeDay.LocationLon = "";
+                        }
+                    }
+                }
+
+                foreach (var btn in nodes.OfType<Button>())
+                {
+                    string bt = V34CleanFtakAndFactionEngine.ExtractButtonTextSafe(btn);
+                    if (bt.Contains("METOC", StringComparison.OrdinalIgnoreCase) ||
+                        bt.Contains("pogod", StringComparison.OrdinalIgnoreCase) ||
+                        bt.Contains("Weather", StringComparison.OrdinalIgnoreCase))
+                    {
+                        if (btn.Tag?.ToString() != "METOC_AO_GUARD_HOOKED")
+                        {
+                            btn.Tag = "METOC_AO_GUARD_HOOKED";
+                            btn.PreviewMouseLeftButtonDown += (s, e) =>
                             {
-                                double cy = y0 + (sr + 0.5) * subStepPx;
-                                if (cy < 18 || cy > h - 14) continue;
-                                for (int sc = 0; sc < subDiv; sc++)
+                                bool currentHasAo = TacticalMapGeneratorView.TryGetMarkedAoCenter(out double cAoLat, out double cAoLon, out string cAoLbl);
+                                string typedTown = locNameBox != null ? (locNameBox.Text ?? "").Trim() : (activeDay?.LocationName ?? "").Trim();
+
+                                if (!currentHasAo && string.IsNullOrWhiteSpace(typedTown))
                                 {
-                                    double cx = x0 + (sc + 0.5) * subStepPx;
-                                    if (cx < 18 || cx > w - 14) continue;
-                                    string subLbl = isKeypad
-                                        ? keypad3x3[sr, sc]
-                                        : (isQuartersAbcd ? quartersAbcd[sr, sc] : (isQuartersNwSe ? quartersNwSe[sr, sc] : ((sr * 4 + sc + 1).ToString())));
-                                    DrawFastSubCellBadgeOnContext(dc, subLbl, cx, cy, subTextBrush, subBgBrush, subBoxBorderPen, subShadowBrush, subFontSz, subCacheKey);
+                                    e.Handled = true;
+                                    if (latBox != null) latBox.Text = "";
+                                    if (lonBox != null) lonBox.Text = "";
+                                    MessageBox.Show(
+                                        "Brak zaznaczonego obszaru gry (AO) oraz miejscowo\u015Bci!\n\nAby pobra\u0107 prognoz\u0119 pogody METOC:\n1. Zaznacz Granic\u0119 Terenu Gry (AO) w Generatorze Map 1:1 (dane pobior\u0105 si\u0119 automatycznie),\nLUB\n2. Wpisz nazw\u0119 miejscowo\u015Bci w polu 'Miejscowo\u015B\u0107 / Rejon AO'.",
+                                        "METOC \u2014 Wymagane zaznaczenie AO lub miejscowo\u015B\u0107",
+                                        MessageBoxButton.OK,
+                                        MessageBoxImage.Warning);
+                                    return;
                                 }
-                            }
+
+                                if (currentHasAo)
+                                {
+                                    string latStr = cAoLat.ToString("0.0000", CultureInfo.InvariantCulture);
+                                    string lonStr = cAoLon.ToString("0.0000", CultureInfo.InvariantCulture);
+                                    if (latBox != null) latBox.Text = latStr;
+                                    if (lonBox != null) lonBox.Text = lonStr;
+                                    if (locNameBox != null && string.IsNullOrWhiteSpace(locNameBox.Text))
+                                        locNameBox.Text = cAoLbl;
+                                    if (activeDay != null)
+                                    {
+                                        activeDay.LocationLat = latStr;
+                                        activeDay.LocationLon = lonStr;
+                                        if (string.IsNullOrWhiteSpace(activeDay.LocationName))
+                                            activeDay.LocationName = cAoLbl;
+                                    }
+                                }
+                            };
                         }
                     }
-                }
-            }
-
-            // 2. Glowne linie sektorow (pionowe A, B, C... i poziome 1, 2, 3...)
-            for (int c = 1; c <= cols; c++)
-            {
-                double sx = c * sectorPx;
-                if (sx <= 0 || sx >= w) continue;
-                if (useHalo) dc.DrawLine(mainHaloPen, new Point(sx, 0), new Point(sx, h));
-                dc.DrawLine(secMainPen, new Point(sx, 0), new Point(sx, h));
-            }
-
-            for (int r = 1; r <= rows; r++)
-            {
-                double sy = r * sectorPx;
-                if (sy <= 0 || sy >= h) continue;
-                if (useHalo) dc.DrawLine(mainHaloPen, new Point(0, sy), new Point(w, sy));
-                dc.DrawLine(secMainPen, new Point(0, sy), new Point(w, sy));
-            }
-
-            // 3. Kody sektorow wewnatrz pol (A1, B1, C2...)
-            if (_showSectorCornerCodes && sectorPx >= 34.0)
-            {
-                double codeFontSz = Math.Clamp(9.8 * _fontScaleMultiplier, 7.5, 16.0);
-                double offsetTop = _showSectorEdgeRulers ? 22.0 : 4.0;
-                double offsetLeft = _showSectorEdgeRulers ? 26.0 : 6.0;
-
-                for (int r = 0; r < rows; r++)
-                {
-                    double y0 = r * sectorPx;
-                    if (y0 > h - 18) break;
-                    string rowNumStr = (r + 1).ToString();
-                    for (int c = 0; c < cols; c++)
-                    {
-                        double x0 = c * sectorPx;
-                        if (x0 > w - 22) break;
-                        string colLetStr = GetSectorColumnLetters(c);
-                        double bx = x0 + (c == 0 ? offsetLeft : 6.0);
-                        double by = y0 + (r == 0 ? offsetTop : 4.0);
-                        if (bx + 24 < w && by + 16 < h)
-                        {
-                            DrawFastBadgeOnContext(dc, colLetStr + rowNumStr, bx, by, secMainBrush, codeFontSz, _mainGridOpacity, $"SECCODE_{secHex}_{_mainGridOpacity:0.00}");
-                        }
-                    }
-                }
-            }
-
-            // 4. Paski podzialki poziomej (A, B, C...) u gory oraz pionowej (1, 2, 3...) po lewej stronie arkusza mapy
-            if (_showSectorEdgeRulers)
-            {
-                const double topBarH = 19.0;
-                const double leftBarW = 22.0;
-                byte barAlpha = (byte)Math.Clamp((int)Math.Round(225 * _mainGridOpacity), 90, 245);
-                var barBgEven = GetCachedRgbaBrush(barAlpha, 6, 16, 20);
-                var barBgOdd = GetCachedRgbaBrush(barAlpha, 14, 34, 42);
-                var barBorderPen = GetCachedSolidPen($"SECRULER_PEN_{secHex}_{_mainGridOpacity:0.00}", secMainBrush, 1.1);
-                double rulerFontSz = Math.Clamp(9.5 * _fontScaleMultiplier, 7.5, 13.0);
-                string rulerCacheKey = $"SECRULER_TXT_{secHex}_{_mainGridOpacity:0.00}";
-
-                // Gorna listwa pozioma: A, B, C, D...
-                for (int c = 0; c < cols; c++)
-                {
-                    double x0 = c * sectorPx;
-                    if (x0 >= w) break;
-                    double segW = Math.Min(sectorPx, w - x0);
-                    if (segW < 12) continue;
-
-                    dc.DrawRectangle((c % 2 == 0) ? barBgEven : barBgOdd, barBorderPen, new Rect(x0, 0, segW, topBarH));
-                    string colLet = GetSectorColumnLetters(c);
-                    var ft = GetCachedGlyph(colLet, rulerFontSz, secMainBrush, rulerCacheKey);
-                    double tx = x0 + (segW - ft.Width) / 2.0;
-                    double ty = (topBarH - ft.Height) / 2.0;
-                    if (tx >= x0 + 1)
-                        dc.DrawText(ft, new Point(tx, ty));
-                }
-
-                // Lewa listwa pionowa: 1, 2, 3, 4...
-                for (int r = 0; r < rows; r++)
-                {
-                    double y0 = r * sectorPx;
-                    if (y0 >= h) break;
-                    double segH = Math.Min(sectorPx, h - y0);
-                    if (segH < 12) continue;
-
-                    dc.DrawRectangle((r % 2 == 0) ? barBgEven : barBgOdd, barBorderPen, new Rect(0, y0, leftBarW, segH));
-                    string rowNum = (r + 1).ToString();
-                    var ft = GetCachedGlyph(rowNum, rulerFontSz, secMainBrush, rulerCacheKey);
-                    double tx = (leftBarW - ft.Width) / 2.0;
-                    double ty = y0 + (segH - ft.Height) / 2.0;
-                    if (ty >= y0 + 1)
-                        dc.DrawText(ft, new Point(tx, ty));
-                }
-
-                if (w > 80 && h > 80)
-                {
-                    dc.DrawRectangle(GetCachedRgbaBrush(240, 8, 22, 28), barBorderPen, new Rect(0, 0, leftBarW, topBarH));
                 }
             }
         }
 
-        private static StackPanel BuildSection2GridAndColorsUI(Window win)
+        public static void SyncChannelsIntoDayModel(string factionName, OpordDayPlanModel activeDay)
         {
-            var sec2 = CreateSectionCard("2. SIATKA MGRS / SEKTOROWA (A,B,C / 1,2,3), ROZJA\u015ANIANIE LASU & KOLORY RGB");
-            sec2.Children.Add(TacticalConfigPanel.FieldBox("G\u0142\u00F3wny system wsp\u00F3\u0142rz\u0119dnych na mapie:", TacticalConfigPanel.ComboCtrl(new[] { "MGRS / UTM (Siatka wojskowa w metrach)", "Siatka Sektorowa (A1, B2, C3...)", "WGS84 (Stopnie geograficzne Lat/Lon)", "Brak siatki" }, _coordSystem, win, v => { _coordSystem = v; RedrawVectorsOnly(); })));
-            var subGridRow = new UniformGrid { Columns = 2 };
-            subGridRow.Children.Add(TacticalConfigPanel.FieldBox("Podzia\u0142 oczek MGRS:", TacticalConfigPanel.ComboCtrl(new[] { "Co 33 m (Keypad 1-9)", "Co 50 m (\u0106wiartki A,B,C,D)", "Brak podzia\u0142u (Tylko 100 m)", "Siatka co 250 m", "Siatka co 500 m" }, _subGridDivision, win, v => { _subGridDivision = v; RedrawVectorsOnly(); })));
-            subGridRow.Children.Add(TacticalConfigPanel.FieldBox("Opisy kratek:", TacticalConfigPanel.ComboCtrl(new[] { "MGRS + \u0106wiartki/Keypad", "Tylko g\u0142\u00F3wne linie MGRS", "Brak opis\u00F3w wewn\u0105trz" }, _gridLabelsMode, win, v => { _gridLabelsMode = v; RedrawVectorsOnly(); })));
-            sec2.Children.Add(subGridRow);
-
-            // PANEL DODATKOWEJ PODZIALKI SEKTOROWEJ (POZIOMO: A, B, C... | PIONOWO: 1, 2, 3...)
-            var sectorBox = new Border
+            if (activeDay == null) return;
+            var channels = V34CleanOpordCommsStore.GetEffectiveChannelsForFaction(factionName);
+            if (channels.Count > 0)
             {
-                Background = TacticalConfigPanel.BrushInputBg,
-                BorderBrush = TacticalConfigPanel.BrushAccent,
-                BorderThickness = new Thickness(1.2),
-                CornerRadius = new CornerRadius(6),
-                Padding = new Thickness(8, 7, 8, 7),
-                Margin = new Thickness(0, 4, 0, 6)
-            };
-            var sectorStack = new StackPanel();
-
-            var chkSectorOverlay = new CheckBox
-            {
-                Content = "\uD83D\uDCCF Dodatkowa podzia\u0142ka sektorowa (Poziomo: A, B, C... | Pionowo: 1, 2, 3...)",
-                IsChecked = _enableSectorGridOverlay,
-                Foreground = TacticalConfigPanel.BrushAccent,
-                FontWeight = FontWeights.Bold,
-                FontSize = 10,
-                Margin = new Thickness(0, 0, 0, 5),
-                Cursor = Cursors.Hand
-            };
-            chkSectorOverlay.Checked += (s, e) => { _enableSectorGridOverlay = true; if (!_isRebuildingMapControls) TacticalConfigPanel.MarkDirty(); RedrawVectorsOnly(); };
-            chkSectorOverlay.Unchecked += (s, e) => { _enableSectorGridOverlay = false; if (!_isRebuildingMapControls) TacticalConfigPanel.MarkDirty(); RedrawVectorsOnly(); };
-            sectorStack.Children.Add(chkSectorOverlay);
-
-            sectorStack.Children.Add(new TextBlock
-            {
-                Text = "Rozmiar pojedynczego sektora w metrach (wpisz lub wybierz preset):",
-                Foreground = TacticalConfigPanel.BrushMutedText,
-                FontSize = 9.5,
-                Margin = new Thickness(0, 0, 0, 3)
-            });
-
-            var secSizeInputRow = new Grid { Margin = new Thickness(0, 0, 0, 4) };
-            secSizeInputRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-            secSizeInputRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(26) });
-            secSizeInputRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(90) });
-
-            _sectorSizeInputBox = (TextBox)TacticalConfigPanel.TextCtrl(_sectorSizeMeters.ToString(), v => { });
-            Grid.SetColumn(_sectorSizeInputBox, 0);
-            secSizeInputRow.Children.Add(_sectorSizeInputBox);
-
-            var unitMLbl = new TextBlock { Text = "m", Foreground = TacticalConfigPanel.BrushAccent, FontWeight = FontWeights.Bold, FontSize = 11, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
-            Grid.SetColumn(unitMLbl, 1);
-            secSizeInputRow.Children.Add(unitMLbl);
-
-            var btnApplySecSize = MakeActionButton("Ustaw rozmiar", true, () =>
-            {
-                if (int.TryParse(_sectorSizeInputBox.Text.Trim(), out int sm))
-                {
-                    TacticalConfigPanel.MarkDirty();
-                    ApplySectorSizeMeters(sm);
-                }
-            });
-            btnApplySecSize.Height = 25;
-            Grid.SetColumn(btnApplySecSize, 2);
-            secSizeInputRow.Children.Add(btnApplySecSize);
-            sectorStack.Children.Add(secSizeInputRow);
-
-            _sectorSizePresetButtons.Clear();
-            var secPresetsGrid = new UniformGrid { Columns = 6, Margin = new Thickness(0, 0, 0, 5) };
-            foreach (int presetM in new[] { 25, 50, 100, 150, 200, 300 })
-            {
-                int capturedM = presetM;
-                var b = MakeActionButton($"{capturedM} m", capturedM == _sectorSizeMeters, () =>
-                {
-                    TacticalConfigPanel.MarkDirty();
-                    ApplySectorSizeMeters(capturedM);
-                });
-                b.Height = 22;
-                b.Margin = new Thickness(1);
-                b.FontSize = 9;
-                _sectorSizePresetButtons.Add(b);
-                secPresetsGrid.Children.Add(b);
+                var c0 = channels[0];
+                activeDay.PrimaryRadioFreq = $"{c0.RoleName}: {c0.FreqMhz} [{c0.BandType}] ({c0.ToneOrCode})";
             }
-            sectorStack.Children.Add(secPresetsGrid);
-
-            var secSubDivCombo = TacticalConfigPanel.ComboCtrl(
-                new[]
-                {
-                    "Keypad 1-9 (3\u00D73)",
-                    "\u0106wiartki A, B, C, D (2\u00D72)",
-                    "\u0106wiartki NW, NE, SW, SE (2\u00D72)",
-                    "Siatka 4\u00D74 (16 podsektor\u00F3w)",
-                    "Brak podzia\u0142u (Tylko sektory A1, B2...)"
-                },
-                _sectorSubDivision,
-                win,
-                v =>
-                {
-                    _sectorSubDivision = v;
-                    RedrawVectorsOnly();
-                });
-            sectorStack.Children.Add(TacticalConfigPanel.FieldBox("Podzia\u0142 wewn\u0105trz ka\u017Cdego sektora (\u0106wiartki / Keypad):", secSubDivCombo));
-
-            var secFlagsGrid = new UniformGrid { Columns = 2, Margin = new Thickness(0, 2, 0, 0) };
-            var chkEdgeRulers = new CheckBox
+            if (channels.Count > 1)
             {
-                Content = "Listwy A,B,C / 1,2,3 na kraw\u0119dzi",
-                IsChecked = _showSectorEdgeRulers,
-                Foreground = Brushes.White,
-                FontSize = 9.2,
-                Margin = new Thickness(0, 2, 4, 0),
-                Cursor = Cursors.Hand
-            };
-            chkEdgeRulers.Checked += (s, e) => { _showSectorEdgeRulers = true; if (!_isRebuildingMapControls) TacticalConfigPanel.MarkDirty(); RedrawVectorsOnly(); };
-            chkEdgeRulers.Unchecked += (s, e) => { _showSectorEdgeRulers = false; if (!_isRebuildingMapControls) TacticalConfigPanel.MarkDirty(); RedrawVectorsOnly(); };
-
-            var chkCornerCodes = new CheckBox
-            {
-                Content = "Kody A1, B2 wewn\u0105trz sektor\u00F3w",
-                IsChecked = _showSectorCornerCodes,
-                Foreground = Brushes.White,
-                FontSize = 9.2,
-                Margin = new Thickness(4, 2, 0, 0),
-                Cursor = Cursors.Hand
-            };
-            chkCornerCodes.Checked += (s, e) => { _showSectorCornerCodes = true; if (!_isRebuildingMapControls) TacticalConfigPanel.MarkDirty(); RedrawVectorsOnly(); };
-            chkCornerCodes.Unchecked += (s, e) => { _showSectorCornerCodes = false; if (!_isRebuildingMapControls) TacticalConfigPanel.MarkDirty(); RedrawVectorsOnly(); };
-
-            secFlagsGrid.Children.Add(chkEdgeRulers);
-            secFlagsGrid.Children.Add(chkCornerCodes);
-            sectorStack.Children.Add(secFlagsGrid);
-
-            sectorBox.Child = sectorStack;
-            sec2.Children.Add(sectorBox);
-
-            UIElement MakeRgbBtn(string fTitle, string dTitle, Func<string> getter, Action<string> setter)
-            {
-                string hex = getter();
-                var sw = new Border { Width = 12, Height = 12, CornerRadius = new CornerRadius(3), Background = TacticalConfigPanel.BrushFromHex(hex, Colors.White), BorderBrush = Brushes.White, BorderThickness = new Thickness(1), Margin = new Thickness(0, 0, 5, 0), VerticalAlignment = VerticalAlignment.Center };
-                var lbl = new TextBlock { Text = hex.ToUpperInvariant(), Foreground = Brushes.White, FontSize = 9.5, FontWeight = FontWeights.Bold, VerticalAlignment = VerticalAlignment.Center };
-                var st = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Center }; st.Children.Add(sw); st.Children.Add(lbl);
-                var btn = new Button { Content = st, Height = 25, Background = TacticalConfigPanel.BrushInputBg, BorderBrush = TacticalConfigPanel.BrushAccent, BorderThickness = new Thickness(1), Cursor = Cursors.Hand };
-                btn.Click += (s, e) => { string p = TacticalConfigPanel.ShowRgbColorPickerDialog(win, dTitle, getter()); if (!string.IsNullOrEmpty(p)) { setter(p); sw.Background = TacticalConfigPanel.BrushFromHex(p, Colors.White); lbl.Text = p.ToUpperInvariant(); GlyphCache.Clear(); TacticalConfigPanel.MarkDirty(); _fastOverlayRenderer?.InvalidateVisual(); } };
-                return TacticalConfigPanel.FieldBox(fTitle, btn);
+                var c1 = channels[1];
+                activeDay.BackupRadioFreq = $"{c1.RoleName}: {c1.FreqMhz} [{c1.BandType}] ({c1.ToneOrCode})";
             }
-
-            var rgbGrid = new UniformGrid { Columns = 2, Margin = new Thickness(0, 2, 0, 4) };
-            rgbGrid.Children.Add(MakeRgbBtn("Kolor cyfr Keypad/\u0106wiartek (RGB):", "Kolor cyfr Keypad (1-9) / \u0106wiartek (A-D)", () => _subLabelTextColorHex, v => _subLabelTextColorHex = v));
-            rgbGrid.Children.Add(MakeRgbBtn("Kolor t\u0142a Keypad/\u0106wiartek (RGB):", "Kolor t\u0142a pod cyframi Keypad / \u0106wiartek", () => _subLabelBgColorHex, v => _subLabelBgColorHex = v));
-            rgbGrid.Children.Add(MakeRgbBtn("Kolor linii wewn\u0119trznych (RGB):", "Kolor linii podzia\u0142ki Keypad / \u0106wiartek", () => _subGridLineColorHex, v => _subGridLineColorHex = v));
-            rgbGrid.Children.Add(MakeRgbBtn("Kolor siatki g\u0142\u00F3wnej / Sektor\u00F3w (RGB):", "Kolor g\u0142\u00F3wnych linii MGRS / Sektor\u00F3w", () => _mainGridColorHex, v => { _mainGridColorHex = v; _sectorGridColorHex = v; }));
-            sec2.Children.Add(rgbGrid);
-
-            sec2.Children.Add(MakeSliderRow("Grubo\u015B\u0107 linii siatki (g\u0142\u00F3wnej i pomocniczej):", 0.5, 3.0, _gridThicknessMultiplier, v => $"{v:0.1}x", v => { _gridThicknessMultiplier = Math.Round(v, 1); _fastOverlayRenderer?.InvalidateVisual(); }));
-            sec2.Children.Add(MakeSliderRow("Rozmiar / grubo\u015B\u0107 czcionki wsp\u00F3\u0142rz\u0119dnych (MGRS, Sektory i Keypad):", 0.7, 2.0, _fontScaleMultiplier, v => $"{v:0.1}x", v => { _fontScaleMultiplier = Math.Round(v, 1); GlyphCache.Clear(); _fastOverlayRenderer?.InvalidateVisual(); }));
-            sec2.Children.Add(MakeSliderRow("Widoczno\u015B\u0107 (alfa) g\u0142\u00F3wnych linii i opis\u00F3w (MGRS / Sektory):", 0.05, 1.0, _mainGridOpacity, v => $"{(int)Math.Round(v * 100)}%", v => { _mainGridOpacity = Math.Round(v, 2); _fastOverlayRenderer?.InvalidateVisual(); }));
-            sec2.Children.Add(MakeSliderRow("Widoczno\u015B\u0107 (alfa) podzia\u0142ki wewn\u0119trznej (Keypad 1-9 / \u0106wiartki):", 0.0, 1.0, _subGridOpacity, v => $"{(int)Math.Round(v * 100)}%", v => { _subGridOpacity = Math.Round(v, 2); _fastOverlayRenderer?.InvalidateVisual(); }));
-            sec2.Children.Add(MakeSliderRow("Krycie t\u0142a (kasetonu) pod cyframi Keypad / \u0106wiartek:", 0.0, 1.0, _subLabelBgOpacity, v => $"{(int)Math.Round(v * 100)}%", v => { _subLabelBgOpacity = Math.Round(v, 2); _fastOverlayRenderer?.InvalidateVisual(); }));
-
-            sec2.Children.Add(MakeSliderRow("\u2600\uFE0F Rozja\u015Bnienie podk\u0142adu mapy (Ciemny las / Pod wydruk):", 0.0, 0.85, _mapBrightnessBoost, v => $"+{(int)Math.Round(v * 100)}%", v =>
+            if (channels.Count > 2)
             {
-                _mapBrightnessBoost = Math.Round(v, 2);
-                TriggerLiveBrightnessRefresh();
-            }));
-
-            sec2.Children.Add(MakeSliderRow("Przyciemnienie podk\u0142adu mapy (wi\u0119kszy kontrast pod siatk\u0119):", 0.0, 0.65, _mapDimmerOpacity, v => $"{(int)Math.Round(v * 100)}%", v =>
-            {
-                _mapDimmerOpacity = Math.Round(v, 2);
-                if (_dimmerRect != null) _dimmerRect.Opacity = _mapDimmerOpacity;
-            }));
-
-            var haloRow = new UniformGrid { Columns = 2 };
-            haloRow.Children.Add(TacticalConfigPanel.FieldBox("Obrys linii (Halo):", TacticalConfigPanel.ComboCtrl(new[] { "Pe\u0142ny czarny obrys", "P\u00F3\u0142przezroczysty obrys", "Brak obrysu" }, _gridHaloMode, win, v => { _gridHaloMode = v; _fastOverlayRenderer?.InvalidateVisual(); })));
-            haloRow.Children.Add(TacticalConfigPanel.FieldBox("Styl opis\u00F3w i cyfr:", TacticalConfigPanel.ComboCtrl(new[] { "Kaseton (Kolor t\u0142a RGB)", "Tylko obrys Halo", "Czysty tekst" }, _labelBgStyle, win, v => { _labelBgStyle = v; _fastOverlayRenderer?.InvalidateVisual(); })));
-            sec2.Children.Add(haloRow);
-            return sec2;
+                var c2 = channels[2];
+                activeDay.HqRadioFreq = $"{c2.RoleName}: {c2.FreqMhz} [{c2.BandType}] ({c2.ToneOrCode})";
+            }
         }
-//===END_SECTOR_BLOCKS===
+
+        private static void RebuildCommunicationsTableSection(Window win, StackPanel mainOpordStack, string activeFactionName, OpordDayPlanModel activeDay, Action rebuildCallback)
+        {
+            SyncChannelsIntoDayModel(activeFactionName, activeDay);
+
+            foreach (var border in mainOpordStack.Children.OfType<Border>())
+            {
+                var nodes = V34CleanSidebarAndHeaderEngine.GetLogicalTreeNodes(border);
+                var texts = nodes.OfType<TextBlock>().Select(t => t.Text ?? "").ToList();
+                bool isExecSection = texts.Any(t => t.Contains("III. WYKONANIE", StringComparison.OrdinalIgnoreCase) || t.Contains("III. EXECUTION", StringComparison.OrdinalIgnoreCase) || t.Contains("Tabela \u0142\u0105czno\u015Bci", StringComparison.OrdinalIgnoreCase));
+                if (!isExecSection) continue;
+
+                var secStack = border.Child as StackPanel;
+                if (secStack == null) continue;
+
+                // Znajdz naglowek "E. Tabela lacznosci" i ukryj stare 3 pola pod nim
+                int insertIndex = -1;
+                for (int i = 0; i < secStack.Children.Count; i++)
+                {
+                    var child = secStack.Children[i];
+                    var childTexts = V34CleanSidebarAndHeaderEngine.GetLogicalTreeNodes(child).OfType<TextBlock>().Select(t => t.Text ?? "").ToList();
+                    if (childTexts.Any(t => t.Contains("E. Tabela \u0142\u0105czno\u015Bci", StringComparison.OrdinalIgnoreCase) || t.Contains("E. Communications", StringComparison.OrdinalIgnoreCase) || t.Contains("Kana\u0142 g\u0142\u00F3wny", StringComparison.OrdinalIgnoreCase)))
+                    {
+                        if (insertIndex < 0) insertIndex = i;
+                        if (child is FrameworkElement fe && fe.Tag?.ToString() != "REMODELED_OPORD_COMMS_CARD")
+                        {
+                            fe.Visibility = Visibility.Collapsed;
+                            fe.Height = 0;
+                            fe.Margin = new Thickness(0);
+                        }
+                    }
+                }
+
+                // Usun poprzednia instancje przebudowanej karty, jesli istnieje
+                for (int i = secStack.Children.Count - 1; i >= 0; i--)
+                {
+                    if ((secStack.Children[i] as FrameworkElement)?.Tag?.ToString() == "REMODELED_OPORD_COMMS_CARD")
+                        secStack.Children.RemoveAt(i);
+                }
+
+                var liveFactions = TacticalConfigPanel.GetInternalFactionsList();
+                var facModel = liveFactions.FirstOrDefault(f => string.Equals(f.Name, activeFactionName, StringComparison.OrdinalIgnoreCase)) ?? liveFactions.FirstOrDefault();
+                string meshCh = facModel?.ChannelName ?? (activeFactionName + "-MESH");
+                string meshReg = facModel?.LoraRegion ?? "EU_868";
+                string meshPreset = facModel?.LoraModemPreset ?? "SHORT_FAST";
+                string otsHost = string.IsNullOrWhiteSpace(facModel?.OtsHost) ? "Off-Grid Mesh (Lokalnie)" : facModel.OtsHost;
+                string sosPhone = string.IsNullOrWhiteSpace(facModel?.EmergencyPhone) ? "Brak / 112" : facModel.EmergencyPhone;
+
+                bool isManual = V34CleanOpordCommsStore.IsManualOverrideEnabled(activeFactionName);
+                var channels = V34CleanOpordCommsStore.GetEffectiveChannelsForFaction(activeFactionName);
+
+                var commsCard = new Border
+                {
+                    Tag = "REMODELED_OPORD_COMMS_CARD",
+                    Background = new SolidColorBrush(Color.FromRgb(10, 24, 30)),
+                    BorderBrush = TacticalConfigPanel.BrushAccent,
+                    BorderThickness = new Thickness(1.3),
+                    CornerRadius = new CornerRadius(8),
+                    Padding = new Thickness(12, 10, 12, 10),
+                    Margin = new Thickness(0, 6, 0, 10)
+                };
+
+                var cStack = new StackPanel();
+
+                var hdrDock = new DockPanel { Margin = new Thickness(0, 0, 0, 6) };
+                var chkManual = new CheckBox
+                {
+                    Content = "\u270F\uFE0F Wprowad\u017A / edytuj cz\u0119stotliwo\u015Bci r\u0119cznie",
+                    IsChecked = isManual,
+                    Foreground = isManual ? new SolidColorBrush(Color.FromRgb(250, 208, 44)) : Brushes.White,
+                    FontWeight = FontWeights.Bold,
+                    FontSize = 10.5,
+                    VerticalAlignment = VerticalAlignment.Center,
+                    Cursor = Cursors.Hand,
+                    ToolTip = "Zaznacz ten ptaszek, je\u015Bli chcesz r\u0119cznie edytowa\u0107 lub doda\u0107 cz\u0119stotliwo\u015Bci w OPORD. Gdy odznaczony, tabela pobiera wszystkie kana\u0142y automatycznie z Generatora Stron."
+                };
+                chkManual.Checked += (_, __) =>
+                {
+                    V34CleanOpordCommsStore.SetManualOverrideEnabled(activeFactionName, true);
+                    SyncChannelsIntoDayModel(activeFactionName, activeDay);
+                    rebuildCallback?.Invoke();
+                };
+                chkManual.Unchecked += (_, __) =>
+                {
+                    V34CleanOpordCommsStore.SetManualOverrideEnabled(activeFactionName, false);
+                    SyncChannelsIntoDayModel(activeFactionName, activeDay);
+                    rebuildCallback?.Invoke();
+                };
+                DockPanel.SetDock(chkManual, Dock.Right);
+                hdrDock.Children.Add(chkManual);
+
+                hdrDock.Children.Add(new TextBlock
+                {
+                    Text = $"\uD83D\uDCFB E. TABELA \u0141\u0104CZNO\u015ACI \u2014 STRONA: {activeFactionName.ToUpperInvariant()} " + (isManual ? "[TRYB EDYCJI R\u0118CZNEJ]" : "[AUTO Z GENERATORA STRON]"),
+                    Foreground = TacticalConfigPanel.BrushAccent,
+                    FontWeight = FontWeights.Bold,
+                    FontSize = 11.5,
+                    VerticalAlignment = VerticalAlignment.Center
+                });
+                cStack.Children.Add(hdrDock);
+
+                // Pasek parametrow cyfrowych (LoRa Meshtastic + OTS + SOS)
+                var digitalInfoBorder = new Border
+                {
+                    Background = TacticalConfigPanel.BrushInputBg,
+                    BorderBrush = TacticalConfigPanel.BrushTileBorder,
+                    BorderThickness = new Thickness(1),
+                    CornerRadius = new CornerRadius(5),
+                    Padding = new Thickness(8, 5, 8, 5),
+                    Margin = new Thickness(0, 0, 0, 8)
+                };
+                digitalInfoBorder.Child = new TextBlock
+                {
+                    Text = $"\uD83D\uDCE1 LoRa Meshtastic: {meshCh} ({meshReg} / {meshPreset})   |   \uD83D\uDDA5\uFE0F Serwer OTS: {otsHost}   |   \uD83D\uDEA8 Alarmowy SOS / ORGA: {sosPhone}",
+                    Foreground = new SolidColorBrush(Color.FromRgb(210, 232, 240)),
+                    FontSize = 10,
+                    FontWeight = FontWeights.SemiBold,
+                    TextWrapping = TextWrapping.Wrap
+                };
+                cStack.Children.Add(digitalInfoBorder);
+
+                // Naglowek kolumn tabeli kanalow glosowych
+                var tblHdr = new Grid { Margin = new Thickness(0, 0, 0, 4) };
+                tblHdr.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(32) });
+                tblHdr.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1.3, GridUnitType.Star) });
+                tblHdr.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(95) });
+                tblHdr.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1.4, GridUnitType.Star) });
+                tblHdr.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1.2, GridUnitType.Star) });
+                tblHdr.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(isManual ? 30 : 0) });
+
+                void AddColTitle(string txt, int col)
+                {
+                    var t = new TextBlock { Text = txt, Foreground = TacticalConfigPanel.BrushMutedText, FontSize = 9.5, FontWeight = FontWeights.Bold, Margin = new Thickness(4, 0, 4, 0) };
+                    Grid.SetColumn(t, col);
+                    tblHdr.Children.Add(t);
+                }
+                AddColTitle("Lp.", 0);
+                AddColTitle("Rola / Przeznaczenie kana\u0142u", 1);
+                AddColTitle("Pasmo", 2);
+                AddColTitle("Cz\u0119stotliwo\u015B\u0107 / Kana\u0142", 3);
+                AddColTitle("Ton CTCSS / DCS / Kod DMR", 4);
+                cStack.Children.Add(tblHdr);
+
+                for (int r = 0; r < channels.Count; r++)
+                {
+                    var chItem = channels[r];
+                    int rowNum = r + 1;
+
+                    var rowGrid = new Grid { Margin = new Thickness(0, 0, 0, 4) };
+                    rowGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(32) });
+                    rowGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1.3, GridUnitType.Star) });
+                    rowGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(95) });
+                    rowGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1.4, GridUnitType.Star) });
+                    rowGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1.2, GridUnitType.Star) });
+                    rowGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(isManual ? 30 : 0) });
+
+                    var lpBadge = new Border
+                    {
+                        Background = TacticalConfigPanel.BrushInputBg,
+                        BorderBrush = TacticalConfigPanel.BrushTileBorder,
+                        BorderThickness = new Thickness(1),
+                        CornerRadius = new CornerRadius(4),
+                        Height = 26,
+                        Margin = new Thickness(0, 0, 4, 0),
+                        Child = new TextBlock { Text = $"#{rowNum}", Foreground = TacticalConfigPanel.BrushAccent, FontSize = 9.5, FontWeight = FontWeights.Bold, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center }
+                    };
+                    Grid.SetColumn(lpBadge, 0);
+                    rowGrid.Children.Add(lpBadge);
+
+                    var roleBox = new TextBox
+                    {
+                        Text = chItem.RoleName,
+                        IsReadOnly = !isManual,
+                        Height = 26,
+                        FontSize = 10,
+                        FontWeight = FontWeights.Bold,
+                        Padding = new Thickness(6, 0, 6, 0),
+                        Margin = new Thickness(0, 0, 4, 0),
+                        VerticalContentAlignment = VerticalAlignment.Center,
+                        Background = isManual ? TacticalConfigPanel.BrushInputBg : new SolidColorBrush(Color.FromRgb(7, 17, 21)),
+                        Foreground = Brushes.White,
+                        BorderBrush = isManual ? TacticalConfigPanel.BrushAccent : TacticalConfigPanel.BrushTileBorder
+                    };
+                    roleBox.TextChanged += (_, __) => { if (isManual) { chItem.RoleName = roleBox.Text; SyncChannelsIntoDayModel(activeFactionName, activeDay); } };
+                    Grid.SetColumn(roleBox, 1);
+                    rowGrid.Children.Add(roleBox);
+
+                    var bandBox = new TextBox
+                    {
+                        Text = chItem.BandType,
+                        IsReadOnly = !isManual,
+                        Height = 26,
+                        FontSize = 10,
+                        FontWeight = FontWeights.SemiBold,
+                        Padding = new Thickness(6, 0, 6, 0),
+                        Margin = new Thickness(0, 0, 4, 0),
+                        VerticalContentAlignment = VerticalAlignment.Center,
+                        Background = isManual ? TacticalConfigPanel.BrushInputBg : new SolidColorBrush(Color.FromRgb(7, 17, 21)),
+                        Foreground = TacticalConfigPanel.BrushAccent,
+                        BorderBrush = isManual ? TacticalConfigPanel.BrushAccent : TacticalConfigPanel.BrushTileBorder
+                    };
+                    bandBox.TextChanged += (_, __) => { if (isManual) { chItem.BandType = bandBox.Text; SyncChannelsIntoDayModel(activeFactionName, activeDay); } };
+                    Grid.SetColumn(bandBox, 2);
+                    rowGrid.Children.Add(bandBox);
+
+                    var freqBox = new TextBox
+                    {
+                        Text = chItem.FreqMhz,
+                        IsReadOnly = !isManual,
+                        Height = 26,
+                        FontSize = 10,
+                        FontWeight = FontWeights.Bold,
+                        Padding = new Thickness(6, 0, 6, 0),
+                        Margin = new Thickness(0, 0, 4, 0),
+                        VerticalContentAlignment = VerticalAlignment.Center,
+                        Background = isManual ? TacticalConfigPanel.BrushInputBg : new SolidColorBrush(Color.FromRgb(7, 17, 21)),
+                        Foreground = Brushes.White,
+                        BorderBrush = isManual ? TacticalConfigPanel.BrushAccent : TacticalConfigPanel.BrushTileBorder
+                    };
+                    freqBox.TextChanged += (_, __) => { if (isManual) { chItem.FreqMhz = freqBox.Text; SyncChannelsIntoDayModel(activeFactionName, activeDay); } };
+                    Grid.SetColumn(freqBox, 3);
+                    rowGrid.Children.Add(freqBox);
+
+                    var toneBox = new TextBox
+                    {
+                        Text = chItem.ToneOrCode,
+                        IsReadOnly = !isManual,
+                        Height = 26,
+                        FontSize = 10,
+                        Padding = new Thickness(6, 0, 6, 0),
+                        Margin = new Thickness(0, 0, isManual ? 4 : 0, 0),
+                        VerticalContentAlignment = VerticalAlignment.Center,
+                        Background = isManual ? TacticalConfigPanel.BrushInputBg : new SolidColorBrush(Color.FromRgb(7, 17, 21)),
+                        Foreground = new SolidColorBrush(Color.FromRgb(200, 220, 228)),
+                        BorderBrush = isManual ? TacticalConfigPanel.BrushAccent : TacticalConfigPanel.BrushTileBorder
+                    };
+                    toneBox.TextChanged += (_, __) => { if (isManual) { chItem.ToneOrCode = toneBox.Text; SyncChannelsIntoDayModel(activeFactionName, activeDay); } };
+                    Grid.SetColumn(toneBox, 4);
+                    rowGrid.Children.Add(toneBox);
+
+                    if (isManual)
+                    {
+                        var btnDel = new Button
+                        {
+                            Content = "\u2212",
+                            Width = 26,
+                            Height = 26,
+                            Background = TacticalConfigPanel.BrushRedMinus,
+                            Foreground = Brushes.White,
+                            BorderBrush = Brushes.White,
+                            BorderThickness = new Thickness(1),
+                            FontWeight = FontWeights.Bold,
+                            Cursor = Cursors.Hand,
+                            ToolTip = "Usu\u0144 ten kana\u0142"
+                        };
+                        btnDel.Click += (_, __) =>
+                        {
+                            if (channels.Count > 1)
+                            {
+                                channels.Remove(chItem);
+                                SyncChannelsIntoDayModel(activeFactionName, activeDay);
+                                rebuildCallback?.Invoke();
+                            }
+                        };
+                        Grid.SetColumn(btnDel, 5);
+                        rowGrid.Children.Add(btnDel);
+                    }
+
+                    cStack.Children.Add(rowGrid);
+                }
+
+                if (isManual)
+                {
+                    var manualBtnsRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 4, 0, 0) };
+                    var btnAddManualCh = new Button
+                    {
+                        Content = "+ Dodaj kana\u0142 r\u0119czny",
+                        Height = 26,
+                        Padding = new Thickness(12, 0, 12, 0),
+                        Margin = new Thickness(0, 0, 8, 0),
+                        Background = TacticalConfigPanel.BrushGreenPlus,
+                        Foreground = Brushes.White,
+                        BorderBrush = Brushes.White,
+                        BorderThickness = new Thickness(1),
+                        FontSize = 10,
+                        FontWeight = FontWeights.Bold,
+                        Cursor = Cursors.Hand
+                    };
+                    btnAddManualCh.Click += (_, __) =>
+                    {
+                        channels.Add(new OpordManualChannelItem
+                        {
+                            RoleName = $"Kana\u0142 {channels.Count + 1}",
+                            BandType = "PMR",
+                            FreqMhz = $"CH {Math.Clamp(channels.Count + 1, 1, 16)}",
+                            ToneOrCode = "CTCSS 67.0 Hz"
+                        });
+                        SyncChannelsIntoDayModel(activeFactionName, activeDay);
+                        rebuildCallback?.Invoke();
+                    };
+
+                    var btnResetFromGen = new Button
+                    {
+                        Content = "\uD83D\uDD04 Przywr\u00F3\u0107 kana\u0142y z Generatora Stron",
+                        Height = 26,
+                        Padding = new Thickness(12, 0, 12, 0),
+                        Background = TacticalConfigPanel.BrushInputBg,
+                        Foreground = TacticalConfigPanel.BrushAccent,
+                        BorderBrush = TacticalConfigPanel.BrushAccent,
+                        BorderThickness = new Thickness(1),
+                        FontSize = 10,
+                        FontWeight = FontWeights.Bold,
+                        Cursor = Cursors.Hand
+                    };
+                    btnResetFromGen.Click += (_, __) =>
+                    {
+                        V34CleanOpordCommsStore.ForceResyncFromFactionGenerator(activeFactionName);
+                        SyncChannelsIntoDayModel(activeFactionName, activeDay);
+                        rebuildCallback?.Invoke();
+                    };
+
+                    manualBtnsRow.Children.Add(btnAddManualCh);
+                    manualBtnsRow.Children.Add(btnResetFromGen);
+                    cStack.Children.Add(manualBtnsRow);
+                }
+
+                commsCard.Child = cStack;
+                if (insertIndex >= 0 && insertIndex <= secStack.Children.Count)
+                    secStack.Children.Insert(insertIndex, commsCard);
+                else
+                    secStack.Children.Add(commsCard);
+                break;
+            }
+        }
+
+        private static bool IsDescendantOf(DependencyObject ancestor, DependencyObject descendant)
+        {
+            DependencyObject cur = descendant;
+            while (cur != null)
+            {
+                if (cur == ancestor) return true;
+                cur = LogicalTreeHelper.GetParent(cur) ?? VisualTreeHelper.GetParent(cur);
+            }
+            return false;
+        }
+    }
+    // [END_V34_CLEAN_OPORD_UI_TRANSFORMER]
+//===END_STEP2B_PAYLOADS===
