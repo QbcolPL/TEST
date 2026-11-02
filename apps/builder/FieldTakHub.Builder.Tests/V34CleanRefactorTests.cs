@@ -40,6 +40,16 @@ namespace FieldTakHub.Builder.Tests
         }
 
         [Fact]
+        public void SectorGrid_ShouldGenerateHorizontalLettersAndVerticalNumbers()
+        {
+            Assert.Equal("A", TacticalMapGeneratorView.GetSectorColumnLetters(0));
+            Assert.Equal("B", TacticalMapGeneratorView.GetSectorColumnLetters(1));
+            Assert.Equal("C", TacticalMapGeneratorView.GetSectorColumnLetters(2));
+            Assert.Equal("Z", TacticalMapGeneratorView.GetSectorColumnLetters(25));
+            Assert.Equal("AA", TacticalMapGeneratorView.GetSectorColumnLetters(26));
+        }
+
+        [Fact]
         public void UniqueFactionColors_ShouldReturnDistinctValidHexColors()
         {
             string c1 = V34CleanFtakAndFactionEngine.GetNextUniqueFactionColorHex(null);

@@ -29,10 +29,72 @@ namespace FieldTakHub.Builder.Services
         private static double _dotMarkerSizePx = 14.0;
         private static double _natoMarkerScale = 1.0;
         private static string _savedSearchQuery = "Czechowice-Dziedzice";
-        private static string _savedDefaultObjectName = "➤";
+        private static string _savedDefaultObjectName = "\u27A4";
         private static ScrollViewer _leftControlScrollViewer;
         private static bool _isRebuildingMapControls;
         private static DispatcherTimer _wheelZoomDebounceTimer;
+
+        // Parametry dodatkowej podzialki i siatki sektorowej (Poziomo: A, B, C... | Pionowo: 1, 2, 3...)
+        private static bool _enableSectorGridOverlay = true;
+        private static int _sectorSizeMeters = 100;
+        private static string _sectorSubDivision = "Keypad 1-9 (3\u00D73)";
+        private static bool _showSectorEdgeRulers = true;
+        private static bool _showSectorCornerCodes = true;
+        private static string _sectorGridColorHex = "#FAD02C";
+        private static TextBox _sectorSizeInputBox;
+        private static readonly List<Button> _sectorSizePresetButtons = new List<Button>();
+
+        public static string GetSectorColumnLetters(int colIndexZeroBased)
+        {
+            if (colIndexZeroBased < 0) return "A";
+            int n = colIndexZeroBased;
+            string res = "";
+            while (n >= 0)
+            {
+                res = (char)('A' + (n % 26)) + res;
+                n = (n / 26) - 1;
+            }
+            return res;
+        }
+
+        public static string FormatSectorCoordinateForLatLon(double lat, double lon, double viewW, double viewH)
+        {
+            try
+            {
+                Point pt = LatLonToScreen(lat, lon, viewW, viewH);
+                double metersPerPx = GetExactMetersPerPixel();
+                int secMeters = Math.Clamp(_sectorSizeMeters, 10, 5000);
+                double sectorPx = Math.Max(24.0, secMeters / metersPerPx);
+
+                int colIdx = Math.Max(0, (int)Math.Floor(Math.Max(0.0, pt.X) / sectorPx));
+                int rowIdx = Math.Max(0, (int)Math.Floor(Math.Max(0.0, pt.Y) / sectorPx));
+
+                string colStr = GetSectorColumnLetters(colIdx);
+                string rowStr = (rowIdx + 1).ToString();
+                string sectorCode = colStr + rowStr;
+
+                double relX = Math.Clamp((pt.X - (colIdx * sectorPx)) / sectorPx, 0.0, 0.9999);
+                double relY = Math.Clamp((pt.Y - (rowIdx * sectorPx)) / sectorPx, 0.0, 0.9999);
+
+                int kpCol = Math.Clamp((int)Math.Floor(relX * 3.0), 0, 2);
+                int kpRowTop = Math.Clamp((int)Math.Floor(relY * 3.0), 0, 2);
+                int[,] kpGrid = { { 7, 8, 9 }, { 4, 5, 6 }, { 1, 2, 3 } };
+                int kpNum = kpGrid[kpRowTop, kpCol];
+
+                int qCol = relX >= 0.5 ? 1 : 0;
+                int qRow = relY >= 0.5 ? 1 : 0;
+                string[,] qLetters = { { "A", "B" }, { "C", "D" } };
+                string[,] qCardinals = { { "NW", "NE" }, { "SW", "SE" } };
+                string qLet = qLetters[qRow, qCol];
+                string qCard = qCardinals[qRow, qCol];
+
+                return $"Sektor: {sectorCode} ({secMeters}m | KP-{kpNum} | \u0106w:{qLet}/{qCard})";
+            }
+            catch
+            {
+                return "Sektor: A1";
+            }
+        }
 
         private static void ExportExtraMapUiState(JsonObject root)
         {
@@ -60,6 +122,13 @@ namespace FieldTakHub.Builder.Services
             root["offlineDbFormat"] = _offlineDbFormat;
             root["bakeLidarInOffline"] = _bakeLidarInOffline;
             root["includeVectorsWithOffline"] = _includeVectorsWithOffline;
+
+            root["enableSectorGridOverlay"] = _enableSectorGridOverlay;
+            root["sectorSizeMeters"] = _sectorSizeMeters;
+            root["sectorSubDivision"] = _sectorSubDivision;
+            root["showSectorEdgeRulers"] = _showSectorEdgeRulers;
+            root["showSectorCornerCodes"] = _showSectorCornerCodes;
+            root["sectorGridColorHex"] = _sectorGridColorHex;
         }
 
         private static void ImportExtraMapUiState(JsonObject root)
@@ -92,6 +161,13 @@ namespace FieldTakHub.Builder.Services
             if (bool.TryParse(root["bakeLidarInOffline"]?.ToString(), out bool bl)) _bakeLidarInOffline = bl;
             if (bool.TryParse(root["includeVectorsWithOffline"]?.ToString(), out bool iv)) _includeVectorsWithOffline = iv;
 
+            if (bool.TryParse(root["enableSectorGridOverlay"]?.ToString(), out bool esg)) _enableSectorGridOverlay = esg;
+            if (int.TryParse(root["sectorSizeMeters"]?.ToString(), out int ssm)) _sectorSizeMeters = Math.Clamp(ssm, 10, 5000);
+            if (root["sectorSubDivision"] != null) _sectorSubDivision = root["sectorSubDivision"].ToString();
+            if (bool.TryParse(root["showSectorEdgeRulers"]?.ToString(), out bool sser)) _showSectorEdgeRulers = sser;
+            if (bool.TryParse(root["showSectorCornerCodes"]?.ToString(), out bool sscc)) _showSectorCornerCodes = sscc;
+            if (root["sectorGridColorHex"] != null) _sectorGridColorHex = root["sectorGridColorHex"].ToString();
+
             if (_dimmerRect != null) _dimmerRect.Opacity = _mapDimmerOpacity;
             if (_lidarTileCanvas != null) _lidarTileCanvas.Opacity = _lidarOpacity;
 
@@ -104,18 +180,20 @@ namespace FieldTakHub.Builder.Services
             if (_inspectorTitleLabel == null || _inspectorMgrsLabel == null || _inspectorWgsUtmLabel == null) return;
             if (_inspectedObject == null || _inspectedObject.Points.Count == 0 || !_mapObjects.Contains(_inspectedObject))
             {
-                _inspectorTitleLabel.Text = "📍 Kliknij dowolny znacznik lub wierzchołek na mapie, aby odczytać współrzędne";
-                _inspectorMgrsLabel.Text = "MGRS: —   |   Keypad / Ćwiartka: —";
-                _inspectorWgsUtmLabel.Text = "WGS84: —   |   UTM: —";
+                _inspectorTitleLabel.Text = "\uD83D\uDCCD Kliknij dowolny znacznik lub wierzcho\u0142ek na mapie, aby odczyta\u0107 wsp\u00F3\u0142rz\u0119dne";
+                _inspectorMgrsLabel.Text = "Sektor: \u2014   |   MGRS: \u2014   |   Keypad / \u0106wiartka: \u2014";
+                _inspectorWgsUtmLabel.Text = "WGS84: \u2014   |   UTM: \u2014";
                 return;
             }
             int idx = Math.Clamp(_inspectedVertexIndex, 0, _inspectedObject.Points.Count - 1);
             var pt = _inspectedObject.Points[idx];
+            var (vw, vh) = GetExactCanvasSize();
+            string secInfo = FormatSectorCoordinateForLatLon(pt.Lat, pt.Lon, vw, vh);
             var (fullMgrs, _, kpInfo, utmTxt, wgsTxt) = FormatTacticalPointCoordinates(pt.Lat, pt.Lon);
-            string ptSuffix = _inspectedObject.Points.Count > 1 ? $" (Wierzchołek #{idx + 1}/{_inspectedObject.Points.Count})" : "";
-            _inspectorTitleLabel.Text = $"🎯 {_inspectedObject.Name}{ptSuffix}  [{_inspectedObject.SymbolCode.Replace("NATO_", "").Replace("SHAPE_", "")}]";
-            _inspectorMgrsLabel.Text = $"MGRS: {fullMgrs}   •   {kpInfo}";
-            _inspectorWgsUtmLabel.Text = $"WGS84: {wgsTxt}   •   UTM: {utmTxt}";
+            string ptSuffix = _inspectedObject.Points.Count > 1 ? $" (Wierzcho\u0142ek #{idx + 1}/{_inspectedObject.Points.Count})" : "";
+            _inspectorTitleLabel.Text = $"\uD83C\uDFAF {_inspectedObject.Name}{ptSuffix}  [{_inspectedObject.SymbolCode.Replace("NATO_", "").Replace("SHAPE_", "")}]";
+            _inspectorMgrsLabel.Text = $"{secInfo}   \u2022   MGRS: {fullMgrs}";
+            _inspectorWgsUtmLabel.Text = $"{kpInfo}   \u2022   WGS84: {wgsTxt}";
         }
 
         private static void CopySelectedMarkerCoordsToClipboard()
@@ -125,10 +203,12 @@ namespace FieldTakHub.Builder.Services
             {
                 int idx = Math.Clamp(_inspectedVertexIndex, 0, _inspectedObject.Points.Count - 1);
                 var pt = _inspectedObject.Points[idx];
+                var (vw, vh) = GetExactCanvasSize();
+                string secInfo = FormatSectorCoordinateForLatLon(pt.Lat, pt.Lon, vw, vh);
                 var (fullMgrs, _, kpInfo, utmTxt, wgsTxt) = FormatTacticalPointCoordinates(pt.Lat, pt.Lon);
-                string report = $"{_inspectedObject.Name} | MGRS: {fullMgrs} ({kpInfo}) | WGS84: {wgsTxt} | UTM: {utmTxt}";
+                string report = $"{_inspectedObject.Name} | {secInfo} | MGRS: {fullMgrs} ({kpInfo}) | WGS84: {wgsTxt} | UTM: {utmTxt}";
                 Clipboard.SetText(report);
-                if (_statusText != null) _statusText.Text = $"✓ Skopiowano meldunek współrzędnych do schowka: {report}";
+                if (_statusText != null) _statusText.Text = $"\u2713 Skopiowano meldunek wsp\u00F3\u0142rz\u0119dnych do schowka: {report}";
             }
             catch { }
         }
@@ -878,7 +958,7 @@ namespace FieldTakHub.Builder.Services
                 if (_coordsBadge != null)
                 {
                     var (hMgrs, _, hKp, _, _) = FormatTacticalPointCoordinates(hoverLat, hoverLon);
-                    _coordsBadge.Text = $"MGRS: {hMgrs} ({hKp})  |  WGS84: {hoverLat:0.00000}, {hoverLon:0.00000}  |  Skala 1:{_targetScaleDenominator:N0}";
+                    string secHover = FormatSectorCoordinateForLatLon(hoverLat, hoverLon, w, h); _coordsBadge.Text = $"{secHover}  |  MGRS: {hMgrs} ({hKp})  |  WGS84: {hoverLat:0.00000}, {hoverLon:0.00000}  |  1:{_targetScaleDenominator:N0}";
                 }
 
                 if (_draggedHudId != null && _draggedHudElement != null)
@@ -1653,7 +1733,7 @@ namespace FieldTakHub.Builder.Services
             hdrDock.Children.Add(new TextBlock { Text = $"🎯 {_inspectedObject.Name}{ptSuffix}", Foreground = strokeBrush, FontSize = 10, FontWeight = FontWeights.Bold, TextTrimming = TextTrimming.CharacterEllipsis });
             stack.Children.Add(hdrDock);
             stack.Children.Add(new TextBlock { Text = $"MGRS: {fullMgrs}", Foreground = Brushes.White, FontFamily = new FontFamily("Consolas"), FontSize = 10, FontWeight = FontWeights.Bold });
-            stack.Children.Add(new TextBlock { Text = kpInfo, Foreground = TacticalConfigPanel.BrushAccent, FontFamily = new FontFamily("Consolas"), FontSize = 9.2, FontWeight = FontWeights.SemiBold });
+            string secPopup = FormatSectorCoordinateForLatLon(latLon.Lat, latLon.Lon, viewW, viewH); stack.Children.Add(new TextBlock { Text = $"{secPopup}  •  {kpInfo}", Foreground = TacticalConfigPanel.BrushAccent, FontFamily = new FontFamily("Consolas"), FontSize = 9.0, FontWeight = FontWeights.SemiBold, TextTrimming = TextTrimming.CharacterEllipsis });
             stack.Children.Add(new TextBlock { Text = $"WGS84: {wgsTxt}", Foreground = TacticalConfigPanel.BrushMutedText, FontFamily = new FontFamily("Consolas"), FontSize = 8.8 });
 
             popBorder.Child = stack;
@@ -1997,7 +2077,7 @@ namespace FieldTakHub.Builder.Services
                 double lw = isCompactWrist ? 215 : 275;
                 var ls = new StackPanel();
                 ls.Children.Add(new TextBlock { Text = $"MAPA TAKTYCZNA ({_selectedSheet.Name.Split('—')[0].Trim()} | 1:{_targetScaleDenominator:N0})", Foreground = TacticalConfigPanel.BrushAccent, FontWeight = FontWeights.Bold, FontSize = isCompactWrist ? 9 : 10 });
-                string gridSummary = _coordSystem.StartsWith("MGRS") ? $"Siatka: MGRS ({_effectiveMgrsStepMeters} m) | {_subGridDivision}" : $"Siatka: {_coordSystem.Split(' ')[0]}";
+                string secLegSuffix = (_enableSectorGridOverlay || _coordSystem.StartsWith("Sektorowa")) ? $" + Sektory A-Z/1-9 ({_sectorSizeMeters}m | {_sectorSubDivision.Split(' ')[0]})" : ""; string gridSummary = (_coordSystem.StartsWith("MGRS") ? $"Siatka: MGRS ({_effectiveMgrsStepMeters} m) | {_subGridDivision}" : $"Siatka: {_coordSystem.Split(' ')[0]}") + secLegSuffix;
                 ls.Children.Add(new TextBlock { Text = gridSummary, Foreground = TacticalConfigPanel.BrushMutedText, FontSize = 8.5, Margin = new Thickness(0, 1, 0, 4) });
 
                 var activeFacs = GetActiveMapFactions();

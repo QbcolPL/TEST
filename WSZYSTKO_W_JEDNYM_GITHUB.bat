@@ -5,26 +5,28 @@ cd /d "%~dp0"
 set "BAT_FILE=%~f0"
 
 echo ============================================================================
-echo [1/3] Odtwarzanie pelnego bloku V34CleanFtakAndFactionEngine i wysylka...
+echo [KROK 2/2] Wdrazanie UI i renderowania Podzialki Sektorowej (A,B,C / 1,2,3)
+echo            z wyborem rozmiaru (m) oraz Cwiartek/Keypad + Wysylka na GitHub...
 echo ============================================================================
-powershell -NoProfile -ExecutionPolicy Bypass -Command "Add-Type -TypeDefinition ([System.Text.RegularExpressions.Regex]::Split([System.IO.File]::ReadAllText([System.Environment]::GetEnvironmentVariable('BAT_FILE'), [System.Text.Encoding]::UTF8), '//===' + 'AIO_GITHUB_ENGINE_CS===')[1]); [FthAllInOneGitHubEngine]::Run()"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "Add-Type -TypeDefinition ([System.Text.RegularExpressions.Regex]::Split([System.IO.File]::ReadAllText([System.Environment]::GetEnvironmentVariable('BAT_FILE'), [System.Text.Encoding]::UTF8), '//===' + 'STEP2_SECTOR_AIO_CS===')[1]); [FthStep2SectorAndGitHub]::Run()"
 
 if errorlevel 1 (
     echo.
-    echo [BLAD] Wystapil blad podczas przygotowywania plikow lub wysylki na GitHub!
+    echo [BLAD] Wystapil blad podczas wykonywania Kroku 2/2 lub wysylki na GitHub!
     pause
     exit /b 1
 )
 
 echo.
 echo ============================================================================
-echo [SUKCES] Kompletny kod wyslany na GitHub (QbcolPL/TEST)!
-echo Kompilacja i testy na GitHub Actions zostaly uruchomione.
+echo [SUKCES - KROK 2/2] Podzialka sektorowa (A,B,C / 1,2,3 + Cwiartki/Keypad)
+echo zostala wdrożona i wyslana na GitHub (QbcolPL/TEST)!
+echo Kompilacja na GitHub Actions zostala uruchomiona.
 echo ============================================================================
 pause
 exit /b 0
 
-//===AIO_GITHUB_ENGINE_CS===
+//===STEP2_SECTOR_AIO_CS===
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -33,7 +35,7 @@ using System.Linq;
 using System.Text;
 using System.Text.RegularExpressions;
 
-public static class FthAllInOneGitHubEngine
+public static class FthStep2SectorAndGitHub
 {
     private const string RepoRemoteUrl = "https://github.com/QbcolPL/TEST.git";
     private const string RepoActionsUrl = "https://github.com/QbcolPL/TEST/actions";
@@ -46,259 +48,242 @@ public static class FthAllInOneGitHubEngine
 
         string batFile = Environment.GetEnvironmentVariable("BAT_FILE");
         string rawBat = File.ReadAllText(batFile, Encoding.UTF8);
-        string[] tailSplit = Regex.Split(rawBat, "//===" + "V34_COMPLETE_TAIL_BLOCK_CS===");
-        if (tailSplit.Length < 2)
-            throw new Exception("Brak bloku V34_COMPLETE_TAIL_BLOCK_CS w pliku .bat!");
-        string v34CompleteTailBlock = tailSplit[1].Trim();
+
+        string[] s1 = Regex.Split(rawBat, "//===" + "BLOCK1_TMG_STATE_CS===");
+        if (s1.Length < 2) throw new Exception("Brak bloku BLOCK1_TMG_STATE_CS!");
+        string[] s2 = Regex.Split(s1[1], "//===" + "BLOCK2_ENGINE_SEC2_CS===");
+        if (s2.Length < 2) throw new Exception("Brak bloku BLOCK2_ENGINE_SEC2_CS!");
+        string[] s3 = Regex.Split(s2[1], "//===" + "END_SECTOR_BLOCKS===");
+
+        string block1StateCode = s2[0].Trim();
+        string block2EngineSec2Code = s3[0].Trim();
 
         UTF8Encoding utf8NoBom = new UTF8Encoding(false);
 
-        foreach (string gf in new string[] { "(f.Name", "Encoding.UTF8.GetBytes((s", "Label", "Name" })
-        {
-            string gp = Path.Combine(targetDir, gf);
-            if (File.Exists(gp))
-            {
-                try { File.Delete(gp); } catch { }
-            }
-        }
+        // 1. Upewnij sie, ze Krok 1 w TacticalMapGeneratorView.cs oraz opis w Legendzie sa zaaplikowane
+        ApplyStep1AndLegendToMapView(targetDir, block1StateCode, utf8NoBom);
 
-        // 1. Odtworz czysty workflow .github/workflows/windows-builder.yml (.NET 10.0)
-        EnsureCleanGitHubActionsWorkflows(targetDir, utf8NoBom);
+        // 2. Zaaplikuj Krok 2 w TacticalMapGeneratorView.Engine.cs (UI + renderowanie podzialki A,B,C / 1,2,3 + Cwiartki/Keypad)
+        ApplyStep2ToMapEngine(targetDir, block2EngineSec2Code, utf8NoBom);
 
-        // 2. Zabezpiecz SigningKeyService.cs przed wyscigiem wielowatkowym w testach xUnit
-        FixSigningKeyServiceConcurrency(targetDir, utf8NoBom);
-
-        // 3. Odtworz kompletny blok V34* (w tym V34CleanFtakAndFactionEngine) i naprawe przelaczania modulow
-        ApplyAllFixesAndRestoreV34Tail(targetDir, v34CompleteTailBlock, utf8NoBom);
+        // 3. Dodaj test jednostkowy weryfikujacy indeksowanie kolumn sektorowych (A, B, C... Z, AA)
+        UpdateUnitTestsWithSectorTest(targetDir, utf8NoBom);
 
         // 4. Zapisz unikalny znacznik wyzwalajacy dla GitHub Actions
         string triggerPath = Path.Combine(targetDir, ".fth_build_trigger.txt");
-        string triggerContent = "Field TAK Hub Auto-Build Trigger UTC: " + DateTime.UtcNow.ToString("O") + " | RunId: " + Guid.NewGuid().ToString("N") + "\n";
+        string triggerContent = "Field TAK Hub Sector Grid A,B,C / 1,2,3 Build Trigger UTC: " + DateTime.UtcNow.ToString("O") + " | RunId: " + Guid.NewGuid().ToString("N") + "\n";
         File.WriteAllText(triggerPath, triggerContent, utf8NoBom);
 
-        // 5. Wyslij zmiany na GitHub i uruchom GitHub Actions
+        // 5. Wyslij całość na GitHub i uruchom GitHub Actions
         PushAndTriggerGitHubActions(targetDir);
     }
 
     private static string ResolveTargetProjectDirectory(string baseDir)
     {
         string csprojRel = @"apps\builder\FieldTakHub.Builder\FieldTakHub.Builder.csproj";
-
-        if (File.Exists(Path.Combine(baseDir, csprojRel)))
-            return baseDir;
-
+        if (File.Exists(Path.Combine(baseDir, csprojRel))) return baseDir;
         string subTestMain = Path.Combine(baseDir, "TEST-main");
-        if (File.Exists(Path.Combine(subTestMain, csprojRel)))
-            return subTestMain;
-
+        if (File.Exists(Path.Combine(subTestMain, csprojRel))) return subTestMain;
         string subGotowe = Path.Combine(baseDir, "TEST-main-Gotowe");
-        if (File.Exists(Path.Combine(subGotowe, csprojRel)))
-            return subGotowe;
-
+        if (File.Exists(Path.Combine(subGotowe, csprojRel))) return subGotowe;
         string parentDir = Path.GetDirectoryName(baseDir);
         if (!string.IsNullOrEmpty(parentDir))
         {
-            if (File.Exists(Path.Combine(parentDir, csprojRel)))
-                return parentDir;
+            if (File.Exists(Path.Combine(parentDir, csprojRel))) return parentDir;
             string parentTestMain = Path.Combine(parentDir, "TEST-main");
-            if (File.Exists(Path.Combine(parentTestMain, csprojRel)))
-                return parentTestMain;
+            if (File.Exists(Path.Combine(parentTestMain, csprojRel))) return parentTestMain;
         }
-
         throw new Exception("Nie znaleziono projektu FieldTakHub.Builder w katalogu: " + baseDir);
     }
 
-    private static void EnsureCleanGitHubActionsWorkflows(string targetDir, UTF8Encoding utf8NoBom)
+    private static void ApplyStep1AndLegendToMapView(string targetDir, string block1StateCode, UTF8Encoding utf8NoBom)
     {
-        string workflowsDir = Path.Combine(targetDir, ".github", "workflows");
-        Directory.CreateDirectory(workflowsDir);
+        string tmgPath = Path.Combine(targetDir, @"apps\builder\FieldTakHub.Builder\Services\TacticalMapGeneratorView.cs");
+        if (!File.Exists(tmgPath))
+            throw new Exception("Nie znaleziono pliku TacticalMapGeneratorView.cs!");
 
-        string windowsBuilderYml = string.Join("\n", new string[]
+        string tmg = File.ReadAllText(tmgPath, Encoding.UTF8);
+
+        int startIdx = tmg.IndexOf("private static double _dotMarkerSizePx = 14.0;", StringComparison.Ordinal);
+        int endIdx = tmg.IndexOf("private static void UpdateSheetViewportSize()", StringComparison.Ordinal);
+        if (startIdx >= 0 && endIdx > startIdx)
         {
-            "name: Windows Builder",
-            "on:",
-            "  workflow_dispatch:",
-            "  push:",
-            "    branches: [main, master, 'release/**']",
-            "  pull_request:",
-            "jobs:",
-            "  build:",
-            "    runs-on: windows-latest",
-            "    steps:",
-            "      - uses: actions/checkout@v4",
-            "      - uses: actions/setup-python@v5",
-            "        with: { python-version: '3.12' }",
-            "      - run: python tests/source_gate.py",
-            "      - uses: actions/setup-dotnet@v4",
-            "        with:",
-            "          dotnet-version: '10.0.x'",
-            "      - run: dotnet restore apps/builder/FieldTakHub.Builder.Tests/FieldTakHub.Builder.Tests.csproj",
-            "      - run: dotnet test apps/builder/FieldTakHub.Builder.Tests/FieldTakHub.Builder.Tests.csproj -c Release --no-restore",
-            "      - run: dotnet publish apps/builder/FieldTakHub.Builder/FieldTakHub.Builder.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:EnableCompressionInSingleFile=false -p:PublishTrimmed=false -p:PublishReadyToRun=false -o artifacts/windows",
-            "      - uses: actions/upload-artifact@v4",
-            "        with:",
-            "          name: FieldTakHub-Builder-win-x64",
-            "          path: artifacts/windows",
-            ""
-        });
+            tmg = tmg.Substring(0, startIdx) + block1StateCode + "\r\n\r\n        " + tmg.Substring(endIdx);
+        }
 
-        File.WriteAllText(Path.Combine(workflowsDir, "windows-builder.yml"), windowsBuilderYml, utf8NoBom);
+        // Odczyt sektora pod kursorem myszy
+        tmg = tmg.Replace(
+            @"_coordsBadge.Text = $""MGRS: {hMgrs} ({hKp})  |  WGS84: {hoverLat:0.00000}, {hoverLon:0.00000}  |  Skala 1:{_targetScaleDenominator:N0}"";",
+            @"string secHover = FormatSectorCoordinateForLatLon(hoverLat, hoverLon, w, h); _coordsBadge.Text = $""{secHover}  |  MGRS: {hMgrs} ({hKp})  |  WGS84: {hoverLat:0.00000}, {hoverLon:0.00000}  |  1:{_targetScaleDenominator:N0}"";");
+
+        // Odczyt sektora w dymku nad kliknietym punktem
+        tmg = tmg.Replace(
+            @"stack.Children.Add(new TextBlock { Text = kpInfo, Foreground = TacticalConfigPanel.BrushAccent, FontFamily = new FontFamily(""Consolas""), FontSize = 9.2, FontWeight = FontWeights.SemiBold });",
+            @"string secPopup = FormatSectorCoordinateForLatLon(latLon.Lat, latLon.Lon, viewW, viewH); stack.Children.Add(new TextBlock { Text = $""{secPopup}  •  {kpInfo}"", Foreground = TacticalConfigPanel.BrushAccent, FontFamily = new FontFamily(""Consolas""), FontSize = 9.0, FontWeight = FontWeights.SemiBold, TextTrimming = TextTrimming.CharacterEllipsis });");
+
+        // Dodaj informacje o podzialce sektorowej do Legendy na mapie
+        tmg = tmg.Replace(
+            @"string gridSummary = _coordSystem.StartsWith(""MGRS"") ? $""Siatka: MGRS ({_effectiveMgrsStepMeters} m) | {_subGridDivision}"" : $""Siatka: {_coordSystem.Split(' ')[0]}"";",
+            @"string secLegSuffix = (_enableSectorGridOverlay || _coordSystem.StartsWith(""Sektorowa"")) ? $"" + Sektory A-Z/1-9 ({_sectorSizeMeters}m | {_sectorSubDivision.Split(' ')[0]})"" : """"; string gridSummary = (_coordSystem.StartsWith(""MGRS"") ? $""Siatka: MGRS ({_effectiveMgrsStepMeters} m) | {_subGridDivision}"" : $""Siatka: {_coordSystem.Split(' ')[0]}"") + secLegSuffix;");
+
+        File.WriteAllText(tmgPath, tmg, utf8NoBom);
+        Console.WriteLine("[OK] Zaktualizowano TacticalMapGeneratorView.cs (silnik sektorowy, kursor, inspektor i legenda).");
     }
 
-    private static void FixSigningKeyServiceConcurrency(string targetDir, UTF8Encoding utf8NoBom)
+    private static void ApplyStep2ToMapEngine(string targetDir, string block2EngineSec2Code, UTF8Encoding utf8NoBom)
     {
-        string keyServicePath = Path.Combine(targetDir, @"apps\builder\FieldTakHub.Builder\Services\SigningKeyService.cs");
-        if (!File.Exists(keyServicePath)) return;
+        string engPath = Path.Combine(targetDir, @"apps\builder\FieldTakHub.Builder\Services\TacticalMapGeneratorView.Engine.cs");
+        if (!File.Exists(engPath))
+            throw new Exception("Nie znaleziono pliku TacticalMapGeneratorView.Engine.cs!");
 
-        string cleanKeyService = string.Join("\r\n", new string[]
+        string eng = File.ReadAllText(engPath, Encoding.UTF8);
+
+        // 1. Podmien BuildSection2GridAndColorsUI (lub wczesniejszy blok od UpdateSectorSizePresetHighlights)
+        int s2Start = eng.IndexOf("private static void UpdateSectorSizePresetHighlights()", StringComparison.Ordinal);
+        if (s2Start < 0)
+            s2Start = eng.IndexOf("private static StackPanel BuildSection2GridAndColorsUI(Window win)", StringComparison.Ordinal);
+
+        int s2End = eng.IndexOf("private static (double W, double H) GetExactCanvasSize()", StringComparison.Ordinal);
+        if (s2Start < 0 || s2End <= s2Start)
+            throw new Exception("Nie znaleziono metody BuildSection2GridAndColorsUI w TacticalMapGeneratorView.Engine.cs!");
+
+        eng = eng.Substring(0, s2Start) + block2EngineSec2Code + "\r\n\r\n        " + eng.Substring(s2End);
+
+        // 2. Zastap stary sztywny blok 8x8 "Sektorowa" w RenderFastGridAndMasksOnContext
+        string oldSektorowaBlock = @"                if (_coordSystem.StartsWith(""Sektorowa"") && _mainGridOpacity > 0.02)
+                {
+                    int cols = 8, rows = 8; double cw = w / cols, ch = h / rows;
+                    for (int c = 1; c < cols; c++) dc.DrawLine(mainPen, new Point(c * cw, 0), new Point(c * cw, h));
+                    for (int r = 1; r < rows; r++) dc.DrawLine(mainPen, new Point(0, r * ch), new Point(w, r * ch));
+                    for (int r = 0; r < rows; r++)
+                        for (int c = 0; c < cols; c++)
+                            DrawFastBadgeOnContext(dc, $""{(char)('A' + r)}{c + 1}"", c * cw + 6, r * ch + 4, mainBrush, 10 * _fontScaleMultiplier, _mainGridOpacity, $""MAIN_{_mainGridColorHex}_{_mainGridOpacity:0.00}"");
+                }";
+
+        if (eng.Contains(oldSektorowaBlock))
         {
+            eng = eng.Replace(
+                oldSektorowaBlock,
+                @"                if (_coordSystem.StartsWith(""Sektorowa""))
+                {
+                    // Renderowane przez metryczny silnik podzialki sektorowej RenderMetricSectorGridAndRulersOnContext
+                }");
+        }
+
+        // 3. Wywolaj RenderMetricSectorGridAndRulersOnContext(dc, w, h) w RenderFastGridAndMasksOnContext (zarowno gdy wybrano Siatke Sektorowa, jak i gdy wlaczono dodatkowa podzialke na siatce MGRS/WGS84)
+        if (!eng.Contains("RenderMetricSectorGridAndRulersOnContext(dc, w, h);"))
+        {
+            eng = eng.Replace(
+                "if (_rulerStart != null && _rulerEnd != null)",
+                "RenderMetricSectorGridAndRulersOnContext(dc, w, h);\r\n\r\n            if (_rulerStart != null && _rulerEnd != null)");
+        }
+
+        int openBraces = eng.Count(c => c == '{');
+        int closeBraces = eng.Count(c => c == '}');
+        Console.WriteLine("[WERYFIKACJA] Nawiasy klamrowe w TacticalMapGeneratorView.Engine.cs: { = " + openBraces + ", } = " + closeBraces);
+
+        File.WriteAllText(engPath, eng, utf8NoBom);
+        Console.WriteLine("[OK] Zaktualizowano TacticalMapGeneratorView.Engine.cs (UI sekcji 2 + renderowanie podzialki A,B,C / 1,2,3 + Cwiartki/Keypad).");
+    }
+
+    private static void UpdateUnitTestsWithSectorTest(string targetDir, UTF8Encoding utf8NoBom)
+    {
+        string testFilePath = Path.Combine(targetDir, @"apps\builder\FieldTakHub.Builder.Tests\V34CleanRefactorTests.cs");
+        if (!File.Exists(testFilePath)) return;
+
+        string cleanTestsCode = string.Join("\r\n", new string[]
+        {
+            "#nullable disable",
+            "using System;",
             "using System.IO;",
-            "using System.Security.Cryptography;",
-            "using System.Text.Json;",
-            "using NSec.Cryptography;",
+            "using Xunit;",
+            "using FieldTakHub.Builder.Models;",
+            "using FieldTakHub.Builder.Services;",
             "",
-            "namespace FieldTakHub.Builder.Services;",
-            "",
-            "public sealed class SigningKeyService",
+            "namespace FieldTakHub.Builder.Tests",
             "{",
-            "    private static readonly object KeyFileLock = new();",
-            "    private readonly string _keyPath;",
-            "    private readonly SignatureAlgorithm _algorithm = SignatureAlgorithm.Ed25519;",
-            "",
-            "    public SigningKeyService()",
+            "    [Collection(\"SequentialBuilderTests\")]",
+            "    public sealed class V34CleanRefactorTests",
             "    {",
-            "        var dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), \"FieldTakHub\", \"keys\");",
-            "        Directory.CreateDirectory(dir);",
-            "        _keyPath = Path.Combine(dir, \"default.ed25519.dpapi\");",
-            "    }",
-            "",
-            "    public (byte[] Signature, byte[] PublicKey, string Fingerprint) Sign(ReadOnlySpan<byte> data)",
-            "    {",
-            "        using var key = LoadOrCreate();",
-            "        var sig = _algorithm.Sign(key, data);",
-            "        var pub = key.PublicKey.Export(KeyBlobFormat.RawPublicKey);",
-            "        var fp = Convert.ToHexString(SHA256.HashData(pub)).ToLowerInvariant();",
-            "        return (sig, pub, fp);",
-            "    }",
-            "",
-            "    public string Fingerprint()",
-            "    {",
-            "        using var key = LoadOrCreate();",
-            "        return Convert.ToHexString(SHA256.HashData(key.PublicKey.Export(KeyBlobFormat.RawPublicKey))).ToLowerInvariant();",
-            "    }",
-            "",
-            "    public void ExportEncryptedBackup(string path, string password)",
-            "    {",
-            "        if (password.Length < 10) throw new InvalidDataException(\"FTH-KEY-001: backup password must contain at least 10 characters.\");",
-            "        byte[] protectedBytes;",
-            "        lock (KeyFileLock)",
+            "        [Fact]",
+            "        public void ZeroExpiryHours_ShouldMeanIndefiniteValidityInProjectAndManifest()",
             "        {",
-            "            using (LoadOrCreate()) { }",
-            "            protectedBytes = File.ReadAllBytes(_keyPath);",
-            "        }",
-            "        var raw = ProtectedData.Unprotect(protectedBytes, null, DataProtectionScope.CurrentUser);",
-            "        using var key = Key.Import(_algorithm, raw, KeyBlobFormat.RawPrivateKey);",
-            "        var salt = RandomNumberGenerator.GetBytes(16); var nonce = RandomNumberGenerator.GetBytes(12); var tag = new byte[16]; var cipher = new byte[raw.Length];",
-            "        var derived = Rfc2898DeriveBytes.Pbkdf2(password, salt, 600_000, HashAlgorithmName.SHA256, 32);",
-            "        try",
-            "        {",
-            "            using var aes = new AesGcm(derived, 16);",
-            "            aes.Encrypt(nonce, raw, cipher, tag, \"FieldTAKHub.fthkey.v1\"u8.ToArray());",
-            "            var doc = new {",
-            "                schema = \"fieldtak.publisher-key-backup\", version = 1, kdf = \"PBKDF2-SHA256\", iterations = 600000, cipher = \"AES-256-GCM\",",
-            "                fingerprint = Convert.ToHexString(SHA256.HashData(key.PublicKey.Export(KeyBlobFormat.RawPublicKey))).ToLowerInvariant(),",
-            "                salt = Convert.ToBase64String(salt), nonce = Convert.ToBase64String(nonce), tag = Convert.ToBase64String(tag), ciphertext = Convert.ToBase64String(cipher)",
+            "            var dir = Path.Combine(Path.GetTempPath(), \"fth-indef-\" + Guid.NewGuid().ToString(\"N\"));",
+            "            var source = Path.Combine(dir, \"source\");",
+            "            var output = Path.Combine(dir, \"out\");",
+            "            Directory.CreateDirectory(Path.Combine(source, \"atak\"));",
+            "            File.WriteAllText(Path.Combine(source, \"atak\", \"hello.txt\"), \"test\");",
+            "",
+            "            var p = new FieldTakProject",
+            "            {",
+            "                Name = \"IndefiniteTest\",",
+            "                PackageId = \"test.indefinite\",",
+            "                PackageVersion = \"1.0.0\",",
+            "                SourceDirectory = source,",
+            "                OutputDirectory = output,",
+            "                ExpiryHours = 0,",
+            "                QrExpiryHours = 0,",
+            "                Server = new ServerProfile { Host = \"127.0.0.1\" }",
             "            };",
-            "            File.WriteAllText(path, JsonSerializer.Serialize(doc, JsonDefaults.Options));",
+            "",
+            "            Assert.Equal(0, p.ExpiryHours);",
+            "            Assert.Equal(0, p.QrExpiryHours);",
+            "",
+            "            var items = new SourceAnalyzer().Analyze(source);",
+            "            var ftak = new FtakPackageBuilder().Build(p, items);",
+            "            Assert.True(File.Exists(ftak));",
             "        }",
-            "        finally { CryptographicOperations.ZeroMemory(raw); CryptographicOperations.ZeroMemory(derived); }",
-            "    }",
             "",
-            "    public string ImportEncryptedBackup(string path, string password)",
-            "    {",
-            "        using var doc = JsonDocument.Parse(File.ReadAllText(path)); var root = doc.RootElement;",
-            "        if (root.GetProperty(\"schema\").GetString() != \"fieldtak.publisher-key-backup\" || root.GetProperty(\"version\").GetInt32() != 1)",
-            "            throw new InvalidDataException(\"FTH-KEY-002: unsupported publisher key backup.\");",
-            "        var iterations = root.GetProperty(\"iterations\").GetInt32();",
-            "        var salt = Convert.FromBase64String(root.GetProperty(\"salt\").GetString()!); var nonce = Convert.FromBase64String(root.GetProperty(\"nonce\").GetString()!);",
-            "        var tag = Convert.FromBase64String(root.GetProperty(\"tag\").GetString()!); var cipher = Convert.FromBase64String(root.GetProperty(\"ciphertext\").GetString()!);",
-            "        var raw = new byte[cipher.Length]; var derived = Rfc2898DeriveBytes.Pbkdf2(password, salt, iterations, HashAlgorithmName.SHA256, 32);",
-            "        try",
+            "        [Fact]",
+            "        public void SectorGrid_ShouldGenerateHorizontalLettersAndVerticalNumbers()",
             "        {",
-            "            using var aes = new AesGcm(derived, 16); aes.Decrypt(nonce, cipher, tag, raw, \"FieldTAKHub.fthkey.v1\"u8.ToArray());",
-            "            using var imported = Key.Import(_algorithm, raw, KeyBlobFormat.RawPrivateKey);",
-            "            var fingerprint = Convert.ToHexString(SHA256.HashData(imported.PublicKey.Export(KeyBlobFormat.RawPublicKey))).ToLowerInvariant();",
-            "            var expected = root.GetProperty(\"fingerprint\").GetString();",
-            "            if (!fingerprint.Equals(expected, StringComparison.OrdinalIgnoreCase)) throw new CryptographicException(\"FTH-KEY-003: backup fingerprint mismatch.\");",
-            "            var protectedBlob = ProtectedData.Protect(raw, null, DataProtectionScope.CurrentUser);",
-            "            lock (KeyFileLock)",
-            "            {",
-            "                File.WriteAllBytes(_keyPath, protectedBlob);",
-            "            }",
-            "            return fingerprint;",
+            "            Assert.Equal(\"A\", TacticalMapGeneratorView.GetSectorColumnLetters(0));",
+            "            Assert.Equal(\"B\", TacticalMapGeneratorView.GetSectorColumnLetters(1));",
+            "            Assert.Equal(\"C\", TacticalMapGeneratorView.GetSectorColumnLetters(2));",
+            "            Assert.Equal(\"Z\", TacticalMapGeneratorView.GetSectorColumnLetters(25));",
+            "            Assert.Equal(\"AA\", TacticalMapGeneratorView.GetSectorColumnLetters(26));",
             "        }",
-            "        catch (CryptographicException ex) when (!ex.Message.StartsWith(\"FTH-KEY-\", StringComparison.Ordinal)) { throw new CryptographicException(\"FTH-KEY-004: wrong password or damaged backup.\", ex); }",
-            "        finally { CryptographicOperations.ZeroMemory(raw); CryptographicOperations.ZeroMemory(derived); }",
-            "    }",
             "",
-            "    private Key LoadOrCreate()",
-            "    {",
-            "        lock (KeyFileLock)",
+            "        [Fact]",
+            "        public void UniqueFactionColors_ShouldReturnDistinctValidHexColors()",
             "        {",
-            "            Directory.CreateDirectory(Path.GetDirectoryName(_keyPath)!);",
-            "            if (File.Exists(_keyPath))",
-            "            {",
-            "                var protectedBlob = File.ReadAllBytes(_keyPath);",
-            "                var raw = ProtectedData.Unprotect(protectedBlob, null, DataProtectionScope.CurrentUser);",
-            "                try { return Key.Import(_algorithm, raw, KeyBlobFormat.RawPrivateKey); }",
-            "                finally { CryptographicOperations.ZeroMemory(raw); }",
-            "            }",
+            "            string c1 = V34CleanFtakAndFactionEngine.GetNextUniqueFactionColorHex(null);",
+            "            string c2 = V34CleanFtakAndFactionEngine.GetNextUniqueFactionColorHex(null);",
+            "            string c3 = V34CleanFtakAndFactionEngine.GetNextUniqueFactionColorHex(null);",
             "",
-            "            using var created = Key.Create(_algorithm, new KeyCreationParameters { ExportPolicy = KeyExportPolicies.AllowPlaintextExport });",
-            "            var rawPrivate = created.Export(KeyBlobFormat.RawPrivateKey);",
-            "            try",
-            "            {",
-            "                var protectedBlob = ProtectedData.Protect(rawPrivate, null, DataProtectionScope.CurrentUser);",
-            "                File.WriteAllBytes(_keyPath, protectedBlob);",
-            "                return Key.Import(_algorithm, rawPrivate, KeyBlobFormat.RawPrivateKey);",
-            "            }",
-            "            finally { CryptographicOperations.ZeroMemory(rawPrivate); }",
+            "            Assert.StartsWith(\"#\", c1);",
+            "            Assert.Equal(7, c1.Length);",
+            "            Assert.NotEqual(c1, c2, StringComparer.OrdinalIgnoreCase);",
+            "            Assert.NotEqual(c2, c3, StringComparer.OrdinalIgnoreCase);",
+            "        }",
+            "",
+            "        [Fact]",
+            "        public void MapStudioBridge_ShouldConvertCoordinatesToMilitaryMgrs()",
+            "        {",
+            "            double lat = 49.849444;",
+            "            double lon = 18.812667;",
+            "",
+            "            string mgrs = V34CleanMapStudioBridge.LatLonToMgrs(lat, lon);",
+            "            Assert.False(string.IsNullOrWhiteSpace(mgrs));",
+            "            Assert.Contains(\"34U\", mgrs);",
+            "        }",
+            "",
+            "        [Fact]",
+            "        public void GarbageFactionFilter_ShouldRejectPliAndGeoChat()",
+            "        {",
+            "            Assert.True(V34CleanOpordDataEngine.IsGarbageFactionName(\"PLI\"));",
+            "            Assert.True(V34CleanOpordDataEngine.IsGarbageFactionName(\"GeoChat\"));",
+            "            Assert.True(V34CleanOpordDataEngine.IsGarbageFactionName(\"TAK\"));",
+            "            Assert.False(V34CleanOpordDataEngine.IsGarbageFactionName(\"ORGA\"));",
+            "            Assert.False(V34CleanOpordDataEngine.IsGarbageFactionName(\"STRONA-2\"));",
             "        }",
             "    }",
             "}",
             ""
         });
 
-        File.WriteAllText(keyServicePath, cleanKeyService, utf8NoBom);
-        Console.WriteLine("[OK] Zaktualizowano SigningKeyService.cs.");
-    }
-
-    private static void ApplyAllFixesAndRestoreV34Tail(string targetDir, string v34CompleteTailBlock, UTF8Encoding utf8NoBom)
-    {
-        string builderDir = Path.Combine(targetDir, @"apps\builder\FieldTakHub.Builder");
-        string servicesDir = Path.Combine(builderDir, "Services");
-
-        string corePath = Path.Combine(servicesDir, "BuilderCoreSidebarAndProjectEngine.cs");
-        if (!File.Exists(corePath))
-            throw new Exception("Nie znaleziono pliku BuilderCoreSidebarAndProjectEngine.cs!");
-
-        string core = File.ReadAllText(corePath, Encoding.UTF8);
-
-        // Odtworz caly blok od // [START_V34_CLEAN_SIDEBAR_ENGINE] do konca pliku,
-        // gwarantujac obecnosc V34CleanSidebarAndHeaderEngine, V34CleanFtakAndFactionEngine,
-        // V34CleanMapStudioBridge, V34CleanUsbProgrammerBridge oraz V34Step1ShellAndSidebarFixer
-        int sidebarEngineIdx = core.IndexOf("// [START_V34_CLEAN_SIDEBAR_ENGINE]", StringComparison.Ordinal);
-        if (sidebarEngineIdx < 0)
-            throw new Exception("Nie znaleziono znacznika // [START_V34_CLEAN_SIDEBAR_ENGINE] w BuilderCoreSidebarAndProjectEngine.cs!");
-
-        core = core.Substring(0, sidebarEngineIdx) + v34CompleteTailBlock + "\r\n";
-
-        int openBraces = core.Count(c => c == '{');
-        int closeBraces = core.Count(c => c == '}');
-        Console.WriteLine("[WERYFIKACJA] Nawiasy klamrowe w BuilderCoreSidebarAndProjectEngine.cs: { = " + openBraces + ", } = " + closeBraces);
-
-        File.WriteAllText(corePath, core, utf8NoBom);
-        Console.WriteLine("[OK] Odtworzono kompletny blok klas V34* (w tym V34CleanFtakAndFactionEngine) w BuilderCoreSidebarAndProjectEngine.cs.");
+        File.WriteAllText(testFilePath, cleanTestsCode, utf8NoBom);
+        Console.WriteLine("[OK] Zaktualizowano testy jednostkowe V34CleanRefactorTests.cs.");
     }
 
     private static void PushAndTriggerGitHubActions(string targetDir)
@@ -328,7 +313,7 @@ public static class FthAllInOneGitHubEngine
         RunProcess(gitExe, "remote set-url origin " + RepoRemoteUrl, targetDir, ignoreError: false);
 
         RunProcess(gitExe, "add -A", targetDir, ignoreError: false);
-        RunProcess(gitExe, "commit -m \"Restore V34CleanFtakAndFactionEngine block (fix CS0103) and keep module switching & SigningKeyService fixes\" --allow-empty", targetDir, ignoreError: false);
+        RunProcess(gitExe, "commit -m \"Add customizable metric Sector Grid & Rulers (A,B,C horizontal / 1,2,3 vertical) with Quarters and Keypad subdivisions\" --allow-empty", targetDir, ignoreError: false);
 
         int pushExitCode = RunProcess(gitExe, "push -u origin main --force", targetDir, ignoreError: false);
         if (pushExitCode != 0)
@@ -366,730 +351,599 @@ public static class FthAllInOneGitHubEngine
         }
     }
 }
-//===AIO_GITHUB_ENGINE_CS===
+//===STEP2_SECTOR_AIO_CS===
 
-//===V34_COMPLETE_TAIL_BLOCK_CS===
-// [START_V34_CLEAN_SIDEBAR_ENGINE]
-    public static class V34CleanSidebarAndHeaderEngine
-    {
-        public static void ApplySidebarAndHeaderFixes(Window win)
+//===BLOCK1_TMG_STATE_CS===
+        private static double _dotMarkerSizePx = 14.0;
+        private static double _natoMarkerScale = 1.0;
+        private static string _savedSearchQuery = "Czechowice-Dziedzice";
+        private static string _savedDefaultObjectName = "\u27A4";
+        private static ScrollViewer _leftControlScrollViewer;
+        private static bool _isRebuildingMapControls;
+        private static DispatcherTimer _wheelZoomDebounceTimer;
+
+        // Parametry dodatkowej podzialki i siatki sektorowej (Poziomo: A, B, C... | Pionowo: 1, 2, 3...)
+        private static bool _enableSectorGridOverlay = true;
+        private static int _sectorSizeMeters = 100;
+        private static string _sectorSubDivision = "Keypad 1-9 (3\u00D73)";
+        private static bool _showSectorEdgeRulers = true;
+        private static bool _showSectorCornerCodes = true;
+        private static string _sectorGridColorHex = "#FAD02C";
+        private static TextBox _sectorSizeInputBox;
+        private static readonly List<Button> _sectorSizePresetButtons = new List<Button>();
+
+        public static string GetSectorColumnLetters(int colIndexZeroBased)
         {
-            var w = win ?? Application.Current?.MainWindow;
-            if (w == null) return;
-            try
+            if (colIndexZeroBased < 0) return "A";
+            int n = colIndexZeroBased;
+            string res = "";
+            while (n >= 0)
             {
-                if (w.MinWidth > 900) w.MinWidth = 900;
-                if (w.MinHeight > 560) w.MinHeight = 560;
-                RemoveLegacyTopBarAndBlackHeaderGap(w);
+                res = (char)('A' + (n % 26)) + res;
+                n = (n / 26) - 1;
             }
-            catch { }
+            return res;
         }
 
-        public static void RemoveLegacyTopBarAndBlackHeaderGap(Window win)
-        {
-            var elements = GetLogicalTreeNodes(win);
-            foreach (var tb in elements.OfType<TextBlock>())
-            {
-                string txt = (tb.Text ?? "").Trim();
-                if (txt.Contains("TRYB PRACY BUILDERA", StringComparison.OrdinalIgnoreCase) ||
-                    txt.Contains("BUILDER MODE", StringComparison.OrdinalIgnoreCase))
-                {
-                    DependencyObject cur = tb;
-                    for (int depth = 0; depth < 6 && cur != null && !(cur is Window); depth++)
-                    {
-                        if (cur is Border b)
-                        {
-                            b.Visibility = Visibility.Collapsed;
-                            b.Height = 0;
-                            b.MinHeight = 0;
-                            b.Margin = new Thickness(0);
-                            b.Padding = new Thickness(0);
-                            b.BorderThickness = new Thickness(0);
-                            b.BorderBrush = Brushes.Transparent;
-                            b.Background = Brushes.Transparent;
-                        }
-                        cur = LogicalTreeHelper.GetParent(cur) ?? VisualTreeHelper.GetParent(cur);
-                    }
-                }
-            }
-        }
-
-        public static List<DependencyObject> GetLogicalTreeNodes(DependencyObject root)
-        {
-            var result = new List<DependencyObject>(128);
-            if (root == null) return result;
-
-            var visited = new HashSet<DependencyObject>();
-            var queue = new Queue<DependencyObject>(64);
-            queue.Enqueue(root);
-            visited.Add(root);
-
-            while (queue.Count > 0)
-            {
-                var cur = queue.Dequeue();
-                result.Add(cur);
-
-                if (cur is Panel panel)
-                {
-                    foreach (UIElement child in panel.Children)
-                    {
-                        if (child != null && visited.Add(child))
-                            queue.Enqueue(child);
-                    }
-                }
-                else if (cur is Decorator dec && dec.Child != null && visited.Add(dec.Child))
-                {
-                    queue.Enqueue(dec.Child);
-                }
-                else if (cur is ScrollViewer sv && sv.Content is DependencyObject svContent && visited.Add(svContent))
-                {
-                    queue.Enqueue(svContent);
-                }
-                else if (cur is ContentControl cc && !(cur is ButtonBase) && !(cur is ComboBoxItem) && !(cur is ListBoxItem) && cc.Content is DependencyObject ccContent && visited.Add(ccContent))
-                {
-                    queue.Enqueue(ccContent);
-                }
-            }
-            return result;
-        }
-    }
-    // [END_V34_CLEAN_SIDEBAR_ENGINE]
-
-    // [START_V34_CLEAN_FTAK_ENGINE]
-    public sealed class V34FactionVoiceChannelRow
-    {
-        public string Role { get; set; } = "Dowodzenie HQ";
-        public string Band { get; set; } = "PMR";
-        public string Freq { get; set; } = "CH 1 (446.00625 MHz)";
-        public string Tone { get; set; } = "CTCSS 67.0 Hz";
-    }
-
-    public sealed class V34FactionSnapshot
-    {
-        public string FactionName { get; set; } = "ORGA";
-        public string ColorHex { get; set; } = "#2684FF";
-        public string ChannelName { get; set; } = "ORGA-MESH";
-        public string Region { get; set; } = "EU_868";
-        public string ModemPreset { get; set; } = "SHORT_FAST";
-        public string OtsHost { get; set; } = "";
-        public string EmergencyPhone { get; set; } = "Brak / 112";
-        public int ExpirationHours { get; set; } = 0;
-        public List<V34FactionVoiceChannelRow> VoiceRows { get; set; } = new List<V34FactionVoiceChannelRow>();
-    }
-
-    public static class V34CleanFtakAndFactionEngine
-    {
-        private static readonly string[] TacticalRgbPalette = new string[]
-        {
-            "#2684FF", "#EB4034", "#2ECC71", "#FAD02C",
-            "#9B59B6", "#FF9F43", "#1FE0C5", "#E84393",
-            "#A3CB38", "#00CEC9", "#FF6B6B", "#54A0FF",
-            "#5F27CD", "#10AC84", "#F368E0", "#FF9FF3"
-        };
-
-        private static readonly HashSet<string> _allocatedColors = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-        {
-            "#2684FF"
-        };
-
-        public static List<V34FactionSnapshot> CachedFactions { get; } = new List<V34FactionSnapshot>();
-
-        public static string GetNextUniqueFactionColorHex(Window win = null)
+        public static string FormatSectorCoordinateForLatLon(double lat, double lon, double viewW, double viewH)
         {
             try
             {
-                var w = win ?? Application.Current?.MainWindow;
-                if (w != null)
-                {
-                    var all = V34CleanSidebarAndHeaderEngine.GetLogicalTreeNodes(w);
-                    foreach (var btn in all.OfType<Button>())
-                    {
-                        string bt = ExtractButtonTextSafe(btn);
-                        Match m = Regex.Match(bt, @"#[0-9A-Fa-f]{6}");
-                        if (m.Success) _allocatedColors.Add(m.Value.ToUpperInvariant());
-                    }
-                }
-            }
-            catch { }
+                Point pt = LatLonToScreen(lat, lon, viewW, viewH);
+                double metersPerPx = GetExactMetersPerPixel();
+                int secMeters = Math.Clamp(_sectorSizeMeters, 10, 5000);
+                double sectorPx = Math.Max(24.0, secMeters / metersPerPx);
 
-            var rng = new Random(Guid.NewGuid().GetHashCode());
-            var free = TacticalRgbPalette.Where(c => !_allocatedColors.Contains(c)).OrderBy(_ => rng.Next()).ToList();
-            string chosen;
-            if (free.Count > 0)
-            {
-                chosen = free[0];
-            }
-            else
-            {
-                do
-                {
-                    chosen = string.Format("#{0:X2}{1:X2}{2:X2}", rng.Next(45, 240), rng.Next(55, 240), rng.Next(45, 240));
-                } while (_allocatedColors.Contains(chosen));
-            }
+                int colIdx = Math.Max(0, (int)Math.Floor(Math.Max(0.0, pt.X) / sectorPx));
+                int rowIdx = Math.Max(0, (int)Math.Floor(Math.Max(0.0, pt.Y) / sectorPx));
 
-            _allocatedColors.Add(chosen);
-            return chosen;
-        }
+                string colStr = GetSectorColumnLetters(colIdx);
+                string rowStr = (rowIdx + 1).ToString();
+                string sectorCode = colStr + rowStr;
 
-        public static string EnsureSharedFolderStructure()
-        {
-            string root = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "FieldTakHub");
-            string wspolne = Path.Combine(root, "wspolne");
-            Directory.CreateDirectory(Path.Combine(wspolne, "ATAK"));
-            Directory.CreateDirectory(Path.Combine(wspolne, "Meshtastic"));
-            Directory.CreateDirectory(Path.Combine(wspolne, "apk"));
-            Directory.CreateDirectory(Path.Combine(wspolne, "plugins"));
-            Directory.CreateDirectory(Path.Combine(wspolne, "maps"));
-            Directory.CreateDirectory(Path.Combine(root, "out"));
-            return wspolne;
-        }
+                double relX = Math.Clamp((pt.X - (colIdx * sectorPx)) / sectorPx, 0.0, 0.9999);
+                double relY = Math.Clamp((pt.Y - (rowIdx * sectorPx)) / sectorPx, 0.0, 0.9999);
 
-        public static string EnsureFactionOutputDir(string factionName)
-        {
-            EnsureSharedFolderStructure();
-            string root = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "FieldTakHub");
-            string outDir = Path.Combine(root, "out", SanitizeFolderName(factionName));
-            Directory.CreateDirectory(outDir);
-            return outDir;
-        }
+                int kpCol = Math.Clamp((int)Math.Floor(relX * 3.0), 0, 2);
+                int kpRowTop = Math.Clamp((int)Math.Floor(relY * 3.0), 0, 2);
+                int[,] kpGrid = { { 7, 8, 9 }, { 4, 5, 6 }, { 1, 2, 3 } };
+                int kpNum = kpGrid[kpRowTop, kpCol];
 
-        public static string SanitizeFileName(string name) => SanitizeFolderName(name);
+                int qCol = relX >= 0.5 ? 1 : 0;
+                int qRow = relY >= 0.5 ? 1 : 0;
+                string[,] qLetters = { { "A", "B" }, { "C", "D" } };
+                string[,] qCardinals = { { "NW", "NE" }, { "SW", "SE" } };
+                string qLet = qLetters[qRow, qCol];
+                string qCard = qCardinals[qRow, qCol];
 
-        public static string SanitizeFolderName(string name)
-        {
-            if (string.IsNullOrWhiteSpace(name)) return "ORGA";
-            char[] inv = Path.GetInvalidFileNameChars();
-            StringBuilder sb = new StringBuilder();
-            foreach (char c in name.Trim())
-            {
-                sb.Append(Array.IndexOf(inv, c) >= 0 ? '_' : c);
-            }
-            string r = sb.ToString().Trim();
-            return string.IsNullOrEmpty(r) ? "ORGA" : r;
-        }
-
-        public static void ApplyFactionAndPackageFixes(Window win)
-        {
-            var w = win ?? Application.Current?.MainWindow;
-            if (w == null) return;
-
-            EnsureSharedFolderStructure();
-            var all = ScanAllWindowRoots(w);
-
-            foreach (var tb in all.OfType<TextBlock>())
-            {
-                string txt = (tb.Text ?? "").Trim();
-                if ((txt.Contains("Wa\u017Cno\u015B\u0107 paczki", StringComparison.OrdinalIgnoreCase) ||
-                     txt.Contains("Wa\u017Cno\u015B\u0107 kodu QR", StringComparison.OrdinalIgnoreCase) ||
-                     txt.Contains("Expiration", StringComparison.OrdinalIgnoreCase)) &&
-                    !txt.Contains("0 = bezterminowo", StringComparison.OrdinalIgnoreCase))
-                {
-                    tb.Text = txt.TrimEnd(':') + " (0 = bezterminowo):";
-                }
-            }
-
-            EnforceUniqueColorsAndNamesOnCards(all);
-            RefreshCachedFactions(w, all);
-        }
-
-        private static void EnforceUniqueColorsAndNamesOnCards(List<DependencyObject> all)
-        {
-            var usedColors = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            var usedNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
-            var headers = all.OfType<TextBlock>()
-                .Where(t => (t.Text ?? "").Contains("Generator Stron \u2014", StringComparison.OrdinalIgnoreCase))
-                .ToList();
-
-            for (int i = 0; i < headers.Count; i++)
-            {
-                var hdr = headers[i];
-                var card = FindFactionCardContainer(hdr);
-                if (card == null) continue;
-
-                var elems = V34CleanSidebarAndHeaderEngine.GetLogicalTreeNodes(card);
-                var firstBox = elems.OfType<TextBox>().FirstOrDefault();
-                if (firstBox != null)
-                {
-                    string curName = (firstBox.Text ?? "").Trim();
-                    if (usedNames.Contains(curName) && curName.StartsWith("STRONA-", StringComparison.OrdinalIgnoreCase))
-                    {
-                        int n = i + 1;
-                        while (usedNames.Contains("STRONA-" + n)) n++;
-                        curName = "STRONA-" + n;
-                        firstBox.Text = curName;
-                        hdr.Text = "Generator Stron \u2014 " + curName;
-                    }
-                    if (!string.IsNullOrWhiteSpace(curName))
-                        usedNames.Add(curName);
-                }
-
-                var colorBtn = elems.OfType<Button>().FirstOrDefault(b => Regex.IsMatch(ExtractButtonTextSafe(b), @"#[0-9A-Fa-f]{6}"));
-                if (colorBtn != null)
-                {
-                    Match m = Regex.Match(ExtractButtonTextSafe(colorBtn), @"#[0-9A-Fa-f]{6}");
-                    if (m.Success)
-                    {
-                        string hex = m.Value.ToUpperInvariant();
-                        if (usedColors.Contains(hex))
-                        {
-                            hex = GetNextUniqueFactionColorHex(null);
-                            ApplyHexColorToButton(colorBtn, hdr, hex);
-                        }
-                        usedColors.Add(hex);
-                        _allocatedColors.Add(hex);
-                    }
-                }
-            }
-        }
-
-        private static void ApplyHexColorToButton(Button colorBtn, TextBlock hdrTb, string hex)
-        {
-            try
-            {
-                var brush = new SolidColorBrush((Color)ColorConverter.ConvertFromString(hex));
-                if (colorBtn.Content is string)
-                {
-                    colorBtn.Content = "\u25A0 " + hex;
-                }
-                else if (colorBtn.Content is Panel p)
-                {
-                    foreach (var b in p.Children.OfType<Border>()) b.Background = brush;
-                    foreach (var s in p.Children.OfType<System.Windows.Shapes.Shape>()) s.Fill = brush;
-                    foreach (var t in p.Children.OfType<TextBlock>())
-                        if (t.Text != null && t.Text.Contains("#")) t.Text = hex;
-                }
-                colorBtn.BorderBrush = brush;
-
-                if (LogicalTreeHelper.GetParent(hdrTb) is Panel hdrParent)
-                {
-                    foreach (var s in hdrParent.Children.OfType<System.Windows.Shapes.Shape>()) s.Fill = brush;
-                    foreach (var b in hdrParent.Children.OfType<Border>())
-                        if (b.Width <= 20 && b.Height <= 20) b.Background = brush;
-                }
-            }
-            catch { }
-        }
-
-        public static DependencyObject FindFactionCardContainer(TextBlock hdrTb)
-        {
-            if (hdrTb == null) return null;
-            DependencyObject cur = hdrTb;
-            DependencyObject bestBorder = null;
-
-            for (int depth = 0; depth < 9 && cur != null; depth++)
-            {
-                cur = LogicalTreeHelper.GetParent(cur) ?? VisualTreeHelper.GetParent(cur);
-                if (cur is Border || cur is Panel)
-                {
-                    var elems = V34CleanSidebarAndHeaderEngine.GetLogicalTreeNodes(cur);
-                    var texts = elems.OfType<TextBlock>().Select(x => x.Text ?? "").ToList();
-                    int hdrCount = texts.Count(x => x.Contains("Generator Stron \u2014", StringComparison.OrdinalIgnoreCase));
-                    if (hdrCount > 1) break;
-
-                    if (cur is Border b && b.BorderThickness.Top >= 1)
-                        bestBorder = b;
-
-                    if (hdrCount == 1 &&
-                        texts.Any(x => x.Contains("Nazwa strony", StringComparison.OrdinalIgnoreCase)) &&
-                        texts.Any(x => x.Contains("Kana\u0142y G\u0142osowe", StringComparison.OrdinalIgnoreCase)))
-                    {
-                        return cur;
-                    }
-                }
-            }
-            return bestBorder;
-        }
-
-        public static List<V34FactionSnapshot> RefreshCachedFactions(Window win, List<DependencyObject> preScanned = null)
-        {
-            var list = new List<V34FactionSnapshot>();
-            try
-            {
-                var all = preScanned ?? ScanAllWindowRoots(win ?? Application.Current?.MainWindow);
-                var headers = all.OfType<TextBlock>()
-                    .Where(t => (t.Text ?? "").Contains("Generator Stron \u2014", StringComparison.OrdinalIgnoreCase))
-                    .ToList();
-
-                foreach (var hdr in headers)
-                {
-                    var card = FindFactionCardContainer(hdr);
-                    if (card == null) continue;
-
-                    var items = V34CleanSidebarAndHeaderEngine.GetLogicalTreeNodes(card);
-                    var boxes = items.OfType<TextBox>().ToList();
-                    var snap = new V34FactionSnapshot();
-
-                    snap.FactionName = (boxes.Count > 0 && !string.IsNullOrWhiteSpace(boxes[0].Text))
-                        ? boxes[0].Text.Trim()
-                        : (hdr.Text ?? "").Replace("Generator Stron \u2014", "").Trim();
-
-                    if (string.IsNullOrWhiteSpace(snap.FactionName) ||
-                        snap.FactionName.Equals("PLI", StringComparison.OrdinalIgnoreCase) ||
-                        snap.FactionName.Equals("GeoChat", StringComparison.OrdinalIgnoreCase) ||
-                        snap.FactionName.Equals("TAK", StringComparison.OrdinalIgnoreCase))
-                    {
-                        snap.FactionName = "ORGA";
-                    }
-
-                    snap.ChannelName = snap.FactionName.ToUpperInvariant() + "-MESH";
-
-                    var colBtn = items.OfType<Button>().FirstOrDefault(b => Regex.IsMatch(ExtractButtonTextSafe(b), @"#[0-9A-Fa-f]{6}"));
-                    if (colBtn != null)
-                    {
-                        Match m = Regex.Match(ExtractButtonTextSafe(colBtn), @"#[0-9A-Fa-f]{6}");
-                        if (m.Success) snap.ColorHex = m.Value.ToUpperInvariant();
-                    }
-
-                    foreach (var tb in boxes)
-                    {
-                        var p = LogicalTreeHelper.GetParent(tb) as Panel;
-                        if (p != null && p.Children.OfType<TextBlock>().Any(l => (l.Text ?? "").Contains("Telefon alarmowy", StringComparison.OrdinalIgnoreCase)))
-                        {
-                            if (!string.IsNullOrWhiteSpace(tb.Text)) snap.EmergencyPhone = tb.Text.Trim();
-                        }
-                    }
-
-                    foreach (var panel in items.OfType<Panel>())
-                    {
-                        var directInputs = panel.Children.Cast<UIElement>().Where(x => x is TextBox || x is ComboBox).ToList();
-                        if (directInputs.Count >= 2 && directInputs.Any(x => x is TextBox))
-                        {
-                            bool isNameRow = panel.Children.OfType<StackPanel>().Any(sp => sp.Children.OfType<TextBlock>().Any(t => (t.Text ?? "").Contains("Nazwa strony", StringComparison.OrdinalIgnoreCase)));
-                            if (isNameRow) continue;
-
-                            string ReadVal(UIElement el)
-                            {
-                                if (el is TextBox tbx) return (tbx.Text ?? "").Trim();
-                                if (el is ComboBox cbx) return ((cbx.SelectedItem is ComboBoxItem cbi ? cbi.Content?.ToString() : cbx.SelectedItem?.ToString()) ?? cbx.Text ?? "").Trim();
-                                return "";
-                            }
-
-                            var vals = directInputs.Select(ReadVal).ToList();
-                            string role = vals[0];
-                            string band = vals.Count >= 2 ? vals[1] : "PMR";
-                            string freq = vals.Count >= 3 ? vals[2] : vals[1];
-                            string tone = vals.Count >= 4 ? vals[3] : "-";
-
-                            if (role.Equals("PMR", StringComparison.OrdinalIgnoreCase) ||
-                                role.Equals("VHF", StringComparison.OrdinalIgnoreCase) ||
-                                role.Equals("UHF", StringComparison.OrdinalIgnoreCase) ||
-                                role.Equals("DMR", StringComparison.OrdinalIgnoreCase) ||
-                                role.Contains("VHF/", StringComparison.OrdinalIgnoreCase))
-                            {
-                                band = role;
-                                role = vals.Count >= 2 ? vals[1] : "Kana\u0142";
-                                freq = vals.Count >= 3 ? vals[2] : "-";
-                            }
-
-                            if (!string.IsNullOrWhiteSpace(role) || !string.IsNullOrWhiteSpace(freq))
-                            {
-                                snap.VoiceRows.Add(new V34FactionVoiceChannelRow
-                                {
-                                    Role = string.IsNullOrWhiteSpace(role) ? "Kana\u0142" : role,
-                                    Band = string.IsNullOrWhiteSpace(band) ? "PMR" : band,
-                                    Freq = string.IsNullOrWhiteSpace(freq) ? "-" : freq,
-                                    Tone = string.IsNullOrWhiteSpace(tone) ? "-" : tone
-                                });
-                            }
-                        }
-                    }
-
-                    if (snap.VoiceRows.Count == 0)
-                        snap.VoiceRows.Add(new V34FactionVoiceChannelRow());
-
-                    list.Add(snap);
-                }
-            }
-            catch { }
-
-            if (list.Count > 0)
-            {
-                CachedFactions.Clear();
-                CachedFactions.AddRange(list);
-            }
-            return CachedFactions;
-        }
-
-        public static List<DependencyObject> ScanAllWindowRoots(Window win)
-        {
-            var result = new List<DependencyObject>(256);
-            var visited = new HashSet<DependencyObject>();
-
-            void AddTree(DependencyObject r)
-            {
-                if (r == null || !visited.Add(r)) return;
-                result.AddRange(V34CleanSidebarAndHeaderEngine.GetLogicalTreeNodes(r));
-            }
-
-            if (win != null)
-            {
-                AddTree(win);
-                foreach (var f in win.GetType().GetFields(System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic))
-                {
-                    try { if (f.GetValue(win) is DependencyObject d) AddTree(d); } catch { }
-                }
-            }
-
-            foreach (var t in typeof(V34CleanFtakAndFactionEngine).Assembly.GetTypes())
-            {
-                if (t.Namespace == null || !t.Namespace.StartsWith("FieldTakHub.Builder")) continue;
-                foreach (var sf in t.GetFields(System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic))
-                {
-                    try { if (typeof(DependencyObject).IsAssignableFrom(sf.FieldType) && sf.GetValue(null) is DependencyObject sd) AddTree(sd); } catch { }
-                }
-            }
-
-            return result;
-        }
-
-        public static string ExtractButtonTextSafe(Button btn)
-        {
-            if (btn == null) return "";
-            if (btn.Content is string s) return s;
-            if (btn.Content is TextBlock tb) return tb.Text ?? "";
-            if (btn.Content is Panel p)
-                return string.Join(" ", V34CleanSidebarAndHeaderEngine.GetLogicalTreeNodes(p).OfType<TextBlock>().Select(x => x.Text ?? ""));
-            return btn.Content?.ToString() ?? "";
-        }
-    }
-    // [END_V34_CLEAN_FTAK_ENGINE]
-
-    // [START_V34_CLEAN_MAP_STUDIO_ENGINE]
-    public static class V34CleanMapStudioBridge
-    {
-        private static readonly string[] MgrsCols = { "ABCDEFGH", "JKLMNPQR", "STUVWXYZ" };
-        private static readonly string[] MgrsRows = { "ABCDEFGHJKLMNPQRSTUV", "FGHJKLMNPQRSTUVABCDE" };
-
-        public static bool HasExplicitAoMarked { get; private set; }
-        public static double AoCenterLat { get; private set; } = 49.849444;
-        public static double AoCenterLon { get; private set; } = 18.812667;
-        public static string ActiveCoordinateSystem { get; private set; } = "MGRS";
-
-        public static void SyncMapStudioState(Window win)
-        {
-            try
-            {
-                var w = win ?? Application.Current?.MainWindow;
-                if (w == null) return;
-
-                V34CleanFtakAndFactionEngine.EnsureSharedFolderStructure();
-                var all = V34CleanFtakAndFactionEngine.ScanAllWindowRoots(w);
-                bool foundAoOrPois = false;
-
-                foreach (var cb in all.OfType<ComboBox>())
-                {
-                    string sel = ((cb.SelectedItem is ComboBoxItem cbi ? cbi.Content?.ToString() : cb.SelectedItem?.ToString()) ?? cb.Text ?? "").Trim();
-                    if (sel.Contains("MGRS", StringComparison.OrdinalIgnoreCase)) ActiveCoordinateSystem = "MGRS";
-                    else if (sel.Contains("DMS", StringComparison.OrdinalIgnoreCase) || sel.Contains("Stopnie", StringComparison.OrdinalIgnoreCase)) ActiveCoordinateSystem = "DMS";
-                    else if (sel.Contains("UTM", StringComparison.OrdinalIgnoreCase) && !sel.Contains("MGRS", StringComparison.OrdinalIgnoreCase)) ActiveCoordinateSystem = "UTM";
-                    else if (sel.Contains("WGS84", StringComparison.OrdinalIgnoreCase) || sel.Contains("Dziesi\u0119tne", StringComparison.OrdinalIgnoreCase)) ActiveCoordinateSystem = "WGS84";
-                }
-
-                var flags = System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static;
-                var mExtract = typeof(OpordBuilderManager).GetMethod("GetExtractedMapData", flags)
-                            ?? typeof(OpordBuilderManager).GetMethod("ExtractMapData", flags);
-
-                if (mExtract != null && mExtract.GetParameters().Length == 0)
-                {
-                    var mapData = mExtract.Invoke(null, null);
-                    if (mapData != null)
-                    {
-                        var mt = mapData.GetType();
-                        bool hasAoProp = (bool)(mt.GetProperty("HasAoPolygon")?.GetValue(mapData) ?? false);
-                        double cLat = Convert.ToDouble(mt.GetProperty("CenterLat")?.GetValue(mapData) ?? 49.849444);
-                        double cLon = Convert.ToDouble(mt.GetProperty("CenterLon")?.GetValue(mapData) ?? 18.812667);
-
-                        int poisCount = 0;
-                        if (mt.GetProperty("Pois")?.GetValue(mapData) is System.Collections.IEnumerable poisEnum)
-                        {
-                            foreach (var _ in poisEnum) poisCount++;
-                        }
-
-                        if (hasAoProp || poisCount > 0)
-                        {
-                            foundAoOrPois = true;
-                            AoCenterLat = cLat;
-                            AoCenterLon = cLon;
-                        }
-                    }
-                }
-
-                if (!foundAoOrPois)
-                {
-                    foreach (var canvas in all.OfType<Canvas>())
-                    {
-                        foreach (UIElement ch in canvas.Children)
-                        {
-                            if (ch is System.Windows.Shapes.Polygon poly && poly.Points != null && poly.Points.Count >= 3 && poly.Visibility == Visibility.Visible)
-                            {
-                                foundAoOrPois = true;
-                                break;
-                            }
-                            if (ch is System.Windows.Shapes.Polyline pline && pline.Points != null && pline.Points.Count >= 3 && pline.Visibility == Visibility.Visible)
-                            {
-                                foundAoOrPois = true;
-                                break;
-                            }
-                        }
-                        if (foundAoOrPois) break;
-                    }
-                }
-
-                HasExplicitAoMarked = foundAoOrPois;
-            }
-            catch { }
-        }
-
-        public static string FormatByActiveMapSystem(double lat, double lon)
-        {
-            string sys = (ActiveCoordinateSystem ?? "MGRS").ToUpperInvariant();
-            if (sys.Contains("MGRS")) return LatLonToMgrs(lat, lon);
-            if (sys.Contains("UTM")) return LatLonToUtm(lat, lon);
-            if (sys.Contains("DMS")) return LatLonToDms(lat, lon);
-            return string.Format(CultureInfo.InvariantCulture, "{0:F5}\u00B0N, {1:F5}\u00B0E", lat, lon);
-        }
-
-        public static string LatLonToMgrs(double lat, double lon)
-        {
-            try
-            {
-                double cLat = Math.Clamp(lat, -80.0, 84.0);
-                double nLon = ((lon + 180.0) % 360.0 + 360.0) % 360.0 - 180.0;
-                int zone = (int)Math.Floor((nLon + 180.0) / 6.0) + 1;
-                double latRad = cLat * Math.PI / 180.0;
-                double lonRad = nLon * Math.PI / 180.0;
-                double lonOrig = ((zone - 1) * 6 - 180 + 3) * Math.PI / 180.0;
-                double a = 6378137.0, eccSq = 0.00669438, k0 = 0.9996, eccP = eccSq / (1.0 - eccSq);
-                double n = a / Math.Sqrt(1.0 - eccSq * Math.Sin(latRad) * Math.Sin(latRad));
-                double t = Math.Tan(latRad) * Math.Tan(latRad);
-                double c = eccP * Math.Cos(latRad) * Math.Cos(latRad);
-                double A = Math.Cos(latRad) * (lonRad - lonOrig);
-                double M = a * ((1.0 - eccSq / 4.0 - 3.0 * eccSq * eccSq / 64.0) * latRad - (3.0 * eccSq / 8.0 + 3.0 * eccSq * eccSq / 32.0) * Math.Sin(2.0 * latRad));
-                double east = k0 * n * (A + (1.0 - t + c) * Math.Pow(A, 3) / 6.0) + 500000.0;
-                double north = k0 * (M + n * Math.Tan(latRad) * (A * A / 2.0));
-                if (cLat < 0) north += 10000000.0;
-                string bands = "CDEFGHJKLMNPQRSTUVWXX";
-                char bChar = bands[Math.Clamp((int)Math.Floor((cLat + 80.0) / 8.0), 0, bands.Length - 1)];
-                char cChar = MgrsCols[(zone - 1) % 3][Math.Clamp((int)Math.Floor(east / 100000.0) - 1, 0, 7)];
-                char rChar = MgrsRows[(zone - 1) % 2][Math.Clamp((int)Math.Floor(north / 100000.0) % 20, 0, 19)];
-                int e5 = Math.Clamp((int)Math.Round(east) % 100000, 0, 99999);
-                int n5 = Math.Clamp((int)Math.Round(north) % 100000, 0, 99999);
-                return string.Format(CultureInfo.InvariantCulture, "{0:00}{1} {2}{3} {4:00000} {5:00000}", zone, bChar, cChar, rChar, e5, n5);
+                return $"Sektor: {sectorCode} ({secMeters}m | KP-{kpNum} | \u0106w:{qLet}/{qCard})";
             }
             catch
             {
-                return string.Format(CultureInfo.InvariantCulture, "{0:F5}, {1:F5}", lat, lon);
+                return "Sektor: A1";
             }
         }
 
-        public static string LatLonToUtm(double lat, double lon)
+        private static void ExportExtraMapUiState(JsonObject root)
         {
-            double cLat = Math.Clamp(lat, -80.0, 84.0);
-            double nLon = ((lon + 180.0) % 360.0 + 360.0) % 360.0 - 180.0;
-            int zone = (int)Math.Floor((nLon + 180.0) / 6.0) + 1;
-            double latRad = cLat * Math.PI / 180.0, lonRad = nLon * Math.PI / 180.0;
-            double lonOrig = ((zone - 1) * 6 - 180 + 3) * Math.PI / 180.0;
-            double a = 6378137.0, eccSq = 0.00669438, k0 = 0.9996;
-            double n = a / Math.Sqrt(1.0 - eccSq * Math.Sin(latRad) * Math.Sin(latRad));
-            double A = Math.Cos(latRad) * (lonRad - lonOrig);
-            double M = a * ((1.0 - eccSq / 4.0) * latRad - (3.0 * eccSq / 8.0) * Math.Sin(2.0 * latRad));
-            double east = k0 * n * A + 500000.0;
-            double north = k0 * (M + n * Math.Tan(latRad) * (A * A / 2.0));
-            return string.Format(CultureInfo.InvariantCulture, "UTM {0}N {1:0}E {2:0}N", zone, east, north);
+            if (root == null) return;
+            root["searchQuery"] = _searchPlaceBox != null ? _searchPlaceBox.Text : _savedSearchQuery;
+            root["selectedObjectColorHex"] = _selectedObjectColorHex;
+            root["selectedNatoSymbolCode"] = _selectedNatoSymbolCode;
+            root["defaultObjectName"] = _objectNameInputBox != null ? _objectNameInputBox.Text : _savedDefaultObjectName;
+            root["newObjectShowLabelDefault"] = _newObjectShowLabelDefault;
+            root["dotMarkerSizePx"] = _dotMarkerSizePx;
+            root["natoMarkerScale"] = _natoMarkerScale;
+            root["northArrowPos"] = _northArrowPos;
+            root["scaleBarPos"] = _scaleBarPos;
+            root["legendPos"] = _legendPos;
+            if (_northNormX.HasValue) root["northNormX"] = _northNormX.Value;
+            if (_northNormY.HasValue) root["northNormY"] = _northNormY.Value;
+            if (_scaleNormX.HasValue) root["scaleNormX"] = _scaleNormX.Value;
+            if (_scaleNormY.HasValue) root["scaleNormY"] = _scaleNormY.Value;
+            if (_legendNormX.HasValue) root["legendNormX"] = _legendNormX.Value;
+            if (_legendNormY.HasValue) root["legendNormY"] = _legendNormY.Value;
+            root["kmzGrgMode"] = _kmzGrgMode;
+            root["offlineMinZoom"] = _offlineMinZoom;
+            root["offlineMaxZoom"] = _offlineMaxZoom;
+            root["offlineBoundsMode"] = _offlineBoundsMode;
+            root["offlineDbFormat"] = _offlineDbFormat;
+            root["bakeLidarInOffline"] = _bakeLidarInOffline;
+            root["includeVectorsWithOffline"] = _includeVectorsWithOffline;
+
+            root["enableSectorGridOverlay"] = _enableSectorGridOverlay;
+            root["sectorSizeMeters"] = _sectorSizeMeters;
+            root["sectorSubDivision"] = _sectorSubDivision;
+            root["showSectorEdgeRulers"] = _showSectorEdgeRulers;
+            root["showSectorCornerCodes"] = _showSectorCornerCodes;
+            root["sectorGridColorHex"] = _sectorGridColorHex;
         }
 
-        public static string LatLonToDms(double lat, double lon)
+        private static void ImportExtraMapUiState(JsonObject root)
         {
-            return ToDmsPart(lat, lat >= 0 ? 'N' : 'S') + " " + ToDmsPart(lon, lon >= 0 ? 'E' : 'W');
+            if (root == null) return;
+            if (root["searchQuery"] != null) _savedSearchQuery = root["searchQuery"].ToString();
+            if (root["selectedObjectColorHex"] != null) _selectedObjectColorHex = root["selectedObjectColorHex"].ToString();
+            if (root["selectedNatoSymbolCode"] != null) _selectedNatoSymbolCode = root["selectedNatoSymbolCode"].ToString();
+            if (root["defaultObjectName"] != null) _savedDefaultObjectName = root["defaultObjectName"].ToString();
+            if (bool.TryParse(root["newObjectShowLabelDefault"]?.ToString(), out bool nld)) _newObjectShowLabelDefault = nld;
+            if (double.TryParse(root["dotMarkerSizePx"]?.ToString(), NumberStyles.Any, CultureInfo.InvariantCulture, out double dms)) _dotMarkerSizePx = Math.Clamp(dms, 4.0, 48.0);
+            if (double.TryParse(root["natoMarkerScale"]?.ToString(), NumberStyles.Any, CultureInfo.InvariantCulture, out double nms)) _natoMarkerScale = Math.Clamp(nms, 0.4, 3.0);
+
+            if (root["northArrowPos"] != null) _northArrowPos = root["northArrowPos"].ToString();
+            if (root["scaleBarPos"] != null) _scaleBarPos = root["scaleBarPos"].ToString();
+            if (root["legendPos"] != null) _legendPos = root["legendPos"].ToString();
+
+            _northNormX = double.TryParse(root["northNormX"]?.ToString(), NumberStyles.Any, CultureInfo.InvariantCulture, out double nnx) ? nnx : null;
+            _northNormY = double.TryParse(root["northNormY"]?.ToString(), NumberStyles.Any, CultureInfo.InvariantCulture, out double nny) ? nny : null;
+            _scaleNormX = double.TryParse(root["scaleNormX"]?.ToString(), NumberStyles.Any, CultureInfo.InvariantCulture, out double snx) ? snx : null;
+            _scaleNormY = double.TryParse(root["scaleNormY"]?.ToString(), NumberStyles.Any, CultureInfo.InvariantCulture, out double sny) ? sny : null;
+            _legendNormX = double.TryParse(root["legendNormX"]?.ToString(), NumberStyles.Any, CultureInfo.InvariantCulture, out double lnx) ? lnx : null;
+            _legendNormY = double.TryParse(root["legendNormY"]?.ToString(), NumberStyles.Any, CultureInfo.InvariantCulture, out double lny) ? lny : null;
+
+            if (root["kmzGrgMode"] != null) _kmzGrgMode = root["kmzGrgMode"].ToString();
+            if (int.TryParse(root["offlineMinZoom"]?.ToString(), out int omin)) _offlineMinZoom = Math.Clamp(omin, 10, 18);
+            if (int.TryParse(root["offlineMaxZoom"]?.ToString(), out int omax)) _offlineMaxZoom = Math.Clamp(omax, _offlineMinZoom, 19);
+            if (root["offlineBoundsMode"] != null) _offlineBoundsMode = root["offlineBoundsMode"].ToString();
+            if (root["offlineDbFormat"] != null) _offlineDbFormat = root["offlineDbFormat"].ToString();
+            if (bool.TryParse(root["bakeLidarInOffline"]?.ToString(), out bool bl)) _bakeLidarInOffline = bl;
+            if (bool.TryParse(root["includeVectorsWithOffline"]?.ToString(), out bool iv)) _includeVectorsWithOffline = iv;
+
+            if (bool.TryParse(root["enableSectorGridOverlay"]?.ToString(), out bool esg)) _enableSectorGridOverlay = esg;
+            if (int.TryParse(root["sectorSizeMeters"]?.ToString(), out int ssm)) _sectorSizeMeters = Math.Clamp(ssm, 10, 5000);
+            if (root["sectorSubDivision"] != null) _sectorSubDivision = root["sectorSubDivision"].ToString();
+            if (bool.TryParse(root["showSectorEdgeRulers"]?.ToString(), out bool sser)) _showSectorEdgeRulers = sser;
+            if (bool.TryParse(root["showSectorCornerCodes"]?.ToString(), out bool sscc)) _showSectorCornerCodes = sscc;
+            if (root["sectorGridColorHex"] != null) _sectorGridColorHex = root["sectorGridColorHex"].ToString();
+
+            if (_dimmerRect != null) _dimmerRect.Opacity = _mapDimmerOpacity;
+            if (_lidarTileCanvas != null) _lidarTileCanvas.Opacity = _lidarOpacity;
+
+            if (_hostWindow != null && _leftControlScrollViewer != null)
+                RebuildLeftControlsPanel(_hostWindow);
         }
 
-        private static string ToDmsPart(double val, char hem)
+        private static void UpdateSelectedMarkerInspectorUI()
         {
-            double abs = Math.Abs(val);
-            int d = (int)Math.Floor(abs);
-            double mf = (abs - d) * 60.0;
-            int m = (int)Math.Floor(mf);
-            double s = (mf - m) * 60.0;
-            return string.Format(CultureInfo.InvariantCulture, "{0:00}\u00B0{1:00}'{2:00.0}\"{3}", d, m, s, hem);
+            if (_inspectorTitleLabel == null || _inspectorMgrsLabel == null || _inspectorWgsUtmLabel == null) return;
+            if (_inspectedObject == null || _inspectedObject.Points.Count == 0 || !_mapObjects.Contains(_inspectedObject))
+            {
+                _inspectorTitleLabel.Text = "\uD83D\uDCCD Kliknij dowolny znacznik lub wierzcho\u0142ek na mapie, aby odczyta\u0107 wsp\u00F3\u0142rz\u0119dne";
+                _inspectorMgrsLabel.Text = "Sektor: \u2014   |   MGRS: \u2014   |   Keypad / \u0106wiartka: \u2014";
+                _inspectorWgsUtmLabel.Text = "WGS84: \u2014   |   UTM: \u2014";
+                return;
+            }
+            int idx = Math.Clamp(_inspectedVertexIndex, 0, _inspectedObject.Points.Count - 1);
+            var pt = _inspectedObject.Points[idx];
+            var (vw, vh) = GetExactCanvasSize();
+            string secInfo = FormatSectorCoordinateForLatLon(pt.Lat, pt.Lon, vw, vh);
+            var (fullMgrs, _, kpInfo, utmTxt, wgsTxt) = FormatTacticalPointCoordinates(pt.Lat, pt.Lon);
+            string ptSuffix = _inspectedObject.Points.Count > 1 ? $" (Wierzcho\u0142ek #{idx + 1}/{_inspectedObject.Points.Count})" : "";
+            _inspectorTitleLabel.Text = $"\uD83C\uDFAF {_inspectedObject.Name}{ptSuffix}  [{_inspectedObject.SymbolCode.Replace("NATO_", "").Replace("SHAPE_", "")}]";
+            _inspectorMgrsLabel.Text = $"{secInfo}   \u2022   MGRS: {fullMgrs}";
+            _inspectorWgsUtmLabel.Text = $"{kpInfo}   \u2022   WGS84: {wgsTxt}";
         }
-    }
-    // [END_V34_CLEAN_MAP_STUDIO_ENGINE]
 
-    // [START_V34_CLEAN_USB_BRIDGE]
-    public static class V34CleanUsbProgrammerBridge
-    {
-        public static void SyncUsbProgrammerUi(Window win)
+        private static void CopySelectedMarkerCoordsToClipboard()
         {
+            if (_inspectedObject == null || _inspectedObject.Points.Count == 0) return;
             try
             {
-                var w = win ?? Application.Current?.MainWindow;
-                if (w == null) return;
+                int idx = Math.Clamp(_inspectedVertexIndex, 0, _inspectedObject.Points.Count - 1);
+                var pt = _inspectedObject.Points[idx];
+                var (vw, vh) = GetExactCanvasSize();
+                string secInfo = FormatSectorCoordinateForLatLon(pt.Lat, pt.Lon, vw, vh);
+                var (fullMgrs, _, kpInfo, utmTxt, wgsTxt) = FormatTacticalPointCoordinates(pt.Lat, pt.Lon);
+                string report = $"{_inspectedObject.Name} | {secInfo} | MGRS: {fullMgrs} ({kpInfo}) | WGS84: {wgsTxt} | UTM: {utmTxt}";
+                Clipboard.SetText(report);
+                if (_statusText != null) _statusText.Text = $"\u2713 Skopiowano meldunek wsp\u00F3\u0142rz\u0119dnych do schowka: {report}";
+            }
+            catch { }
+        }
 
-                var all = V34CleanFtakAndFactionEngine.ScanAllWindowRoots(w);
-                var cleanFactionNames = V34CleanOpordDataEngine.GetCleanFactionNames(w);
+//===BLOCK2_ENGINE_SEC2_CS===
+        private static void UpdateSectorSizePresetHighlights()
+        {
+            foreach (var b in _sectorSizePresetButtons)
+            {
+                bool isCur = b.Content?.ToString() == $"{_sectorSizeMeters} m";
+                b.Background = isCur ? TacticalConfigPanel.BrushButtonAccent : TacticalConfigPanel.BrushInputBg;
+                b.Foreground = isCur ? TacticalConfigPanel.BrushDarkFg : Brushes.White;
+                b.BorderBrush = isCur ? TacticalConfigPanel.BrushAccent : TacticalConfigPanel.BrushInputBorder;
+            }
+        }
 
-                foreach (var tb in all.OfType<TextBlock>())
+        private static void ApplySectorSizeMeters(int meters)
+        {
+            _sectorSizeMeters = Math.Clamp(meters, 10, 5000);
+            if (_sectorSizeInputBox != null && _sectorSizeInputBox.Text != _sectorSizeMeters.ToString())
+                _sectorSizeInputBox.Text = _sectorSizeMeters.ToString();
+            UpdateSectorSizePresetHighlights();
+            UpdateSelectedMarkerInspectorUI();
+            RedrawVectorsOnly();
+        }
+
+        private static void RenderMetricSectorGridAndRulersOnContext(DrawingContext dc, double w, double h)
+        {
+            if (!_enableSectorGridOverlay && !_coordSystem.StartsWith("Sektorowa")) return;
+            if (_mainGridOpacity <= 0.02) return;
+
+            double metersPerPixel = GetExactMetersPerPixel();
+            int secMeters = Math.Clamp(_sectorSizeMeters, 10, 5000);
+            double sectorPx = Math.Max(24.0, secMeters / metersPerPixel);
+
+            int cols = Math.Min(64, (int)Math.Ceiling(w / sectorPx));
+            int rows = Math.Min(64, (int)Math.Ceiling(h / sectorPx));
+
+            string secHex = !string.IsNullOrWhiteSpace(_sectorGridColorHex) ? _sectorGridColorHex : _mainGridColorHex;
+            var secMainBrush = CreateAlphaHexBrush(secHex, _mainGridOpacity, Color.FromRgb(250, 208, 44));
+            var subLineBrush = CreateAlphaHexBrush(_subGridLineColorHex, _subGridOpacity, Color.FromRgb(31, 224, 197));
+            var subTextBrush = CreateAlphaHexBrush(_subLabelTextColorHex, _subGridOpacity, Colors.White);
+            var subBgBrush = CreateAlphaHexBrush(_subLabelBgColorHex, _subLabelBgOpacity * _subGridOpacity, Color.FromRgb(6, 16, 20));
+            var subShadowBrush = CreateAlphaHexBrush("#000000", _subGridOpacity * 0.9, Colors.Black);
+
+            Pen subBoxBorderPen = (_labelBgStyle.StartsWith("Kaseton") && _subLabelBgOpacity > 0.05)
+                ? GetCachedSolidPen($"SEC_SUBBOX_{_subGridOpacity:0.00}", CreateAlphaHexBrush("#000000", _subGridOpacity * 0.85, Colors.Black), 0.9) : null;
+
+            byte mainHaloAlpha = (byte)Math.Clamp((int)Math.Round((_gridHaloMode.StartsWith("Pe\u0142ny") ? 220 : 130) * _mainGridOpacity), 0, 255);
+            byte subHaloAlpha = (byte)Math.Clamp((int)Math.Round((_gridHaloMode.StartsWith("Pe\u0142ny") ? 180 : 100) * _subGridOpacity), 0, 255);
+            var haloBrush = GetCachedRgbaBrush(mainHaloAlpha, 0, 0, 0);
+            var subHaloBrush = GetCachedRgbaBrush(subHaloAlpha, 0, 0, 0);
+            bool useHalo = !_gridHaloMode.StartsWith("Brak");
+
+            double mainThick = Math.Max(0.9, 1.55 * _gridThicknessMultiplier);
+            double subThick = Math.Max(0.7, 0.95 * _gridThicknessMultiplier);
+            var secMainPen = GetCachedSolidPen($"SEC_MP_{secHex}_{_mainGridOpacity:0.00}", secMainBrush, mainThick);
+            var mainHaloPen = GetCachedSolidPen($"SEC_MHP_{mainHaloAlpha}", haloBrush, mainThick + 1.8);
+            var subHaloPen = GetCachedSolidPen($"SEC_SHP_{subHaloAlpha}", subHaloBrush, subThick + 1.2);
+            var subPen = new Pen(subLineBrush, subThick) { DashStyle = new DashStyle(new double[] { 4, 2 }, 0) };
+            subPen.Freeze();
+
+            int subDiv = 1;
+            bool isKeypad = _sectorSubDivision.Contains("Keypad");
+            bool isQuartersAbcd = _sectorSubDivision.Contains("A, B, C, D") || _sectorSubDivision.Contains("A,B,C,D");
+            bool isQuartersNwSe = _sectorSubDivision.Contains("NW");
+            bool isGrid4x4 = _sectorSubDivision.Contains("4\u00D74") || _sectorSubDivision.Contains("4x4");
+
+            if (isKeypad) subDiv = 3;
+            else if (isQuartersAbcd || isQuartersNwSe) subDiv = 2;
+            else if (isGrid4x4) subDiv = 4;
+
+            // 1. Wewnetrzny podzial kazdego sektora (Cwiartki 2x2 / Keypad 3x3 / Siatka 4x4)
+            if (subDiv > 1 && _subGridOpacity > 0.02 && sectorPx >= 44.0)
+            {
+                double subStepPx = sectorPx / subDiv;
+                for (int c = 0; c < cols; c++)
                 {
-                    string txt = (tb.Text ?? "").Trim();
-                    if (txt.Contains("PROGRAMATOR P\u0141YTEK USB", StringComparison.OrdinalIgnoreCase) ||
-                        txt.Contains("MASOWY PROGRAMATOR", StringComparison.OrdinalIgnoreCase) ||
-                        txt.Contains("USB BOARD PROGRAMMER", StringComparison.OrdinalIgnoreCase))
+                    double x0 = c * sectorPx;
+                    for (int i = 1; i < subDiv; i++)
                     {
-                        DependencyObject root = LogicalTreeHelper.GetParent(tb) ?? VisualTreeHelper.GetParent(tb);
-                        while (root != null && !(root is StackPanel || root is Grid))
-                        {
-                            root = LogicalTreeHelper.GetParent(root) ?? VisualTreeHelper.GetParent(root);
-                        }
+                        double sx = x0 + i * subStepPx;
+                        if (sx <= 0 || sx >= w) continue;
+                        if (useHalo) dc.DrawLine(subHaloPen, new Point(sx, 0), new Point(sx, h));
+                        dc.DrawLine(subPen, new Point(sx, 0), new Point(sx, h));
+                    }
+                }
 
-                        if (root != null)
+                for (int r = 0; r < rows; r++)
+                {
+                    double y0 = r * sectorPx;
+                    for (int j = 1; j < subDiv; j++)
+                    {
+                        double sy = y0 + j * subStepPx;
+                        if (sy <= 0 || sy >= h) continue;
+                        if (useHalo) dc.DrawLine(subHaloPen, new Point(0, sy), new Point(w, sy));
+                        dc.DrawLine(subPen, new Point(0, sy), new Point(w, sy));
+                    }
+                }
+
+                if (!_gridLabelsMode.StartsWith("Brak") && !_gridLabelsMode.StartsWith("Tylko") && sectorPx >= (subDiv == 4 ? 76.0 : 54.0))
+                {
+                    string[,] keypad3x3 = { { "7", "8", "9" }, { "4", "5", "6" }, { "1", "2", "3" } };
+                    string[,] quartersAbcd = { { "A", "B" }, { "C", "D" } };
+                    string[,] quartersNwSe = { { "NW", "NE" }, { "SW", "SE" } };
+                    string subCacheKey = $"SECSUB_{_subLabelTextColorHex}_{_subGridOpacity:0.00}";
+                    double subFontSz = (subDiv == 4 ? 7.8 : 8.6) * _fontScaleMultiplier;
+
+                    for (int r = 0; r < rows; r++)
+                    {
+                        double y0 = r * sectorPx;
+                        for (int c = 0; c < cols; c++)
                         {
-                            var usbElems = V34CleanSidebarAndHeaderEngine.GetLogicalTreeNodes(root);
-                            foreach (var cb in usbElems.OfType<ComboBox>())
+                            double x0 = c * sectorPx;
+                            for (int sr = 0; sr < subDiv; sr++)
                             {
-                                for (int i = cb.Items.Count - 1; i >= 0; i--)
+                                double cy = y0 + (sr + 0.5) * subStepPx;
+                                if (cy < 18 || cy > h - 14) continue;
+                                for (int sc = 0; sc < subDiv; sc++)
                                 {
-                                    string itemStr = cb.Items[i]?.ToString() ?? "";
-                                    if (V34CleanOpordDataEngine.IsGarbageFactionName(itemStr))
-                                    {
-                                        cb.Items.RemoveAt(i);
-                                    }
-                                }
-
-                                foreach (string fn in cleanFactionNames)
-                                {
-                                    bool exists = false;
-                                    foreach (var existing in cb.Items)
-                                    {
-                                        if (string.Equals(existing?.ToString(), fn, StringComparison.OrdinalIgnoreCase))
-                                        {
-                                            exists = true;
-                                            break;
-                                        }
-                                    }
-                                    if (!exists) cb.Items.Add(fn);
-                                }
-
-                                if (cb.SelectedItem == null && cb.Items.Count > 0)
-                                {
-                                    cb.SelectedIndex = 0;
+                                    double cx = x0 + (sc + 0.5) * subStepPx;
+                                    if (cx < 18 || cx > w - 14) continue;
+                                    string subLbl = isKeypad
+                                        ? keypad3x3[sr, sc]
+                                        : (isQuartersAbcd ? quartersAbcd[sr, sc] : (isQuartersNwSe ? quartersNwSe[sr, sc] : ((sr * 4 + sc + 1).ToString())));
+                                    DrawFastSubCellBadgeOnContext(dc, subLbl, cx, cy, subTextBrush, subBgBrush, subBoxBorderPen, subShadowBrush, subFontSz, subCacheKey);
                                 }
                             }
                         }
                     }
                 }
             }
-            catch { }
-        }
-    }
-    // [END_V34_CLEAN_USB_BRIDGE]
 
-    // [START_V34_STEP1_SHELL_FIXER]
-    public static class V34Step1ShellAndSidebarFixer
-    {
-        public static void AttachToMainWindow(Window win) { }
-        public static void ApplyAllStep1Fixes(Window win) { }
-        public static List<DependencyObject> CollectAllNodes(DependencyObject root) => V34CleanSidebarAndHeaderEngine.GetLogicalTreeNodes(root);
-    }
-    // [END_V34_STEP1_SHELL_FIXER]
-}
+            // 2. Glowne linie sektorow (pionowe A, B, C... i poziome 1, 2, 3...)
+            for (int c = 1; c <= cols; c++)
+            {
+                double sx = c * sectorPx;
+                if (sx <= 0 || sx >= w) continue;
+                if (useHalo) dc.DrawLine(mainHaloPen, new Point(sx, 0), new Point(sx, h));
+                dc.DrawLine(secMainPen, new Point(sx, 0), new Point(sx, h));
+            }
+
+            for (int r = 1; r <= rows; r++)
+            {
+                double sy = r * sectorPx;
+                if (sy <= 0 || sy >= h) continue;
+                if (useHalo) dc.DrawLine(mainHaloPen, new Point(0, sy), new Point(w, sy));
+                dc.DrawLine(secMainPen, new Point(0, sy), new Point(w, sy));
+            }
+
+            // 3. Kody sektorow wewnatrz pol (A1, B1, C2...)
+            if (_showSectorCornerCodes && sectorPx >= 34.0)
+            {
+                double codeFontSz = Math.Clamp(9.8 * _fontScaleMultiplier, 7.5, 16.0);
+                double offsetTop = _showSectorEdgeRulers ? 22.0 : 4.0;
+                double offsetLeft = _showSectorEdgeRulers ? 26.0 : 6.0;
+
+                for (int r = 0; r < rows; r++)
+                {
+                    double y0 = r * sectorPx;
+                    if (y0 > h - 18) break;
+                    string rowNumStr = (r + 1).ToString();
+                    for (int c = 0; c < cols; c++)
+                    {
+                        double x0 = c * sectorPx;
+                        if (x0 > w - 22) break;
+                        string colLetStr = GetSectorColumnLetters(c);
+                        double bx = x0 + (c == 0 ? offsetLeft : 6.0);
+                        double by = y0 + (r == 0 ? offsetTop : 4.0);
+                        if (bx + 24 < w && by + 16 < h)
+                        {
+                            DrawFastBadgeOnContext(dc, colLetStr + rowNumStr, bx, by, secMainBrush, codeFontSz, _mainGridOpacity, $"SECCODE_{secHex}_{_mainGridOpacity:0.00}");
+                        }
+                    }
+                }
+            }
+
+            // 4. Paski podzialki poziomej (A, B, C...) u gory oraz pionowej (1, 2, 3...) po lewej stronie arkusza mapy
+            if (_showSectorEdgeRulers)
+            {
+                const double topBarH = 19.0;
+                const double leftBarW = 22.0;
+                byte barAlpha = (byte)Math.Clamp((int)Math.Round(225 * _mainGridOpacity), 90, 245);
+                var barBgEven = GetCachedRgbaBrush(barAlpha, 6, 16, 20);
+                var barBgOdd = GetCachedRgbaBrush(barAlpha, 14, 34, 42);
+                var barBorderPen = GetCachedSolidPen($"SECRULER_PEN_{secHex}_{_mainGridOpacity:0.00}", secMainBrush, 1.1);
+                double rulerFontSz = Math.Clamp(9.5 * _fontScaleMultiplier, 7.5, 13.0);
+                string rulerCacheKey = $"SECRULER_TXT_{secHex}_{_mainGridOpacity:0.00}";
+
+                // Gorna listwa pozioma: A, B, C, D...
+                for (int c = 0; c < cols; c++)
+                {
+                    double x0 = c * sectorPx;
+                    if (x0 >= w) break;
+                    double segW = Math.Min(sectorPx, w - x0);
+                    if (segW < 12) continue;
+
+                    dc.DrawRectangle((c % 2 == 0) ? barBgEven : barBgOdd, barBorderPen, new Rect(x0, 0, segW, topBarH));
+                    string colLet = GetSectorColumnLetters(c);
+                    var ft = GetCachedGlyph(colLet, rulerFontSz, secMainBrush, rulerCacheKey);
+                    double tx = x0 + (segW - ft.Width) / 2.0;
+                    double ty = (topBarH - ft.Height) / 2.0;
+                    if (tx >= x0 + 1)
+                        dc.DrawText(ft, new Point(tx, ty));
+                }
+
+                // Lewa listwa pionowa: 1, 2, 3, 4...
+                for (int r = 0; r < rows; r++)
+                {
+                    double y0 = r * sectorPx;
+                    if (y0 >= h) break;
+                    double segH = Math.Min(sectorPx, h - y0);
+                    if (segH < 12) continue;
+
+                    dc.DrawRectangle((r % 2 == 0) ? barBgEven : barBgOdd, barBorderPen, new Rect(0, y0, leftBarW, segH));
+                    string rowNum = (r + 1).ToString();
+                    var ft = GetCachedGlyph(rowNum, rulerFontSz, secMainBrush, rulerCacheKey);
+                    double tx = (leftBarW - ft.Width) / 2.0;
+                    double ty = y0 + (segH - ft.Height) / 2.0;
+                    if (ty >= y0 + 1)
+                        dc.DrawText(ft, new Point(tx, ty));
+                }
+
+                if (w > 80 && h > 80)
+                {
+                    dc.DrawRectangle(GetCachedRgbaBrush(240, 8, 22, 28), barBorderPen, new Rect(0, 0, leftBarW, topBarH));
+                }
+            }
+        }
+
+        private static StackPanel BuildSection2GridAndColorsUI(Window win)
+        {
+            var sec2 = CreateSectionCard("2. SIATKA MGRS / SEKTOROWA (A,B,C / 1,2,3), ROZJA\u015ANIANIE LASU & KOLORY RGB");
+            sec2.Children.Add(TacticalConfigPanel.FieldBox("G\u0142\u00F3wny system wsp\u00F3\u0142rz\u0119dnych na mapie:", TacticalConfigPanel.ComboCtrl(new[] { "MGRS / UTM (Siatka wojskowa w metrach)", "Siatka Sektorowa (A1, B2, C3...)", "WGS84 (Stopnie geograficzne Lat/Lon)", "Brak siatki" }, _coordSystem, win, v => { _coordSystem = v; RedrawVectorsOnly(); })));
+            var subGridRow = new UniformGrid { Columns = 2 };
+            subGridRow.Children.Add(TacticalConfigPanel.FieldBox("Podzia\u0142 oczek MGRS:", TacticalConfigPanel.ComboCtrl(new[] { "Co 33 m (Keypad 1-9)", "Co 50 m (\u0106wiartki A,B,C,D)", "Brak podzia\u0142u (Tylko 100 m)", "Siatka co 250 m", "Siatka co 500 m" }, _subGridDivision, win, v => { _subGridDivision = v; RedrawVectorsOnly(); })));
+            subGridRow.Children.Add(TacticalConfigPanel.FieldBox("Opisy kratek:", TacticalConfigPanel.ComboCtrl(new[] { "MGRS + \u0106wiartki/Keypad", "Tylko g\u0142\u00F3wne linie MGRS", "Brak opis\u00F3w wewn\u0105trz" }, _gridLabelsMode, win, v => { _gridLabelsMode = v; RedrawVectorsOnly(); })));
+            sec2.Children.Add(subGridRow);
+
+            // PANEL DODATKOWEJ PODZIALKI SEKTOROWEJ (POZIOMO: A, B, C... | PIONOWO: 1, 2, 3...)
+            var sectorBox = new Border
+            {
+                Background = TacticalConfigPanel.BrushInputBg,
+                BorderBrush = TacticalConfigPanel.BrushAccent,
+                BorderThickness = new Thickness(1.2),
+                CornerRadius = new CornerRadius(6),
+                Padding = new Thickness(8, 7, 8, 7),
+                Margin = new Thickness(0, 4, 0, 6)
+            };
+            var sectorStack = new StackPanel();
+
+            var chkSectorOverlay = new CheckBox
+            {
+                Content = "\uD83D\uDCCF Dodatkowa podzia\u0142ka sektorowa (Poziomo: A, B, C... | Pionowo: 1, 2, 3...)",
+                IsChecked = _enableSectorGridOverlay,
+                Foreground = TacticalConfigPanel.BrushAccent,
+                FontWeight = FontWeights.Bold,
+                FontSize = 10,
+                Margin = new Thickness(0, 0, 0, 5),
+                Cursor = Cursors.Hand
+            };
+            chkSectorOverlay.Checked += (s, e) => { _enableSectorGridOverlay = true; if (!_isRebuildingMapControls) TacticalConfigPanel.MarkDirty(); RedrawVectorsOnly(); };
+            chkSectorOverlay.Unchecked += (s, e) => { _enableSectorGridOverlay = false; if (!_isRebuildingMapControls) TacticalConfigPanel.MarkDirty(); RedrawVectorsOnly(); };
+            sectorStack.Children.Add(chkSectorOverlay);
+
+            sectorStack.Children.Add(new TextBlock
+            {
+                Text = "Rozmiar pojedynczego sektora w metrach (wpisz lub wybierz preset):",
+                Foreground = TacticalConfigPanel.BrushMutedText,
+                FontSize = 9.5,
+                Margin = new Thickness(0, 0, 0, 3)
+            });
+
+            var secSizeInputRow = new Grid { Margin = new Thickness(0, 0, 0, 4) };
+            secSizeInputRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            secSizeInputRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(26) });
+            secSizeInputRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(90) });
+
+            _sectorSizeInputBox = (TextBox)TacticalConfigPanel.TextCtrl(_sectorSizeMeters.ToString(), v => { });
+            Grid.SetColumn(_sectorSizeInputBox, 0);
+            secSizeInputRow.Children.Add(_sectorSizeInputBox);
+
+            var unitMLbl = new TextBlock { Text = "m", Foreground = TacticalConfigPanel.BrushAccent, FontWeight = FontWeights.Bold, FontSize = 11, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
+            Grid.SetColumn(unitMLbl, 1);
+            secSizeInputRow.Children.Add(unitMLbl);
+
+            var btnApplySecSize = MakeActionButton("Ustaw rozmiar", true, () =>
+            {
+                if (int.TryParse(_sectorSizeInputBox.Text.Trim(), out int sm))
+                {
+                    TacticalConfigPanel.MarkDirty();
+                    ApplySectorSizeMeters(sm);
+                }
+            });
+            btnApplySecSize.Height = 25;
+            Grid.SetColumn(btnApplySecSize, 2);
+            secSizeInputRow.Children.Add(btnApplySecSize);
+            sectorStack.Children.Add(secSizeInputRow);
+
+            _sectorSizePresetButtons.Clear();
+            var secPresetsGrid = new UniformGrid { Columns = 6, Margin = new Thickness(0, 0, 0, 5) };
+            foreach (int presetM in new[] { 25, 50, 100, 150, 200, 300 })
+            {
+                int capturedM = presetM;
+                var b = MakeActionButton($"{capturedM} m", capturedM == _sectorSizeMeters, () =>
+                {
+                    TacticalConfigPanel.MarkDirty();
+                    ApplySectorSizeMeters(capturedM);
+                });
+                b.Height = 22;
+                b.Margin = new Thickness(1);
+                b.FontSize = 9;
+                _sectorSizePresetButtons.Add(b);
+                secPresetsGrid.Children.Add(b);
+            }
+            sectorStack.Children.Add(secPresetsGrid);
+
+            var secSubDivCombo = TacticalConfigPanel.ComboCtrl(
+                new[]
+                {
+                    "Keypad 1-9 (3\u00D73)",
+                    "\u0106wiartki A, B, C, D (2\u00D72)",
+                    "\u0106wiartki NW, NE, SW, SE (2\u00D72)",
+                    "Siatka 4\u00D74 (16 podsektor\u00F3w)",
+                    "Brak podzia\u0142u (Tylko sektory A1, B2...)"
+                },
+                _sectorSubDivision,
+                win,
+                v =>
+                {
+                    _sectorSubDivision = v;
+                    RedrawVectorsOnly();
+                });
+            sectorStack.Children.Add(TacticalConfigPanel.FieldBox("Podzia\u0142 wewn\u0105trz ka\u017Cdego sektora (\u0106wiartki / Keypad):", secSubDivCombo));
+
+            var secFlagsGrid = new UniformGrid { Columns = 2, Margin = new Thickness(0, 2, 0, 0) };
+            var chkEdgeRulers = new CheckBox
+            {
+                Content = "Listwy A,B,C / 1,2,3 na kraw\u0119dzi",
+                IsChecked = _showSectorEdgeRulers,
+                Foreground = Brushes.White,
+                FontSize = 9.2,
+                Margin = new Thickness(0, 2, 4, 0),
+                Cursor = Cursors.Hand
+            };
+            chkEdgeRulers.Checked += (s, e) => { _showSectorEdgeRulers = true; if (!_isRebuildingMapControls) TacticalConfigPanel.MarkDirty(); RedrawVectorsOnly(); };
+            chkEdgeRulers.Unchecked += (s, e) => { _showSectorEdgeRulers = false; if (!_isRebuildingMapControls) TacticalConfigPanel.MarkDirty(); RedrawVectorsOnly(); };
+
+            var chkCornerCodes = new CheckBox
+            {
+                Content = "Kody A1, B2 wewn\u0105trz sektor\u00F3w",
+                IsChecked = _showSectorCornerCodes,
+                Foreground = Brushes.White,
+                FontSize = 9.2,
+                Margin = new Thickness(4, 2, 0, 0),
+                Cursor = Cursors.Hand
+            };
+            chkCornerCodes.Checked += (s, e) => { _showSectorCornerCodes = true; if (!_isRebuildingMapControls) TacticalConfigPanel.MarkDirty(); RedrawVectorsOnly(); };
+            chkCornerCodes.Unchecked += (s, e) => { _showSectorCornerCodes = false; if (!_isRebuildingMapControls) TacticalConfigPanel.MarkDirty(); RedrawVectorsOnly(); };
+
+            secFlagsGrid.Children.Add(chkEdgeRulers);
+            secFlagsGrid.Children.Add(chkCornerCodes);
+            sectorStack.Children.Add(secFlagsGrid);
+
+            sectorBox.Child = sectorStack;
+            sec2.Children.Add(sectorBox);
+
+            UIElement MakeRgbBtn(string fTitle, string dTitle, Func<string> getter, Action<string> setter)
+            {
+                string hex = getter();
+                var sw = new Border { Width = 12, Height = 12, CornerRadius = new CornerRadius(3), Background = TacticalConfigPanel.BrushFromHex(hex, Colors.White), BorderBrush = Brushes.White, BorderThickness = new Thickness(1), Margin = new Thickness(0, 0, 5, 0), VerticalAlignment = VerticalAlignment.Center };
+                var lbl = new TextBlock { Text = hex.ToUpperInvariant(), Foreground = Brushes.White, FontSize = 9.5, FontWeight = FontWeights.Bold, VerticalAlignment = VerticalAlignment.Center };
+                var st = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Center }; st.Children.Add(sw); st.Children.Add(lbl);
+                var btn = new Button { Content = st, Height = 25, Background = TacticalConfigPanel.BrushInputBg, BorderBrush = TacticalConfigPanel.BrushAccent, BorderThickness = new Thickness(1), Cursor = Cursors.Hand };
+                btn.Click += (s, e) => { string p = TacticalConfigPanel.ShowRgbColorPickerDialog(win, dTitle, getter()); if (!string.IsNullOrEmpty(p)) { setter(p); sw.Background = TacticalConfigPanel.BrushFromHex(p, Colors.White); lbl.Text = p.ToUpperInvariant(); GlyphCache.Clear(); TacticalConfigPanel.MarkDirty(); _fastOverlayRenderer?.InvalidateVisual(); } };
+                return TacticalConfigPanel.FieldBox(fTitle, btn);
+            }
+
+            var rgbGrid = new UniformGrid { Columns = 2, Margin = new Thickness(0, 2, 0, 4) };
+            rgbGrid.Children.Add(MakeRgbBtn("Kolor cyfr Keypad/\u0106wiartek (RGB):", "Kolor cyfr Keypad (1-9) / \u0106wiartek (A-D)", () => _subLabelTextColorHex, v => _subLabelTextColorHex = v));
+            rgbGrid.Children.Add(MakeRgbBtn("Kolor t\u0142a Keypad/\u0106wiartek (RGB):", "Kolor t\u0142a pod cyframi Keypad / \u0106wiartek", () => _subLabelBgColorHex, v => _subLabelBgColorHex = v));
+            rgbGrid.Children.Add(MakeRgbBtn("Kolor linii wewn\u0119trznych (RGB):", "Kolor linii podzia\u0142ki Keypad / \u0106wiartek", () => _subGridLineColorHex, v => _subGridLineColorHex = v));
+            rgbGrid.Children.Add(MakeRgbBtn("Kolor siatki g\u0142\u00F3wnej / Sektor\u00F3w (RGB):", "Kolor g\u0142\u00F3wnych linii MGRS / Sektor\u00F3w", () => _mainGridColorHex, v => { _mainGridColorHex = v; _sectorGridColorHex = v; }));
+            sec2.Children.Add(rgbGrid);
+
+            sec2.Children.Add(MakeSliderRow("Grubo\u015B\u0107 linii siatki (g\u0142\u00F3wnej i pomocniczej):", 0.5, 3.0, _gridThicknessMultiplier, v => $"{v:0.1}x", v => { _gridThicknessMultiplier = Math.Round(v, 1); _fastOverlayRenderer?.InvalidateVisual(); }));
+            sec2.Children.Add(MakeSliderRow("Rozmiar / grubo\u015B\u0107 czcionki wsp\u00F3\u0142rz\u0119dnych (MGRS, Sektory i Keypad):", 0.7, 2.0, _fontScaleMultiplier, v => $"{v:0.1}x", v => { _fontScaleMultiplier = Math.Round(v, 1); GlyphCache.Clear(); _fastOverlayRenderer?.InvalidateVisual(); }));
+            sec2.Children.Add(MakeSliderRow("Widoczno\u015B\u0107 (alfa) g\u0142\u00F3wnych linii i opis\u00F3w (MGRS / Sektory):", 0.05, 1.0, _mainGridOpacity, v => $"{(int)Math.Round(v * 100)}%", v => { _mainGridOpacity = Math.Round(v, 2); _fastOverlayRenderer?.InvalidateVisual(); }));
+            sec2.Children.Add(MakeSliderRow("Widoczno\u015B\u0107 (alfa) podzia\u0142ki wewn\u0119trznej (Keypad 1-9 / \u0106wiartki):", 0.0, 1.0, _subGridOpacity, v => $"{(int)Math.Round(v * 100)}%", v => { _subGridOpacity = Math.Round(v, 2); _fastOverlayRenderer?.InvalidateVisual(); }));
+            sec2.Children.Add(MakeSliderRow("Krycie t\u0142a (kasetonu) pod cyframi Keypad / \u0106wiartek:", 0.0, 1.0, _subLabelBgOpacity, v => $"{(int)Math.Round(v * 100)}%", v => { _subLabelBgOpacity = Math.Round(v, 2); _fastOverlayRenderer?.InvalidateVisual(); }));
+
+            sec2.Children.Add(MakeSliderRow("\u2600\uFE0F Rozja\u015Bnienie podk\u0142adu mapy (Ciemny las / Pod wydruk):", 0.0, 0.85, _mapBrightnessBoost, v => $"+{(int)Math.Round(v * 100)}%", v =>
+            {
+                _mapBrightnessBoost = Math.Round(v, 2);
+                TriggerLiveBrightnessRefresh();
+            }));
+
+            sec2.Children.Add(MakeSliderRow("Przyciemnienie podk\u0142adu mapy (wi\u0119kszy kontrast pod siatk\u0119):", 0.0, 0.65, _mapDimmerOpacity, v => $"{(int)Math.Round(v * 100)}%", v =>
+            {
+                _mapDimmerOpacity = Math.Round(v, 2);
+                if (_dimmerRect != null) _dimmerRect.Opacity = _mapDimmerOpacity;
+            }));
+
+            var haloRow = new UniformGrid { Columns = 2 };
+            haloRow.Children.Add(TacticalConfigPanel.FieldBox("Obrys linii (Halo):", TacticalConfigPanel.ComboCtrl(new[] { "Pe\u0142ny czarny obrys", "P\u00F3\u0142przezroczysty obrys", "Brak obrysu" }, _gridHaloMode, win, v => { _gridHaloMode = v; _fastOverlayRenderer?.InvalidateVisual(); })));
+            haloRow.Children.Add(TacticalConfigPanel.FieldBox("Styl opis\u00F3w i cyfr:", TacticalConfigPanel.ComboCtrl(new[] { "Kaseton (Kolor t\u0142a RGB)", "Tylko obrys Halo", "Czysty tekst" }, _labelBgStyle, win, v => { _labelBgStyle = v; _fastOverlayRenderer?.InvalidateVisual(); })));
+            sec2.Children.Add(haloRow);
+            return sec2;
+        }
+//===END_SECTOR_BLOCKS===

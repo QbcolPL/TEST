@@ -1,1 +1,1 @@
-Field TAK Hub Auto-Build Trigger UTC: 2026-11-02T08:42:16.1459703Z | RunId: 43fcb9a3510049e6a5956d364b20f5bf
+Field TAK Hub Sector Grid A,B,C / 1,2,3 Build Trigger UTC: 2026-11-02T09:54:57.5553118Z | RunId: 51e75a14e73b4e859a65d73b64bb1122
