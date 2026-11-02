@@ -8,6 +8,7 @@ using Xunit;
 
 namespace FieldTakHub.Builder.Tests;
 
+[Collection("SequentialBuilderTests")]
 public class BuilderCoreTests
 {
     [Fact]

@@ -1149,7 +1149,7 @@ namespace FieldTakHub.Builder.Services
         private static bool _isApplyingSimplification;
 
         private static Border _activeFactionHubBanner;
-        private static ComboBox _activeFactionCombo;
+        // removed unused _activeFactionCombo
         private static TextBlock _auditStatusLabel;
         private static string _selectedActiveFactionName = "";
 
@@ -1510,7 +1510,7 @@ namespace FieldTakHub.Builder.Services
         // =========================================================================
         private static TextBlock _bannerTitleBlock;
         private static TextBlock _bannerDescBlock;
-        private static Button _btnBuildSingleFaction;
+        // removed unused _btnBuildSingleFaction
         private static Button _btnShowActiveQr;
         private static Button _btnOpenSourceDir;
         private static Button _btnBuildAllFactions;

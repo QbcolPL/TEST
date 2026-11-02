@@ -7,6 +7,7 @@ using FieldTakHub.Builder.Services;
 
 namespace FieldTakHub.Builder.Tests
 {
+    [Collection("SequentialBuilderTests")]
     public sealed class V34CleanRefactorTests
     {
         [Fact]
