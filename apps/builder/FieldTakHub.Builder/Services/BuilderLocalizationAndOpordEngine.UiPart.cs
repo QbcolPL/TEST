@@ -1840,6 +1840,17 @@ namespace FieldTakHub.Builder.Services
 
                 // 3. Sekcja III.E Tabela lacznosci: Automatyczne pobieranie kanalow z Generatora Stron + opcjonalna edycja reczna na "ptaszek"
                 RebuildCommunicationsTableSection(w, mainOpordStack, activeFactionName, activeDay, rebuildCallback);
+                foreach (var smBtn in V34CleanSidebarAndHeaderEngine.GetLogicalTreeNodes(mainOpordStack).OfType<Button>())
+                {
+                    string cStr = (smBtn.Content?.ToString() ?? "").Trim();
+                    if (cStr == "-" || cStr == "\u2212" || cStr == "\u2715" || cStr == "\u2716" || (smBtn.Width >= 20 && smBtn.Width <= 38))
+                    {
+                        smBtn.Padding = new Thickness(0);
+                        smBtn.HorizontalContentAlignment = HorizontalAlignment.Center;
+                        smBtn.VerticalContentAlignment = VerticalAlignment.Center;
+                        if (cStr == "-") smBtn.Content = "\u2212";
+                    }
+                }
 
                 // 4. Zalacznik 3 i integracja eksportu
                 if (model != null && activeDay != null)
@@ -2309,21 +2320,32 @@ namespace FieldTakHub.Builder.Services
 
                     if (isManual)
                     {
-                        var btnDel = new Button
+                        var btnDel = new Border
                         {
-                            Content = "\u2212",
                             Width = 26,
-                            Height = 26,
+                            Height = 24,
+                            CornerRadius = new CornerRadius(5),
                             Background = TacticalConfigPanel.BrushRedMinus,
-                            Foreground = Brushes.White,
                             BorderBrush = Brushes.White,
                             BorderThickness = new Thickness(1),
-                            FontWeight = FontWeights.Bold,
                             Cursor = Cursors.Hand,
-                            ToolTip = "Usu\u0144 ten kana\u0142"
+                            VerticalAlignment = VerticalAlignment.Center,
+                            HorizontalAlignment = HorizontalAlignment.Center,
+                            ToolTip = "Usu\u0144 ten kana\u0142",
+                            Child = new TextBlock
+                            {
+                                Text = "\u2212",
+                                Foreground = Brushes.White,
+                                FontSize = 15,
+                                FontWeight = FontWeights.Bold,
+                                HorizontalAlignment = HorizontalAlignment.Center,
+                                VerticalAlignment = VerticalAlignment.Center,
+                                Margin = new Thickness(0, -2, 0, 0)
+                            }
                         };
-                        btnDel.Click += (_, __) =>
+                        btnDel.MouseLeftButtonDown += (_, e) =>
                         {
+                            e.Handled = true;
                             if (channels.Count > 1)
                             {
                                 channels.Remove(chItem);
