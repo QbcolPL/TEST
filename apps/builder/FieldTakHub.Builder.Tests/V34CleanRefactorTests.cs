@@ -9,11 +9,12 @@ namespace FieldTakHub.Builder.Tests
     public sealed class V34CleanRefactorTests
     {
         [Fact]
-        public void SharedFolderStructure_ShouldCreateApkPluginsMapsAndOutDirectories()
+        public void SharedFolderStructure_ShouldCreateAtakMeshtasticPluginsMapsAndOutDirectories()
         {
             string wspolneDir = V34CleanFtakAndFactionEngine.EnsureSharedFolderStructure();
             Assert.True(Directory.Exists(wspolneDir));
-            Assert.True(Directory.Exists(Path.Combine(wspolneDir, "apk")));
+            Assert.True(Directory.Exists(Path.Combine(wspolneDir, "ATAK")));
+            Assert.True(Directory.Exists(Path.Combine(wspolneDir, "Meshtastic")));
             Assert.True(Directory.Exists(Path.Combine(wspolneDir, "plugins")));
             Assert.True(Directory.Exists(Path.Combine(wspolneDir, "maps")));
 
@@ -37,7 +38,6 @@ namespace FieldTakHub.Builder.Tests
         [Fact]
         public void MapStudioBridge_ShouldConvertCoordinatesToMilitaryMgrs()
         {
-            // Zbytków / Strumień: 49°50'58.0"N 18°48'45.6"E
             double lat = 49.849444;
             double lon = 18.812667;
 

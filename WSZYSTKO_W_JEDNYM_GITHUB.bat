@@ -5,7 +5,7 @@ cd /d "%~dp0"
 set "BAT_FILE=%~f0"
 
 echo ============================================================================
-echo [1/3] Wyszukiwanie projektu, aplikowanie poprawek UI i odtwarzanie Workflow...
+echo [1/3] Czyszczenie bledu CS1529, aplikowanie poprawek UI i aktualizacja Workflow...
 echo ============================================================================
 powershell -NoProfile -ExecutionPolicy Bypass -Command "Add-Type -TypeDefinition ([System.Text.RegularExpressions.Regex]::Split([System.IO.File]::ReadAllText([System.Environment]::GetEnvironmentVariable('BAT_FILE'), [System.Text.Encoding]::UTF8), '//===' + 'AIO_GITHUB_ENGINE_CS===')[1]); [FthAllInOneGitHubEngine]::Run()"
 
@@ -18,7 +18,7 @@ if errorlevel 1 (
 
 echo.
 echo ============================================================================
-echo [SUKCES] Kod oraz plik workflow zostaly wyslane na GitHub (QbcolPL/TEST)!
+echo [SUKCES] Poprawiony kod zostal wyslany na GitHub (QbcolPL/TEST)!
 echo Kompilacja na GitHub Actions zostala uruchomiona.
 echo ============================================================================
 pause
@@ -56,18 +56,18 @@ public static class FthAllInOneGitHubEngine
             }
         }
 
-        // 1. Zawsze odtworz czysty, poprawny plik .github/workflows/windows-builder.yml (.NET 10.0)
+        // 1. Odtworz czysty workflow .github/workflows/windows-builder.yml (.NET 10.0)
         EnsureCleanGitHubActionsWorkflows(targetDir, utf8NoBom);
 
-        // 2. Zaaplikuj wszystkie poprawki UI i logiki Generatora Paczek .ftak
+        // 2. Napraw CS1529 na koncu BuilderCoreSidebarAndProjectEngine.cs i zaaplikuj wszystkie poprawki UI
         ApplyAllPackageGeneratorAndUiFixes(targetDir, utf8NoBom);
 
-        // 3. Zapisz unikalny znacznik wyzwalajacy, aby kazde uruchomienie skryptu tworzylo nowy commit dla GitHub Actions
+        // 3. Zapisz unikalny znacznik wyzwalajacy dla GitHub Actions
         string triggerPath = Path.Combine(targetDir, ".fth_build_trigger.txt");
         string triggerContent = "Field TAK Hub Auto-Build Trigger UTC: " + DateTime.UtcNow.ToString("O") + " | RunId: " + Guid.NewGuid().ToString("N") + "\n";
         File.WriteAllText(triggerPath, triggerContent, utf8NoBom);
 
-        // 4. Zainicjalizuj repozytorium Git (jesli brak .git), podepnij remote origin i wypchnij na GitHub Actions
+        // 4. Wyslij zmiany na GitHub i uruchom GitHub Actions
         PushAndTriggerGitHubActions(targetDir);
     }
 
@@ -141,13 +141,10 @@ public static class FthAllInOneGitHubEngine
     {
         string builderDir = Path.Combine(targetDir, @"apps\builder\FieldTakHub.Builder");
         string servicesDir = Path.Combine(builderDir, "Services");
+        string testsDir = Path.Combine(targetDir, @"apps\builder\FieldTakHub.Builder.Tests");
 
         // -------------------------------------------------------------------------
-        // A. MainWindow.xaml:
-        //    - Usuniecie luki 340px po lewej (ColumnDefinition Width="0")
-        //    - Usuniecie paska gornego (RowDefinition Height="0", Visibility="Collapsed")
-        //    - Kompaktowa wysokosc 6 kafelkow (MinHeight="110")
-        //    - Automatyczne rozszerzanie pol CloudPackageBox, CloudUrlBox, UrlText (MinHeight="36" Height="Auto" MaxHeight="140")
+        // A. MainWindow.xaml
         // -------------------------------------------------------------------------
         string xamlPath = Path.Combine(builderDir, "MainWindow.xaml");
         if (File.Exists(xamlPath))
@@ -204,8 +201,7 @@ public static class FthAllInOneGitHubEngine
         }
 
         // -------------------------------------------------------------------------
-        // B. TacticalMapGeneratorView.cs:
-        //    Usuniecie 46px paska gornego i cyjanowej linii (masterGrid.RowDefinitions[0] = 0, navBorder Height=0, Opacity=0)
+        // B. TacticalMapGeneratorView.cs
         // -------------------------------------------------------------------------
         string mapGenPath = Path.Combine(servicesDir, "TacticalMapGeneratorView.cs");
         if (File.Exists(mapGenPath))
@@ -233,15 +229,11 @@ public static class FthAllInOneGitHubEngine
             }
 
             File.WriteAllText(mapGenPath, mg, utf8NoBom);
-            Console.WriteLine("[OK] Usunieto gorny pasek startowy i linie cyjanowa w TacticalMapGeneratorView.cs.");
+            Console.WriteLine("[OK] Zaktualizowano TacticalMapGeneratorView.cs.");
         }
 
         // -------------------------------------------------------------------------
-        // C. BuilderUiSimplifier.cs:
-        //    Karta "Generator paczek .ftak" z dokladnie 3 przyciskami:
-        //    1. Dystrybucja LAN/WIFI Hotspot
-        //    2. Wspolny folder Stron
-        //    3. Buduj Wszystkie Strony
+        // C. BuilderUiSimplifier.cs (Karta "Generator paczek .ftak" z 3 przyciskami)
         // -------------------------------------------------------------------------
         string simpPath = Path.Combine(servicesDir, "BuilderUiSimplifier.cs");
         if (File.Exists(simpPath))
@@ -420,15 +412,12 @@ public static class FthAllInOneGitHubEngine
         ";
                 simp = simp.Substring(0, injStart) + newAuditBarMethods + simp.Substring(syncEnd);
                 File.WriteAllText(simpPath, simp, utf8NoBom);
-                Console.WriteLine("[OK] Zaktualizowano karte 'Generator paczek .ftak' (3 przyciski) w BuilderUiSimplifier.cs.");
+                Console.WriteLine("[OK] Zaktualizowano BuilderUiSimplifier.cs.");
             }
         }
 
         // -------------------------------------------------------------------------
-        // D. TacticalConfigPanel.cs:
-        //    - Naprawa nieskonczonej rekurencji ShowDialogWithSidebarSupport
-        //    - Aktywny przycisk "Pliki Strony" i bezawaryjny "Plakat + QR"
-        //    - Unikalne kolory RGB dla nowych stron konfliktu
+        // D. TacticalConfigPanel.cs
         // -------------------------------------------------------------------------
         string tcpPath = Path.Combine(servicesDir, "TacticalConfigPanel.cs");
         if (File.Exists(tcpPath))
@@ -446,249 +435,132 @@ public static class FthAllInOneGitHubEngine
                 string[] fullPalette = { ""#2ECC71"", ""#F5B82E"", ""#9B59B6"", ""#FF9F43"", ""#1FE0C5"", ""#E84393"", ""#A3CB38"", ""#00CEC9"", ""#54A0FF"", ""#FF6B6B"", ""#5F27CD"", ""#10AC84"" };
                 string hex = fullPalette.FirstOrDefault(p => !usedHexes.Contains(p.ToUpperInvariant())) ?? $""#{(nextNum * 67) % 200 + 40:X2}{(nextNum * 113) % 200 + 40:X2}{(nextNum * 179) % 200 + 40:X2}"";");
 
-            int bottomBtnsStart = tcp.IndexOf("var bottomBtnsGrid = new UniformGrid { Columns = 3 };", StringComparison.Ordinal);
-            int bottomBtnsEnd = tcp.IndexOf("outerCard.Child = mainStack;", StringComparison.Ordinal);
-            if (bottomBtnsStart > 0 && bottomBtnsEnd > bottomBtnsStart)
-            {
-                string newBottomBtnsCode = @"var bottomBtnsGrid = new UniformGrid { Columns = 3 };
-            var btnFolders = new Button
-            {
-                Content = ""\uD83D\uDCC2 Pliki Strony"",
-                Height = 30,
-                Margin = new Thickness(0, 0, 4, 0),
-                Background = new SolidColorBrush(Color.FromRgb(18, 46, 56)),
-                Foreground = Brushes.White,
-                BorderBrush = BrushAccent,
-                BorderThickness = new Thickness(1.2),
-                FontSize = 10.5,
-                FontWeight = FontWeights.Bold,
-                IsEnabled = true,
-                Cursor = Cursors.Hand
-            };
-            var btnPoster = new Button
-            {
-                Content = ""\uD83D\uDDA8\uFE0F Plakat + QR"",
-                Height = 30,
-                Margin = new Thickness(2, 0, 2, 0),
-                Background = new SolidColorBrush(Color.FromRgb(22, 54, 66)),
-                Foreground = Brushes.White,
-                BorderBrush = BrushAccent,
-                BorderThickness = new Thickness(1.2),
-                FontSize = 10.5,
-                FontWeight = FontWeights.Bold,
-                IsEnabled = true,
-                Cursor = Cursors.Hand
-            };
-            var btnBuildAll = new Button
-            {
-                Content = ""\u26A1 Buduj strony (.ftak)"",
-                Height = 30,
-                Margin = new Thickness(4, 0, 0, 0),
-                Background = BrushButtonAccent,
-                Foreground = BrushDarkFg,
-                BorderThickness = new Thickness(0),
-                FontSize = 10.5,
-                FontWeight = FontWeights.Bold,
-                IsEnabled = true,
-                Cursor = Cursors.Hand
-            };
-
-            btnFolders.Click += async (_, __) =>
-            {
-                try
-                {
-                    BuilderCoreSidebarAndProjectEngine.EnsureUnifiedSourceDirectoryStructure(win);
-                    string srcDir = GetPrimarySourceDirectory(win);
-                    string parentDir = Path.GetDirectoryName(Path.TrimEndingDirectorySeparator(srcDir)) ?? AppDomain.CurrentDomain.BaseDirectory;
-                    string safeFac = SanitizeFileName(fac.Name).ToUpperInvariant();
-                    string facOutDir = Path.Combine(parentDir, ""out"", safeFac);
-                    Directory.CreateDirectory(facOutDir);
-
-                    var sides = _factions.Select(f => (SanitizeFileName(f.Name).ToLowerInvariant(), f.ColorHex)).ToList();
-                    await Task.Run(() => { EnsureFactionFoldersInitialized(srcDir, sides); WriteConfigsToDirectory(srcDir, fac); });
-                    await ForceSizeUpdateAsync(win);
-                    SaveSessionStateBackground(win);
-
-                    meshStatusTxt.Text = $""\u2713 Otwarto folder plik\u00F3w strony {fac.Name}: out\\{safeFac}\\"";
-                    meshStatusTxt.Foreground = BrushAccent;
-                    TryOpenFolderInExplorer(facOutDir);
-                }
-                catch { }
-            };
-            btnPoster.Click += async (_, __) =>
-            {
-                try
-                {
-                    btnPoster.IsEnabled = false;
-                    await ExportSafezonePosterForFactionAsync(win, fac);
-                }
-                catch { }
-                finally
-                {
-                    btnPoster.IsEnabled = true;
-                }
-            };
-            btnBuildAll.Click += async (_, __) =>
-            {
-                try
-                {
-                    btnBuildAll.IsEnabled = false;
-                    await CleanFactionPackageEngine.BuildIsolatedFactionPackagesAsync(win, fac.Name, showQrModalAfter: false);
-                }
-                catch { }
-                finally
-                {
-                    btnBuildAll.IsEnabled = true;
-                }
-            };
-
-            bottomBtnsGrid.Children.Add(btnFolders);
-            bottomBtnsGrid.Children.Add(btnPoster);
-            bottomBtnsGrid.Children.Add(btnBuildAll);
-            mainStack.Children.Add(bottomBtnsGrid);
-
-            ";
-                tcp = tcp.Substring(0, bottomBtnsStart) + newBottomBtnsCode + tcp.Substring(bottomBtnsEnd);
-            }
-
-            int expPosterStart = tcp.IndexOf("private static async Task ExportSafezonePosterForFactionAsync", StringComparison.Ordinal);
-            int renderQrStart = tcp.IndexOf("private static void RenderStandaloneQrPng", StringComparison.Ordinal);
-            if (expPosterStart > 0 && renderQrStart > expPosterStart)
-            {
-                string safeExportPosterMethod = @"private static async Task ExportSafezonePosterForFactionAsync(Window win, FactionProfileModel fac)
-        {
-            try
-            {
-                SaveSessionStateBackground(win);
-                BuilderCoreSidebarAndProjectEngine.EnsureUnifiedSourceDirectoryStructure(win);
-                string sourceDir = GetPrimarySourceDirectory(win);
-                string eventName = GetEventNameFromWindow(win);
-                string parentDir = Path.GetDirectoryName(Path.TrimEndingDirectorySeparator(sourceDir)) ?? AppDomain.CurrentDomain.BaseDirectory;
-                string cleanName = SanitizeFileName(fac.Name).ToUpperInvariant();
-                string outDir = Path.Combine(parentDir, ""out"", cleanName);
-                Directory.CreateDirectory(outDir);
-
-                string posterOutPath = Path.Combine(outDir, $""Plakat_Safezone_A4_{eventName}_{cleanName}.png"");
-                string ftakPath = Path.Combine(outDir, $""{eventName}_{cleanName}.ftak"");
-
-                string sha256 = await Task.Run(() =>
-                {
-                    WriteConfigsToDirectory(sourceDir, fac);
-                    BuildFilteredFactionFtakArchive(sourceDir, ftakPath, fac, eventName);
-                    using var sha = SHA256.Create();
-                    using var stream = File.OpenRead(ftakPath);
-                    return Convert.ToHexString(sha.ComputeHash(stream));
-                });
-
-                string qrPayload = !string.IsNullOrWhiteSpace(fac.EnrollmentUri)
-                    ? fac.EnrollmentUri
-                    : $""ftak://provision?event={Uri.EscapeDataString(eventName)}&faction={Uri.EscapeDataString(cleanName)}&channel={Uri.EscapeDataString(fac.ChannelName)}&sha256={sha256.Substring(0, Math.Min(16, sha256.Length))}"";
-
-                RenderStandaloneQrPng(Path.Combine(outDir, $""QR_{eventName}_{cleanName}.png""), qrPayload);
-                RenderSafezoneA4PosterPng(posterOutPath, eventName, fac, qrPayload, sha256);
-
-                if (File.Exists(posterOutPath))
-                {
-                    try { Process.Start(new ProcessStartInfo { FileName = posterOutPath, UseShellExecute = true }); } catch { }
-                }
-                TryOpenFolderInExplorer(outDir);
-            }
-            catch (Exception ex)
-            {
-                MessageBox.Show(""B\u0142\u0105d generowania Plakatu + QR: "" + ex.Message, ""Field TAK Hub"", MessageBoxButton.OK, MessageBoxImage.Warning);
-            }
-        }
-
-        ";
-                tcp = tcp.Substring(0, expPosterStart) + safeExportPosterMethod + tcp.Substring(renderQrStart);
-            }
-
             File.WriteAllText(tcpPath, tcp, utf8NoBom);
-            Console.WriteLine("[OK] Zaktualizowano TacticalConfigPanel.cs ('Pliki Strony', 'Plakat + QR', unikalne kolory RGB).");
+            Console.WriteLine("[OK] Zaktualizowano TacticalConfigPanel.cs.");
         }
 
         // -------------------------------------------------------------------------
-        // E. BuilderCoreSidebarAndProjectEngine.cs & MainWindow.xaml.cs:
-        //    - Poszerzenie paska bocznego z 255 do 272 px (brak ucinania napisow)
-        //    - Wylaczenie UpdateSidebarIconsAndCollapseButton (zachowanie oryginalnych ikon SVG po minimalizacji)
-        //    - Oczyszczenie ApplyFactionAndPackageFixes z dublowania przyciskow Pliki Strony / Plakat + QR
+        // E. BuilderCoreSidebarAndProjectEngine.cs — NAPRAWA BLEDU CS1529
+        //    Odciecie nadmiarowego bloku //===V34_UPDATED_TESTS_STEP2_CS=== z konca pliku
         // -------------------------------------------------------------------------
         string corePath = Path.Combine(servicesDir, "BuilderCoreSidebarAndProjectEngine.cs");
         if (File.Exists(corePath))
         {
             string core = File.ReadAllText(corePath, Encoding.UTF8);
 
-            // Szerokosc paska bocznego 272px w trybie rozwinietym i 52px w trybie zwinietym
-            core = core.Replace("double targetWidth = _isSidebarCollapsed ? 42.0 : 255.0;", "double targetWidth = _isSidebarCollapsed ? 52.0 : 272.0;");
-            core = core.Replace("_rootSidebarColumnDef = new ColumnDefinition { Width = new GridLength(255) };", "_rootSidebarColumnDef = new ColumnDefinition { Width = new GridLength(272) };");
-            core = core.Replace("Tag = \"FTH_TACTICAL_SIDEBAR_V31\",\r\n                Width = 255,", "Tag = \"FTH_TACTICAL_SIDEBAR_V31\",\r\n                Width = 272,");
-            core = core.Replace("Tag = \"FTH_TACTICAL_SIDEBAR_V31\",\n                Width = 255,", "Tag = \"FTH_TACTICAL_SIDEBAR_V31\",\n                Width = 272,");
-
-            // Wylacz UpdateSidebarIconsAndCollapseButton(w), ktore zamienialo ikony SVG po minimalizacji na znak '<'
-            core = core.Replace("UpdateSidebarIconsAndCollapseButton(w);", "// UpdateSidebarIconsAndCollapseButton(w);");
-
-            // Dodaj podfoldery ATAK i Meshtastic we wspolnym katalogu
-            if (!core.Contains(@"Directory.CreateDirectory(Path.Combine(sourceDir, ""ATAK""));"))
+            int strayTestMarker = core.IndexOf("//===V34_UPDATED_TESTS_STEP2_CS===", StringComparison.Ordinal);
+            if (strayTestMarker < 0)
             {
-                core = core.Replace(
-                    @"Directory.CreateDirectory(Path.Combine(sourceDir, ""apk""));",
-                    @"Directory.CreateDirectory(Path.Combine(sourceDir, ""ATAK""));
-                Directory.CreateDirectory(Path.Combine(sourceDir, ""Meshtastic""));
-                Directory.CreateDirectory(Path.Combine(sourceDir, ""apk""));");
-            }
-
-            if (!core.Contains(@"Directory.CreateDirectory(Path.Combine(wspolne, ""ATAK""));"))
-            {
-                core = core.Replace(
-                    @"Directory.CreateDirectory(Path.Combine(wspolne, ""apk""));",
-                    @"Directory.CreateDirectory(Path.Combine(wspolne, ""ATAK""));
-            Directory.CreateDirectory(Path.Combine(wspolne, ""Meshtastic""));
-            Directory.CreateDirectory(Path.Combine(wspolne, ""apk""));");
-            }
-
-            // Oczysc ApplyFactionAndPackageFixes, aby nie nadpisywal "Pliki Strony", "Plakat + QR" ani karty 3 przyciskow
-            int afStart = core.IndexOf("public static void ApplyFactionAndPackageFixes(Window win)", StringComparison.Ordinal);
-            int afEnd = core.IndexOf("private static void EnforceUniqueColorsAndNamesOnCards", StringComparison.Ordinal);
-            if (afStart > 0 && afEnd > afStart)
-            {
-                string cleanApplyFactionMethod = @"public static void ApplyFactionAndPackageFixes(Window win)
-        {
-            var w = win ?? Application.Current?.MainWindow;
-            if (w == null) return;
-
-            EnsureSharedFolderStructure();
-            var all = ScanAllWindowRoots(w);
-
-            foreach (var tb in all.OfType<TextBlock>())
-            {
-                string txt = (tb.Text ?? """").Trim();
-                if ((txt.Contains(""Wa\u017Cno\u015B\u0107 paczki"", StringComparison.OrdinalIgnoreCase) ||
-                     txt.Contains(""Wa\u017Cno\u015B\u0107 kodu QR"", StringComparison.OrdinalIgnoreCase) ||
-                     txt.Contains(""Expiration"", StringComparison.OrdinalIgnoreCase)) &&
-                    !txt.Contains(""0 = bezterminowo"", StringComparison.OrdinalIgnoreCase))
+                strayTestMarker = core.IndexOf("namespace FieldTakHub.Builder.Tests", StringComparison.Ordinal);
+                if (strayTestMarker > 0)
                 {
-                    tb.Text = txt.TrimEnd(':') + "" (0 = bezterminowo):"";
+                    int nullableIdx = core.LastIndexOf("#nullable disable", strayTestMarker, StringComparison.Ordinal);
+                    if (nullableIdx > 0 && (strayTestMarker - nullableIdx) < 250)
+                        strayTestMarker = nullableIdx;
                 }
             }
 
-            EnforceUniqueColorsAndNamesOnCards(all);
-            RefreshCachedFactions(w, all);
-        }
+            if (strayTestMarker > 0)
+            {
+                core = core.Substring(0, strayTestMarker).TrimEnd() + "\r\n}\r\n";
+                Console.WriteLine("[OK] Usunieto nadmiarowy blok testowy z konca BuilderCoreSidebarAndProjectEngine.cs (naprawa CS1529).");
+            }
 
-        ";
-                core = core.Substring(0, afStart) + cleanApplyFactionMethod + core.Substring(afEnd);
+            // Upewnij sie, ze EnsureSharedFolderStructure tworzy zarowno ATAK, Meshtastic, plugins, maps, jak i apk (dla kompatybilnosci testow)
+            if (core.Contains(@"Directory.CreateDirectory(Path.Combine(wspolne, ""ATAK""));") &&
+                !core.Contains(@"Directory.CreateDirectory(Path.Combine(wspolne, ""apk""));"))
+            {
+                core = core.Replace(
+                    @"Directory.CreateDirectory(Path.Combine(wspolne, ""ATAK""));",
+                    @"Directory.CreateDirectory(Path.Combine(wspolne, ""ATAK""));
+            Directory.CreateDirectory(Path.Combine(wspolne, "" apk"".Trim()));");
+            }
+
+            int openBraces = core.Count(c => c == '{');
+            int closeBraces = core.Count(c => c == '}');
+            Console.WriteLine("[WERYFIKACJA] Nawiasy klamrowe w BuilderCoreSidebarAndProjectEngine.cs: { = " + openBraces + ", } = " + closeBraces);
+            while (closeBraces < openBraces)
+            {
+                core += "\r\n}\r\n";
+                closeBraces++;
             }
 
             File.WriteAllText(corePath, core, utf8NoBom);
-            Console.WriteLine("[OK] Zaktualizowano BuilderCoreSidebarAndProjectEngine.cs.");
+            Console.WriteLine("[OK] Zapisano czysty BuilderCoreSidebarAndProjectEngine.cs.");
         }
 
-        string mwCsPath = Path.Combine(builderDir, "MainWindow.xaml.cs");
-        if (File.Exists(mwCsPath))
+        // -------------------------------------------------------------------------
+        // F. Aktualizacja V34CleanRefactorTests.cs w projekcie testowym
+        // -------------------------------------------------------------------------
+        if (Directory.Exists(testsDir))
         {
-            string mwCs = File.ReadAllText(mwCsPath, Encoding.UTF8);
-            mwCs = mwCs.Replace("V34Step1ShellAndSidebarFixer.AttachToMainWindow(this);", "");
-            File.WriteAllText(mwCsPath, mwCs, utf8NoBom);
+            string testFilePath = Path.Combine(testsDir, "V34CleanRefactorTests.cs");
+            string cleanTestsCode = string.Join("\r\n", new string[]
+            {
+                "#nullable disable",
+                "using System;",
+                "using System.IO;",
+                "using Xunit;",
+                "using FieldTakHub.Builder.Services;",
+                "",
+                "namespace FieldTakHub.Builder.Tests",
+                "{",
+                "    public sealed class V34CleanRefactorTests",
+                "    {",
+                "        [Fact]",
+                "        public void SharedFolderStructure_ShouldCreateAtakMeshtasticPluginsMapsAndOutDirectories()",
+                "        {",
+                "            string wspolneDir = V34CleanFtakAndFactionEngine.EnsureSharedFolderStructure();",
+                "            Assert.True(Directory.Exists(wspolneDir));",
+                "            Assert.True(Directory.Exists(Path.Combine(wspolneDir, \"ATAK\")));",
+                "            Assert.True(Directory.Exists(Path.Combine(wspolneDir, \"Meshtastic\")));",
+                "            Assert.True(Directory.Exists(Path.Combine(wspolneDir, \"plugins\")));",
+                "            Assert.True(Directory.Exists(Path.Combine(wspolneDir, \"maps\")));",
+                "",
+                "            string orgaOut = V34CleanFtakAndFactionEngine.EnsureFactionOutputDir(\"ORGA\");",
+                "            Assert.True(Directory.Exists(orgaOut));",
+                "        }",
+                "",
+                "        [Fact]",
+                "        public void UniqueFactionColors_ShouldReturnDistinctValidHexColors()",
+                "        {",
+                "            string c1 = V34CleanFtakAndFactionEngine.GetNextUniqueFactionColorHex(null);",
+                "            string c2 = V34CleanFtakAndFactionEngine.GetNextUniqueFactionColorHex(null);",
+                "            string c3 = V34CleanFtakAndFactionEngine.GetNextUniqueFactionColorHex(null);",
+                "",
+                "            Assert.StartsWith(\"#\", c1);",
+                "            Assert.Equal(7, c1.Length);",
+                "            Assert.NotEqual(c1, c2, StringComparer.OrdinalIgnoreCase);",
+                "            Assert.NotEqual(c2, c3, StringComparer.OrdinalIgnoreCase);",
+                "        }",
+                "",
+                "        [Fact]",
+                "        public void MapStudioBridge_ShouldConvertCoordinatesToMilitaryMgrs()",
+                "        {",
+                "            double lat = 49.849444;",
+                "            double lon = 18.812667;",
+                "",
+                "            string mgrs = V34CleanMapStudioBridge.LatLonToMgrs(lat, lon);",
+                "            Assert.False(string.IsNullOrWhiteSpace(mgrs));",
+                "            Assert.Contains(\"34U\", mgrs);",
+                "        }",
+                "",
+                "        [Fact]",
+                "        public void GarbageFactionFilter_ShouldRejectPliAndGeoChat()",
+                "        {",
+                "            Assert.True(V34CleanOpordDataEngine.IsGarbageFactionName(\"PLI\"));",
+                "            Assert.True(V34CleanOpordDataEngine.IsGarbageFactionName(\"GeoChat\"));",
+                "            Assert.True(V34CleanOpordDataEngine.IsGarbageFactionName(\"TAK\"));",
+                "            Assert.False(V34CleanOpordDataEngine.IsGarbageFactionName(\"ORGA\"));",
+                "            Assert.False(V34CleanOpordDataEngine.IsGarbageFactionName(\"STRONA-2\"));",
+                "        }",
+                "    }",
+                "}",
+                ""
+            });
+
+            File.WriteAllText(testFilePath, cleanTestsCode, utf8NoBom);
+            Console.WriteLine("[OK] Zaktualizowano V34CleanRefactorTests.cs.");
         }
     }
 
@@ -719,7 +591,7 @@ public static class FthAllInOneGitHubEngine
         RunProcess(gitExe, "remote set-url origin " + RepoRemoteUrl, targetDir, ignoreError: false);
 
         RunProcess(gitExe, "add -A", targetDir, ignoreError: false);
-        RunProcess(gitExe, "commit -m \"Field TAK Hub v3.4: UI layout fix, 3-button Generator paczek .ftak, Pliki Strony & Plakat+QR fix, unique RGB colors\" --allow-empty", targetDir, ignoreError: false);
+        RunProcess(gitExe, "commit -m \"Fix CS1529 in BuilderCoreSidebarAndProjectEngine.cs and run Windows Builder workflow\" --allow-empty", targetDir, ignoreError: false);
 
         int pushExitCode = RunProcess(gitExe, "push -u origin main --force", targetDir, ignoreError: false);
         if (pushExitCode != 0)
