@@ -1,0 +1,38 @@
+# .NET
+**/bin/
+**/obj/
+*.user
+*.suo
+*.nupkg
+
+# Android / Gradle
+.gradle/
+**/build/
+local.properties
+keystore.properties
+*.jks
+*.keystore
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# generated/release
+artifacts/
+release/
+*.ftak
+*.zip
+
+# secrets
+*.p12
+*.pfx
+*.pem
+*.key
+*.crt
+*.cer
+!examples/**/README.md
+
+# OS
+.DS_Store
+Thumbs.db

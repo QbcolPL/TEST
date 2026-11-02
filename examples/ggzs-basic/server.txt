@@ -1,0 +1,10 @@
+# Field TAK Hub server configuration
+# Example profile only — replace these values with your own server if needed.
+# Do not put passwords, private keys or certificate secrets here.
+
+SERVER_TYPE=OpenTAK
+SERVER_NAME=GGZS OpenTAK
+HOST=ggzstak.duckdns.org
+COT_PORT=8089
+API_PORT=8446
+WEB_PORT=8443

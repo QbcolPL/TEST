@@ -1,0 +1,198 @@
+  <ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" xmlns:sys="clr-namespace:System;assembly=System.Runtime">
+  <sys:String x:Key="BuilderModeLabel">Tryb Buildera</sys:String><sys:String x:Key="BuilderModeSimple">Prosty</sys:String><sys:String x:Key="BuilderModeAdvanced">Zaawansowany</sys:String><sys:String x:Key="SimpleModeHint">Tryb prosty: pokazuje tylko opcje potrzebne do przygotowania i dystrybucji pakietu polowego.</sys:String><sys:String x:Key="AdvancedModeHint">Tryb zaawansowany: pokazuje pełną konfigurację wdrożenia, serwera, enrollmentu, Meshtastic i bezpieczeństwa.</sys:String><sys:String x:Key="PackageValidity">Ważność pakietu (.ftak) — godziny</sys:String>
+  <sys:String x:Key="WindowTitle">Field TAK Hub Builder 2.3.0</sys:String>
+  <sys:String x:Key="HeaderTitle">FIELD TAK HUB BUILDER</sys:String>
+  <sys:String x:Key="Tagline">PROVISION • DEPLOY • READY</sys:String>
+  <sys:String x:Key="HeaderVersion">Builder 2.3.0 • UI 2.4 Preview</sys:String>
+  <sys:String x:Key="Project">Projekt</sys:String><sys:String x:Key="Name">Nazwa</sys:String><sys:String x:Key="PackageId">ID pakietu</sys:String><sys:String x:Key="Version">Wersja</sys:String><sys:String x:Key="Publisher">Wydawca</sys:String>
+  <sys:String x:Key="Source">Źródło</sys:String><sys:String x:Key="Output">Katalog wyjściowy</sys:String><sys:String x:Key="Browse">_Wybierz</sys:String>
+  <sys:String x:Key="AtakTarget">Docelowa wersja ATAK</sys:String><sys:String x:Key="Min">Min</sys:String><sys:String x:Key="Max">Max</sys:String>
+  <sys:String x:Key="ServerConfig">Konfiguracja serwera TAK</sys:String><sys:String x:Key="ServerHelp">Wpisz dane ręcznie. Builder zapisze je w projekcie, utworzy server.txt i użyje ich do wygenerowania server.pref dla ATAK.</sys:String>
+  <sys:String x:Key="Type">Typ</sys:String><sys:String x:Key="ServerName">Nazwa serwera</sys:String><sys:String x:Key="Host">Host / domena</sys:String><sys:String x:Key="Ports">Porty</sys:String><sys:String x:Key="Cot">CoT</sys:String><sys:String x:Key="Api">API / Enrollment</sys:String><sys:String x:Key="Web">Web</sys:String>
+  <sys:String x:Key="LoadServerTxt">Wczytaj server.txt</sys:String><sys:String x:Key="SaveServerTxt">Zapisz server.txt</sys:String><sys:String x:Key="TestServer">_Testuj serwer</sys:String><sys:String x:Key="ServerDefaultsNote">Dane GGZS są wyłącznie przykładowym profilem domyślnym. Możesz je zmienić przed każdym buildem.</sys:String>
+  <sys:String x:Key="QrValidity">Ważność QR (godziny)</sys:String><sys:String x:Key="MaxDownloads">Maks. pobrań</sys:String>
+  <sys:String x:Key="LoadProject">_Wczytaj projekt</sys:String><sys:String x:Key="SaveProject">_Zapisz projekt</sys:String><sys:String x:Key="Analyze">_Analizuj</sys:String><sys:String x:Key="BuildPackage">_Buduj pakiet</sys:String>
+  <sys:String x:Key="ContentAnalysis">Analiza zawartości</sys:String><sys:String x:Key="Category">Kategoria</sys:String><sys:String x:Key="Path">Ścieżka</sys:String><sys:String x:Key="Bytes">Bajty</sys:String>
+  <sys:String x:Key="StartLan">_Uruchom dystrybucję LAN</sys:String><sys:String x:Key="Stop">_Zatrzymaj</sys:String><sys:String x:Key="StatusDetails">Status / szczegóły pakietu</sys:String>
+  <sys:String x:Key="Language">Język</sys:String><sys:String x:Key="English">English</sys:String><sys:String x:Key="Polish">Polski</sys:String>
+  <sys:String x:Key="Security">Bezpieczeństwo wydawcy</sys:String><sys:String x:Key="FingerprintUnavailable">niedostępny</sys:String>
+  <sys:String x:Key="Fingerprint">Fingerprint</sys:String><sys:String x:Key="ExportKey">Eksportuj backup klucza</sys:String><sys:String x:Key="ImportKey">Importuj backup klucza</sys:String>
+  <sys:String x:Key="CheckUpdates">Sprawdź aktualizacje</sys:String><sys:String x:Key="AccessibilityHint">Obsługa klawiatury, Narratora, skalowania DPI i trybu wysokiego kontrastu.</sys:String>
+  <sys:String x:Key="BuildPreviewTitle">Podgląd budowania</sys:String><sys:String x:Key="BuildPreviewConfirm">Zbudować ten pakiet?</sys:String>
+  <sys:String x:Key="PasswordTitle">Hasło backupu klucza wydawcy</sys:String><sys:String x:Key="PasswordPrompt">Podaj hasło (minimum 10 znaków).</sys:String><sys:String x:Key="Ok">OK</sys:String><sys:String x:Key="Cancel">Anuluj</sys:String>
+  <sys:String x:Key="BuildPreviewBody">{0}  v{1}\n\nATAK: {2} – {3}\nSerwer: {4}\nPorty: {5} / {6} / {7}\nPluginy: {8}\nMapy: {9}\nPliki: {10}\nRozmiar źródła: {11}\nWażność pakietu: {12} h\nWażność QR: {13} h\nMaks. pobrań: {14}\nWydawca: {15}</sys:String>
+  <sys:String x:Key="LogAnalyzed">Przeanalizowano {0} plików. Źródło ATAK: {1}; APK: {2}; razem {3}.</sys:String>
+  <sys:String x:Key="LogBuilt">Zbudowano i podpisano:\r\n{0}\r\n\r\nserver.txt:\r\n{1}\r\n\r\nATAK server.pref jest generowany w Mission Package, chyba że source/atak zawiera własny .pref.</sys:String>
+  <sys:String x:Key="LogTestingServer">Testowanie {0}…</sys:String>
+  <sys:String x:Key="LogServerTest">TEST SERWERA</sys:String>
+  <sys:String x:Key="BuildFirst">Najpierw zbuduj pakiet.</sys:String>
+  <sys:String x:Key="LogLanStarted">Uruchomiono dystrybucję LAN. Wznowienia HTTP Range/206 są aktywne. Zwykły HTTP jest przeznaczony tylko dla prywatnego LAN; Hub odrzuca publiczne adresy cleartext.\r\nDescriptor: {0}\r\nDeep-link QR: {1}</sys:String>
+  <sys:String x:Key="LogDistributionStopped">Dystrybucja zatrzymana.</sys:String>
+  <sys:String x:Key="LogSavedProject">Zapisano {0}</sys:String>
+  <sys:String x:Key="LogLoadedProject">Wczytano {0}</sys:String>
+  <sys:String x:Key="LogLoadedServer">Wczytano konfigurację serwera: {0}</sys:String>
+  <sys:String x:Key="LogSavedServer">Zapisano konfigurację serwera: {0}</sys:String>
+  <sys:String x:Key="LogKeyExported">Wyeksportowano zaszyfrowany backup klucza wydawcy: {0}</sys:String>
+  <sys:String x:Key="LogKeyRestored">Przywrócono klucz wydawcy. Fingerprint: {0}</sys:String>
+  <sys:String x:Key="KeyRestoredMessage">Przywrócono klucz wydawcy. Przed budowaniem pakietów produkcyjnych sprawdź fingerprint.</sys:String>
+  <sys:String x:Key="NoBuilderUpdate">Brak nowszej wersji Buildera w skonfigurowanym kanale.</sys:String>
+  <sys:String x:Key="BuilderUpdateAvailable">Dostępna aktualizacja Buildera: {0} → {1}</sys:String>
+  <sys:String x:Key="BuilderUpdatePrompt">Dostępny jest Builder {0}. Pobrać teraz zweryfikowany ZIP?</sys:String>
+  <sys:String x:Key="UpdateTitle">Aktualizacja Field TAK Hub</sys:String>
+  <sys:String x:Key="UpdateDownloaded">Pobrano aktualizację i zweryfikowano SHA-256: {0}</sys:String>
+  <sys:String x:Key="UpdateSkipped">Pominięto sprawdzanie aktualizacji: {0}</sys:String>
+  <sys:String x:Key="ErrorPrefix">BŁĄD</sys:String>
+  <sys:String x:Key="Footer">Field TAK Hub 2.3.0 — Builder 2.3.0</sys:String>
+  <sys:String x:Key="ImportLegacy">_Importuj ZIP 1.x</sys:String><sys:String x:Key="LegacyZipFilter">TAK Field Hub 1.x ZIP (*.zip)|*.zip|Wszystkie pliki (*.*)|*.*</sys:String><sys:String x:Key="LegacyVerified">zweryfikowany</sys:String><sys:String x:Key="LegacyNotPresent">brak</sys:String>
+  <sys:String x:Key="LogLegacyImported">Zaimportowano ZIP 1.x do nowego projektu 2.x. Pliki: {0}; podpis RSA: {1}; SHA-256: OK. Projekt: {2}</sys:String><sys:String x:Key="LegacyImportSummary">Pakiet legacy zaimportowano poprawnie.\n\nPliki: {0}\nPodpis RSA: {1}\nSHA-256: OK\n\nKliknij BUDUJ PAKIET, aby utworzyć nowy .ftak v2 podpisany Ed25519.</sys:String>
+  <sys:String x:Key="NewProject">_Nowy projekt</sys:String><sys:String x:Key="CreateProject">_Utwórz projekt</sys:String><sys:String x:Key="NewProjectHelp">Builder automatycznie utworzy pełną strukturę folderów projektu.</sys:String>
+  <sys:String x:Key="OpenProjectFolder">Otwórz _folder projektu</sys:String><sys:String x:Key="RepairFolders">_Napraw foldery</sys:String><sys:String x:Key="ProjectFolders">Foldery projektu</sys:String><sys:String x:Key="ProjectFoldersHelp">Przeciągnij pliki na wybrany wiersz albo kliknij Otwórz. Brakujące foldery są automatycznie odtwarzane.</sys:String>
+  <sys:String x:Key="FolderAtak">ATAK</sys:String><sys:String x:Key="FolderPlugins">Pluginy</sys:String><sys:String x:Key="FolderMaps">Mapy</sys:String><sys:String x:Key="FolderOverlays">Nakładki</sys:String><sys:String x:Key="FolderConfig">Config</sys:String><sys:String x:Key="FolderData">Dane</sys:String><sys:String x:Key="FolderMeshtastic">Meshtastic</sys:String>
+  <sys:String x:Key="ProjectNameRequired">Wpisz nazwę projektu.</sys:String><sys:String x:Key="PackageIdRequired">Wpisz ID pakietu.</sys:String>
+  <sys:String x:Key="LogProjectCreated">Utworzono projekt: {0}</sys:String><sys:String x:Key="LogFoldersRepaired">Sprawdzono foldery projektu i utworzono brakujące katalogi.</sys:String><sys:String x:Key="LogFilesDropped">Skopiowano {0} plik(ów) do {1}.</sys:String>
+
+  <sys:String x:Key="DistributionLan">Dystrybucja LAN</sys:String>
+  <sys:String x:Key="CloudDistribution">Dystrybucja zewnętrzna / chmura</sys:String>
+  <sys:String x:Key="CloudHelp">Wgraj dokładnie ten plik .ftak do chmury. Możesz wkleić bezpośredni link HTTPS albo zwykły link udostępniania pojedynczego pliku z Google Drive — Builder sam zamieni go na link pobierania, przetestuje i wygeneruje QR powiązany z lokalnym SHA-256.</sys:String>
+  <sys:String x:Key="LocalPackage">Lokalny pakiet .ftak</sys:String>
+  <sys:String x:Key="ExternalPackageUrl">Link HTTPS do .ftak lub link udostępniania Google Drive</sys:String>
+  <sys:String x:Key="SelectFtak">Wybierz .ftak</sys:String>
+  <sys:String x:Key="TestCloudLink">Testuj / rozpoznaj link</sys:String>
+  <sys:String x:Key="GenerateCloudQr">Generuj QR chmurowy</sys:String>
+  <sys:String x:Key="CopyDeepLink">Kopiuj deep-link</sys:String>
+  <sys:String x:Key="SaveQrPng">Zapisz QR PNG…</sys:String>
+  <sys:String x:Key="CloudPackageSelected">Wybrano lokalny pakiet do QR chmurowego.</sys:String>
+  <sys:String x:Key="CloudTesting">Testowanie zewnętrznego linku HTTPS…</sys:String>
+  <sys:String x:Key="LogCloudTest">TEST LINKU CHMUROWEGO\r\n{0}</sys:String>
+  <sys:String x:Key="SelectCloudPackageFirst">Wybierz dokładnie ten lokalny plik .ftak, który został wgrany do chmury.</sys:String>
+  <sys:String x:Key="CloudQrReady">QR chmurowy gotowy. Zapisano: {0}</sys:String>
+  <sys:String x:Key="LogCloudQr">Wygenerowano bezpośredni QR chmurowy. SHA-256 jest powiązany z lokalnym .ftak.\r\nPakiet: {0}\r\nLink chmurowy: {1}\r\nQR: {2}</sys:String>
+  <sys:String x:Key="GenerateQrFirst">Najpierw wygeneruj kod QR.</sys:String>
+  <sys:String x:Key="DeepLinkCopied">Skopiowano deep-link provisioningowy do schowka.</sys:String>
+  <sys:String x:Key="LogQrSaved">Zapisano QR PNG: {0}</sys:String>
+  <sys:String x:Key="MeshtasticConfigTitle">Konfiguracja Meshtastic</sys:String>
+  <sys:String x:Key="MeshtasticConfigHelp">Dla początkujących: wklej pełny link kanału Meshtastic (https://meshtastic.org/e/...). Kliknij Zapisz — Builder utworzy source\meshtastic\channel.url i dołączy konfigurację do kolejnej paczki .ftak.</sys:String>
+  <sys:String x:Key="MeshtasticChannelUrlHint">Wklej własny link kanału Meshtastic.</sys:String>
+  <sys:String x:Key="MeshtasticChannelUrl">Link kanału Meshtastic</sys:String>
+  <sys:String x:Key="MeshtasticSave">Zapisz</sys:String>
+  <sys:String x:Key="MeshtasticOpen">Otwórz link</sys:String>
+  <sys:String x:Key="MeshtasticCopy">Kopiuj</sys:String>
+  <sys:String x:Key="MeshtasticClear">Wyczyść</sys:String>
+  <sys:String x:Key="MeshtasticLoaded">Załadowano konfigurację z source/meshtastic/channel.url.</sys:String>
+  <sys:String x:Key="MeshtasticNotConfigured">Meshtastic jest opcjonalny. Nie skonfigurowano kanału.</sys:String>
+  <sys:String x:Key="MeshtasticRemoved">Usunięto konfigurację Meshtastic z tego projektu.</sys:String>
+  <sys:String x:Key="MeshtasticInvalid">Nieprawidłowy link kanału Meshtastic. Wklej kanoniczny link https://meshtastic.org/e/#... .</sys:String>
+  <sys:String x:Key="MeshtasticSaved">Zapisano link kanału Meshtastic. Zostanie dołączony do następnej paczki .ftak.</sys:String>
+  <sys:String x:Key="MeshtasticCopied">Skopiowano link kanału Meshtastic do schowka.</sys:String>
+  <sys:String x:Key="MeshtasticReady">Wklej link kanału Meshtastic i kliknij Zapisz.</sys:String>
+  <sys:String x:Key="EnrollmentConfigTitle">Enrollment OpenTAK / wdrożenie jednym skanem</sys:String>
+  <sys:String x:Key="EnrollmentConfigHelp">Opcjonalnie wklej krótko ważny URI enrollmentu ATAK. Builder zapisze go w source\enrollment\enroll.url i dołączy do .ftak. Zalecany jest jednorazowy token, nie stałe hasło.</sys:String>
+  <sys:String x:Key="EnrollmentUri">URI enrollmentu ATAK</sys:String>
+  <sys:String x:Key="EnrollmentSave">Zapisz enrollment</sys:String>
+  <sys:String x:Key="EnrollmentClear">Wyczyść</sys:String>
+  <sys:String x:Key="EnrollmentLoaded">Załadowano enrollment z source/enrollment/enroll.url.</sys:String>
+  <sys:String x:Key="EnrollmentNotConfigured">Opcjonalne. Użyj krótkotrwałego URI enrollmentu OpenTAK dla wdrożenia jednym skanem.</sys:String>
+  <sys:String x:Key="EnrollmentRemoved">Usunięto enrollment z projektu.</sys:String>
+  <sys:String x:Key="EnrollmentInvalid">Nieprawidłowy URI enrollmentu. Oczekiwano tak://com.atakmap.app/enroll z host, username i token.</sys:String>
+  <sys:String x:Key="EnrollmentSaved">Zapisano enrollment. Zostanie dołączony do następnej paczki .ftak. Zalecany jest krótko ważny, jednorazowy token.</sys:String>
+  <sys:String x:Key="EnrollmentDefaultLabel">Enrollment OpenTAK</sys:String>
+  <sys:String x:Key="MeshtasticMode">Tryb</sys:String><sys:String x:Key="MeshtasticRegion">Region</sys:String><sys:String x:Key="MeshtasticPreset">Modem preset</sys:String><sys:String x:Key="MeshtasticHopLimit">Hop limit</sys:String>
+<sys:String x:Key="MeshtasticChannelName">Nazwa kanału Meshtastic</sys:String><sys:String x:Key="MeshtasticGatewayTitle">Gateway Meshtastic ↔ OpenTAKServer</sys:String><sys:String x:Key="MeshtasticGatewayHelp">Infrastruktura: Heltec WiFi LoRa 32 V3 działa jako gateway Meshtastic. Telefon nie przejmuje BLE gatewaya. MQTT/TLS łączy gateway z OpenTAKServer. Dane logowania i klucze pozostają poza paczką .ftak.</sys:String><sys:String x:Key="MeshtasticGatewayEnabled">Gateway wymagany w tej topologii</sys:String><sys:String x:Key="MeshtasticGatewayType">Typ gatewaya</sys:String><sys:String x:Key="MeshtasticGatewayRole">Rola</sys:String><sys:String x:Key="MeshtasticGatewayTransport">Transport</sys:String><sys:String x:Key="MeshtasticGatewayMqttPort">MQTT/TLS port</sys:String><sys:String x:Key="MeshtasticGatewayRootTopic">MQTT Root Topic</sys:String><sys:String x:Key="MeshtasticGatewaySecretsExternal">Sekrety poza paczką .ftak (wymuszone)</sys:String><sys:String x:Key="MeshtasticDeviceRole">Rola urządzenia</sys:String><sys:String x:Key="MeshtasticDeviceRoleAuto">Auto</sys:String><sys:String x:Key="MeshtasticDeviceRoleFieldNode">Węzeł terenowy (TAK)</sys:String><sys:String x:Key="MeshtasticDeviceRoleGateway">Gateway</sys:String><sys:String x:Key="MeshtasticDeviceModel">Model urządzenia</sys:String><sys:String x:Key="MeshtasticDeviceHelp">Field TAK Hub jest niezależny od producenta. Wybierz rolę i opcjonalnie model informacyjny; pozostaw Auto, aby nie wiązać pakietu z konkretnym sprzętem.</sys:String>  <sys:String x:Key="UI_Header">BUILDER v2.4</sys:String>
+  <sys:String x:Key="UI_Preview">Podgląd zawartości</sys:String>
+  <sys:String x:Key="UI_Subtitle">Twórz i zarządzaj paczkami .ftak dla swojego zespołu</sys:String>
+  <sys:String x:Key="UI_Language">Język</sys:String>
+  <sys:String x:Key="UI_Package">Paczka .FTAK</sys:String>
+  <sys:String x:Key="UI_PackageHelp">Skonfiguruj i wygeneruj paczkę dla uczestników wydarzenia</sys:String>
+  <sys:String x:Key="UI_Simple">Tryb prosty</sys:String>
+  <sys:String x:Key="UI_Advanced">Tryb zaawansowany</sys:String>
+  <sys:String x:Key="UI_EventInfo">1. Informacje o wydarzeniu</sys:String>
+  <sys:String x:Key="UI_EventName">Nazwa wydarzenia</sys:String>
+  <sys:String x:Key="UI_Profile">Profil</sys:String>
+  <sys:String x:Key="UI_PackageValidity">Ważność paczki</sys:String>
+  <sys:String x:Key="UI_QrValidity">Ważność kodu QR</sys:String>
+  <sys:String x:Key="UI_Description">Opis (opcjonalnie)</sys:String>
+  <sys:String x:Key="UI_Contents">2. Zawartość paczki</sys:String>
+  <sys:String x:Key="UI_ContentsHelp">Wybierz elementy, które mają być zawarte w paczce .FTAK</sys:String>
+  <sys:String x:Key="UI_Recommended">★  Wybierz profil zalecany</sys:String>
+  <sys:String x:Key="UI_Configure">Konfiguruj</sys:String>
+  <sys:String x:Key="UI_Extra">3. Dodatkowe opcje</sys:String>
+  <sys:String x:Key="UI_ExtraHelp">Podpis paczki, notatki, dodatkowe pliki</sys:String>
+  <sys:String x:Key="UI_Clear">⌫  Wyczyść wszystko</sys:String>
+  <sys:String x:Key="UI_Generate">⬡  Generuj paczkę .FTAK</sys:String>
+  <sys:String x:Key="UI_Status">Status paczki</sys:String>
+  <sys:String x:Key="UI_Ready">Gotowa do generowania</sys:String>
+  <sys:String x:Key="UI_StatusHelp">Sprawdź elementy przed wygenerowaniem paczki.</sys:String>
+  <sys:String x:Key="UI_Generated">Generowany plik</sys:String>
+  <sys:String x:Key="UI_Qr">Kod QR</sys:String>
+  <sys:String x:Key="UI_QrHelp">Zostanie wygenerowany po utworzeniu paczki</sys:String>
+
+  <sys:String x:Key="UI_SettingsTitle">Ustawienia aplikacji</sys:String>
+  <sys:String x:Key="UI_SettingsHelp">Język, aktualizacje i naprawa struktury folderów projektu.</sys:String>
+  <sys:String x:Key="UI_SettingsCheckUpdates">Sprawdź aktualizacje</sys:String>
+  <sys:String x:Key="UI_SettingsRepairFolders">Napraw foldery</sys:String>
+  <sys:String x:Key="UI_LanguageHint">Szybka zmiana języka: PL / EN</sys:String>
+  <sys:String x:Key="UI_TopTagline">ŁĄCZY LUDZI  ·  MAPY  ·  TEREN</sys:String>
+  <sys:String x:Key="UI_NavPackageHelp">Utwórz paczkę dla uczestników</sys:String>
+  <sys:String x:Key="UI_NavServer">Serwer</sys:String>
+  <sys:String x:Key="UI_NavServerHelp">Konfiguracja połączenia i Data Packages</sys:String>
+  <sys:String x:Key="UI_NavMeshtastic">Meshtastic</sys:String>
+  <sys:String x:Key="UI_NavMeshtasticHelp">Konfiguracja radia i sieci</sys:String>
+  <sys:String x:Key="UI_NavAtak">ATAK</sys:String>
+  <sys:String x:Key="UI_NavAtakHelp">Profile i ustawienia · dostępne wkrótce</sys:String>
+  <sys:String x:Key="UI_NavCerts">Certyfikaty TAK Server</sys:String>
+  <sys:String x:Key="UI_NavCertsHelp">Funkcja dostępna wkrótce · certyfikaty TAK Server</sys:String>
+  <sys:String x:Key="UI_NavSettings">Ustawienia</sys:String>
+  <sys:String x:Key="UI_NavSettingsHelp">Preferencje aplikacji</sys:String>
+  <sys:String x:Key="UI_AtakDescription">Konfiguracja i preferencje</sys:String>
+  <sys:String x:Key="UI_Plugins">Pluginy</sys:String>
+  <sys:String x:Key="UI_PluginsDescription">Rozszerzenia ATAK</sys:String>
+  <sys:String x:Key="UI_Maps">Mapy</sys:String>
+  <sys:String x:Key="UI_MapsDescription">Mapy offline</sys:String>
+  <sys:String x:Key="UI_Overlays">Overlays</sys:String>
+  <sys:String x:Key="UI_OverlaysDescription">Dane taktyczne</sys:String>
+  <sys:String x:Key="UI_Meshtastic">Meshtastic</sys:String>
+  <sys:String x:Key="UI_MeshtasticDescription">Kanał, PLI, MQTT</sys:String>
+  <sys:String x:Key="UI_Server">Serwer</sys:String>
+  <sys:String x:Key="UI_ServerDescription">Enrollment + Data Package</sys:String>
+  <sys:String x:Key="UI_Configured">Skonfigurowany</sys:String>
+  <sys:String x:Key="UI_FileSize">Pliki paczki</sys:String>
+  <sys:String x:Key="UI_6Hours">6 godzin</sys:String>
+  <sys:String x:Key="UI_12Hours">12 godzin</sys:String>
+  <sys:String x:Key="UI_24Hours">24 godziny</sys:String>
+  <sys:String x:Key="UI_48Hours">48 godzin</sys:String>
+  <sys:String x:Key="UI_2Hours">2 godziny</sys:String>
+  <sys:String x:Key="RecommendedEventName">MILSIM 2026</sys:String>
+  <sys:String x:Key="RecommendedEventDescription">Konfiguracja uczestników - MILSIM 2026</sys:String>
+  <sys:String x:Key="LogRecommendedProfile">Ustawiono zalecany profil MILSIM.</sys:String>
+  <sys:String x:Key="ConfigureAtakHint">Konfiguracja ATAK jest dostępna w trybie zaawansowanym.</sys:String>
+  <sys:String x:Key="ConfigurePluginsHint">Zarządzanie pluginami jest dostępne w trybie zaawansowanym.</sys:String>
+  <sys:String x:Key="ConfigureMapsHint">Źródła map są dostępne w trybie zaawansowanym.</sys:String>
+  <sys:String x:Key="ConfigureOverlaysHint">Źródła overlay są dostępne w trybie zaawansowanym.</sys:String>
+  <sys:String x:Key="ConfigureMeshtasticHint">Ustawienia Meshtastic i Gateway są dostępne w trybie zaawansowanym.</sys:String>
+  <sys:String x:Key="ConfigureServerHint">Ustawienia OpenTAKServer, Enrollment i bezpieczeństwa są dostępne w trybie zaawansowanym.</sys:String>
+  <sys:String x:Key="ConfigureComponentHint">Zaawansowana konfiguracja jest dostępna poniżej trybu prostego.</sys:String>
+  <sys:String x:Key="UI_3Plugins">3 pluginy</sys:String>
+  <sys:String x:Key="UI_2Packages">2 pakiety</sys:String>
+  <sys:String x:Key="UI_1Package">1 pakiet</sys:String>
+  <sys:String x:Key="UI_ServerConfigured">Skonfigurowany</sys:String>
+  <sys:String x:Key="UI_PackageFiles">Pliki paczki</sys:String>
+  <sys:String x:Key="UI_MapsSize">Mapy</sys:String>
+  <sys:String x:Key="UI_PluginsSize">Pluginy</sys:String>
+  <sys:String x:Key="UI_ConfigSize">Konfiguracja</sys:String>
+  <sys:String x:Key="UI_TacticalData">Dane taktyczne</sys:String>
+  <sys:String x:Key="UI_Other">Pozostałe</sys:String>
+  <sys:String x:Key="UI_MILSIMProfile">◒  MILSIM</sys:String>
+  <sys:String x:Key="UI_TrainingProfile">▦  TRAINING</sys:String>
+  <sys:String x:Key="UI_EventProfile">◉  EVENT</sys:String>
+  <sys:String x:Key="ImportFtakButton">Importuj .FTAK</sys:String>
+  <sys:String x:Key="ImportFtakToolTip">Wczytaj istniejącą paczkę .FTAK do edycji</sys:String>
+  <sys:String x:Key="UI_StatusReadyHint">Po zbudowaniu możesz udostępnić paczkę przez LAN albo wygenerować QR z linku HTTPS / Google Drive.</sys:String>
+  <sys:String x:Key="LogFtakImported">Wczytano .ftak do edycji. Pliki: {0}; rozmiar źródła: {1}; projekt: {2}</sys:String>
+  <sys:String x:Key="FtakImportSummary">Paczka .ftak została zaimportowana do edytowalnego projektu Buildera.
+
+Pliki: {0}
+Rozmiar źródła: {1}
+Oryginalny SHA-256 zapisano w IMPORTED-FROM-FTAK.txt.
+
+Możesz teraz zmienić konfigurację i zbudować nową podpisaną paczkę .ftak.</sys:String>
+</ResourceDictionary>

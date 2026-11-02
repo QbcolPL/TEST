@@ -1,0 +1,115 @@
+name: Release
+on:
+  push:
+    tags: ['v*']
+permissions:
+  contents: write
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.12' }
+      - run: python tests/source_gate.py
+
+  windows:
+    needs: gate
+    runs-on: windows-latest
+    env:
+      WINDOWS_CERT_BASE64: ${{ secrets.WINDOWS_CERT_BASE64 }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with: { dotnet-version: '10.0.x' }
+      - run: dotnet restore apps/builder/FieldTakHub.Builder.Tests/FieldTakHub.Builder.Tests.csproj
+      - run: dotnet test apps/builder/FieldTakHub.Builder.Tests/FieldTakHub.Builder.Tests.csproj -c Release --no-restore
+      - run: dotnet publish apps/builder/FieldTakHub.Builder/FieldTakHub.Builder.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:EnableCompressionInSingleFile=false -p:PublishTrimmed=false -p:PublishReadyToRun=false -o release/windows
+      - name: Optional Authenticode signing
+        if: ${{ env.WINDOWS_CERT_BASE64 != '' }}
+        shell: pwsh
+        env:
+          CERT_B64: ${{ env.WINDOWS_CERT_BASE64 }}
+          CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
+        run: |
+          [IO.File]::WriteAllBytes("release-cert.pfx", [Convert]::FromBase64String($env:CERT_B64))
+          $signtool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin" -Recurse -Filter signtool.exe | Sort-Object FullName | Select-Object -Last 1
+          if (-not $signtool) { throw "signtool.exe not found" }
+          & $signtool.FullName sign /fd SHA256 /td SHA256 /tr http://timestamp.digicert.com /f release-cert.pfx /p $env:CERT_PASSWORD release/windows/FieldTakHub.Builder.exe
+      - name: Package Builder
+        shell: pwsh
+        run: Compress-Archive -Path release/windows/* -DestinationPath release/FieldTAKHub-Builder-2.3.0-win-x64.zip -Force
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-release
+          path: release/FieldTAKHub-Builder-2.3.0-win-x64.zip
+
+  android:
+    needs: gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: '17' }
+      - uses: android-actions/setup-android@v3
+      - name: Install Android 17 SDK preview
+        shell: bash
+        run: |
+          sdkmanager "platforms;android-37.0" "build-tools;36.0.0"
+          if [ -d "$ANDROID_HOME/platforms/android-37.0" ] && [ ! -e "$ANDROID_HOME/platforms/android-37" ]; then
+            ln -s "$ANDROID_HOME/platforms/android-37.0" "$ANDROID_HOME/platforms/android-37"
+          fi
+      - uses: gradle/actions/setup-gradle@v4
+        with: { gradle-version: '9.6.0' }
+      - name: Configure Android release signing
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          test -n "$KEYSTORE_B64" || (echo "ANDROID_KEYSTORE_BASE64 is required for a release tag" && exit 1)
+          echo "$KEYSTORE_B64" | base64 -d > apps/android/release.jks
+          cat > apps/android/keystore.properties <<PROPS
+          storeFile=../release.jks
+          storePassword=$STORE_PASSWORD
+          keyAlias=$KEY_ALIAS
+          keyPassword=$KEY_PASSWORD
+          PROPS
+      - working-directory: apps/android
+        run: gradle testDebugUnitTest assembleRelease --stacktrace
+      - run: |
+          mkdir -p release/android
+          cp apps/android/app/build/outputs/apk/release/app-release.apk release/android/FieldTAKHub-2.3.0.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android-release
+          path: release/android/FieldTAKHub-2.3.0.apk
+
+  publish:
+    needs: [windows, android]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.12' }
+      - uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+      - name: Create update manifest and checksums
+        run: |
+          HUB=$(find release-assets -name 'FieldTAKHub-2.3.0.apk' -print -quit)
+          BUILDER=$(find release-assets -name 'FieldTAKHub-Builder-2.3.0-win-x64.zip' -print -quit)
+          python scripts/generate-release-manifest.py --root . --hub "$HUB" --builder "$BUILDER" --out fieldtak-release.json
+          cp "$HUB" .
+          cp "$BUILDER" .
+          sha256sum FieldTAKHub-2.3.0.apk FieldTAKHub-Builder-2.3.0-win-x64.zip fieldtak-release.json > SHA256SUMS.txt
+      - uses: softprops/action-gh-release@v2
+        with:
+          prerelease: ${{ contains(github.ref_name, '-rc') }}
+          generate_release_notes: true
+          files: |
+            FieldTAKHub-2.3.0.apk
+            FieldTAKHub-Builder-2.3.0-win-x64.zip
+            fieldtak-release.json
+            SHA256SUMS.txt
