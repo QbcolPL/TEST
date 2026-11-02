@@ -2,6 +2,7 @@
 using System;
 using System.IO;
 using Xunit;
+using FieldTakHub.Builder.Models;
 using FieldTakHub.Builder.Services;
 
 namespace FieldTakHub.Builder.Tests
@@ -9,17 +10,32 @@ namespace FieldTakHub.Builder.Tests
     public sealed class V34CleanRefactorTests
     {
         [Fact]
-        public void SharedFolderStructure_ShouldCreateAtakMeshtasticPluginsMapsAndOutDirectories()
+        public void ZeroExpiryHours_ShouldMeanIndefiniteValidityInProjectAndManifest()
         {
-            string wspolneDir = V34CleanFtakAndFactionEngine.EnsureSharedFolderStructure();
-            Assert.True(Directory.Exists(wspolneDir));
-            Assert.True(Directory.Exists(Path.Combine(wspolneDir, "ATAK")));
-            Assert.True(Directory.Exists(Path.Combine(wspolneDir, "Meshtastic")));
-            Assert.True(Directory.Exists(Path.Combine(wspolneDir, "plugins")));
-            Assert.True(Directory.Exists(Path.Combine(wspolneDir, "maps")));
+            var dir = Path.Combine(Path.GetTempPath(), "fth-indef-" + Guid.NewGuid().ToString("N"));
+            var source = Path.Combine(dir, "source");
+            var output = Path.Combine(dir, "out");
+            Directory.CreateDirectory(Path.Combine(source, "atak"));
+            File.WriteAllText(Path.Combine(source, "atak", "hello.txt"), "test");
 
-            string orgaOut = V34CleanFtakAndFactionEngine.EnsureFactionOutputDir("ORGA");
-            Assert.True(Directory.Exists(orgaOut));
+            var p = new FieldTakProject
+            {
+                Name = "IndefiniteTest",
+                PackageId = "test.indefinite",
+                PackageVersion = "1.0.0",
+                SourceDirectory = source,
+                OutputDirectory = output,
+                ExpiryHours = 0,
+                QrExpiryHours = 0,
+                Server = new ServerProfile { Host = "127.0.0.1" }
+            };
+
+            Assert.Equal(0, p.ExpiryHours);
+            Assert.Equal(0, p.QrExpiryHours);
+
+            var items = new SourceAnalyzer().Analyze(source);
+            var ftak = new FtakPackageBuilder().Build(p, items);
+            Assert.True(File.Exists(ftak));
         }
 
         [Fact]

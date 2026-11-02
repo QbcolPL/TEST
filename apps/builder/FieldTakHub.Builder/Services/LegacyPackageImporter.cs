@@ -91,7 +91,7 @@ public sealed class LegacyPackageImporter
             OutputDirectory = layout.OutputDirectory,
             AtakMinVersion = atakApi,
             AtakMaxVersion = atakApi,
-            ExpiryHours = Math.Max(1, expiryHours),
+            ExpiryHours = Math.Max(0, expiryHours),
             MaxDownloads = Math.Max(1, maxDownloads),
             Server = ReadServer(root)
         };

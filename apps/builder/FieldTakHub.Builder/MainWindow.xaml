@@ -373,6 +373,7 @@
                 <Button Content="24 h" Style="{StaticResource IconActionButton}" Click="SetPackage24_Click" Margin="0,0,5,0"/>
                 <Button Content="48 h" Style="{StaticResource IconActionButton}" Click="SetPackage48_Click" Margin="0,0,5,0"/>
                 <Button Content="6 h QR" Style="{StaticResource IconActionButton}" Click="SetQr6_Click" Margin="0,0,5,0"/>
+                <Button Content="&#x221E; Bezterminowo (0 h)" Style="{StaticResource IconActionButton}" Foreground="{StaticResource Accent}" BorderBrush="{StaticResource Accent}" Click="SetIndefinite0_Click" Margin="0,0,5,0" ToolTip="Ustawia 0 (wa&#x017C;no&#x015B;&#x0107; bezterminow&#x0105;) dla paczki .ftak oraz kodu QR"/>
               </StackPanel>
             </StackPanel>
           </Grid>

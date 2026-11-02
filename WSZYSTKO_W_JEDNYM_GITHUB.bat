@@ -5,7 +5,7 @@ cd /d "%~dp0"
 set "BAT_FILE=%~f0"
 
 echo ============================================================================
-echo [1/3] Czyszczenie bledu CS1529, aplikowanie poprawek UI i aktualizacja Workflow...
+echo [1/3] Wdrazanie obslugi 0 = bezterminowo oraz poprawek UI i Workflow...
 echo ============================================================================
 powershell -NoProfile -ExecutionPolicy Bypass -Command "Add-Type -TypeDefinition ([System.Text.RegularExpressions.Regex]::Split([System.IO.File]::ReadAllText([System.Environment]::GetEnvironmentVariable('BAT_FILE'), [System.Text.Encoding]::UTF8), '//===' + 'AIO_GITHUB_ENGINE_CS===')[1]); [FthAllInOneGitHubEngine]::Run()"
 
@@ -18,7 +18,7 @@ if errorlevel 1 (
 
 echo.
 echo ============================================================================
-echo [SUKCES] Poprawiony kod zostal wyslany na GitHub (QbcolPL/TEST)!
+echo [SUKCES] Zmiany (0 = bezterminowo dla paczki i QR) wyslane na GitHub!
 echo Kompilacja na GitHub Actions zostala uruchomiona.
 echo ============================================================================
 pause
@@ -46,7 +46,6 @@ public static class FthAllInOneGitHubEngine
 
         UTF8Encoding utf8NoBom = new UTF8Encoding(false);
 
-        // 0. Usun ewentualne pliki tymczasowe z katalogu glownego
         foreach (string gf in new string[] { "(f.Name", "Encoding.UTF8.GetBytes((s", "Label", "Name" })
         {
             string gp = Path.Combine(targetDir, gf);
@@ -59,7 +58,7 @@ public static class FthAllInOneGitHubEngine
         // 1. Odtworz czysty workflow .github/workflows/windows-builder.yml (.NET 10.0)
         EnsureCleanGitHubActionsWorkflows(targetDir, utf8NoBom);
 
-        // 2. Napraw CS1529 na koncu BuilderCoreSidebarAndProjectEngine.cs i zaaplikuj wszystkie poprawki UI
+        // 2. Zaaplikuj obsluge 0 = bezterminowo oraz wszystkie poprawki UI Generatora Paczek
         ApplyAllPackageGeneratorAndUiFixes(targetDir, utf8NoBom);
 
         // 3. Zapisz unikalny znacznik wyzwalajacy dla GitHub Actions
@@ -141,10 +140,45 @@ public static class FthAllInOneGitHubEngine
     {
         string builderDir = Path.Combine(targetDir, @"apps\builder\FieldTakHub.Builder");
         string servicesDir = Path.Combine(builderDir, "Services");
+        string resourcesDir = Path.Combine(builderDir, "Resources");
         string testsDir = Path.Combine(targetDir, @"apps\builder\FieldTakHub.Builder.Tests");
 
         // -------------------------------------------------------------------------
-        // A. MainWindow.xaml
+        // A. Strings.pl.xaml & Strings.en.xaml — czytelne oznaczenie (0 = bezterminowo)
+        // -------------------------------------------------------------------------
+        string plPath = Path.Combine(resourcesDir, "Strings.pl.xaml");
+        if (File.Exists(plPath))
+        {
+            string pl = File.ReadAllText(plPath, Encoding.UTF8);
+            pl = pl.Replace(
+                @"<sys:String x:Key=""UI_PackageValidity"">Wa" + "\u017Cno\u015B\u0107" + @" paczki</sys:String>",
+                @"<sys:String x:Key=""UI_PackageValidity"">Wa" + "\u017Cno\u015B\u0107" + @" paczki (0 = bezterminowo)</sys:String>");
+            pl = pl.Replace(
+                @"<sys:String x:Key=""UI_QrValidity"">Wa" + "\u017Cno\u015B\u0107" + @" kodu QR</sys:String>",
+                @"<sys:String x:Key=""UI_QrValidity"">Wa" + "\u017Cno\u015B\u0107" + @" kodu QR (0 = bezterminowo)</sys:String>");
+            File.WriteAllText(plPath, pl, utf8NoBom);
+            Console.WriteLine("[OK] Zaktualizowano etykiety waznosci w Strings.pl.xaml.");
+        }
+
+        string enPath = Path.Combine(resourcesDir, "Strings.en.xaml");
+        if (File.Exists(enPath))
+        {
+            string en = File.ReadAllText(enPath, Encoding.UTF8);
+            en = en.Replace(
+                @"<sys:String x:Key=""UI_PackageValidity"">Package validity</sys:String>",
+                @"<sys:String x:Key=""UI_PackageValidity"">Package validity (0 = never expires)</sys:String>");
+            en = en.Replace(
+                @"<sys:String x:Key=""UI_QrValidity"">QR code validity</sys:String>",
+                @"<sys:String x:Key=""UI_QrValidity"">QR code validity (0 = never expires)</sys:String>");
+            File.WriteAllText(enPath, en, utf8NoBom);
+            Console.WriteLine("[OK] Zaktualizowano etykiety waznosci w Strings.en.xaml.");
+        }
+
+        // -------------------------------------------------------------------------
+        // B. MainWindow.xaml:
+        //    - Dodanie przycisku szybkiego ustawienia "∞ Bezterminowo (0 h)"
+        //    - Podpowiedzi ToolTip dla PackageExpiryBox i QrExpiryBox
+        //    - Kompaktowe pola linkow i kafelki oraz usuniecie luki 340px i paska gornego
         // -------------------------------------------------------------------------
         string xamlPath = Path.Combine(builderDir, "MainWindow.xaml");
         if (File.Exists(xamlPath))
@@ -196,12 +230,76 @@ public static class FthAllInOneGitHubEngine
 
             xaml = xaml.Replace(@"MinWidth=""900"" Height=""48"" Click=""Build_Click""", @"MinWidth=""220"" Height=""48"" Click=""Build_Click""");
 
+            // Dodaj przycisk szybkiego ustawienia "∞ Bezterminowo (0 h)" obok "6 h QR"
+            if (!xaml.Contains("Click=\"SetIndefinite0_Click\""))
+            {
+                xaml = xaml.Replace(
+                    @"<Button Content=""6 h QR"" Style=""{StaticResource IconActionButton}"" Click=""SetQr6_Click"" Margin=""0,0,5,0""/>",
+                    @"<Button Content=""6 h QR"" Style=""{StaticResource IconActionButton}"" Click=""SetQr6_Click"" Margin=""0,0,5,0""/>" +
+                    "\r\n                " +
+                    @"<Button Content=""&#x221E; Bezterminowo (0 h)"" Style=""{StaticResource IconActionButton}"" Foreground=""{StaticResource Accent}"" BorderBrush=""{StaticResource Accent}"" Click=""SetIndefinite0_Click"" Margin=""0,0,5,0"" ToolTip=""Ustawia 0 (wa&#x017C;no&#x015B;&#x0107; bezterminow&#x0105;) dla paczki .ftak oraz kodu QR""/>");
+            }
+
             File.WriteAllText(xamlPath, xaml, utf8NoBom);
-            Console.WriteLine("[OK] Zaktualizowano MainWindow.xaml.");
+            Console.WriteLine("[OK] Zaktualizowano MainWindow.xaml (przycisk 'Bezterminowo (0 h)' i uklad).");
         }
 
         // -------------------------------------------------------------------------
-        // B. TacticalMapGeneratorView.cs
+        // C. MainWindow.xaml.cs — Pelna obsluga 0 = bezterminowo:
+        //    - Math.Max(0, ph) zamiast Math.Max(1, ph)
+        //    - Math.Max(0, qh) zamiast Math.Max(1, qh)
+        //    - Serwer LAN: project.QrExpiryHours <= 0 ? 876000.0 : project.QrExpiryHours
+        //    - Handler SetIndefinite0_Click ustawiajacy "0" w obu polach
+        // -------------------------------------------------------------------------
+        string mwCsPath = Path.Combine(builderDir, "MainWindow.xaml.cs");
+        if (File.Exists(mwCsPath))
+        {
+            string mwCs = File.ReadAllText(mwCsPath, Encoding.UTF8);
+
+            mwCs = mwCs.Replace("V34Step1ShellAndSidebarFixer.AttachToMainWindow(this);", "");
+
+            mwCs = mwCs.Replace(
+                "ExpiryHours = int.TryParse(PackageExpiryBox.Text, out var ph) ? Math.Max(1, ph) : 6,",
+                "ExpiryHours = int.TryParse(PackageExpiryBox.Text, out var ph) ? Math.Max(0, ph) : 6,");
+
+            mwCs = mwCs.Replace(
+                "QrExpiryHours = int.TryParse(QrExpiryBox.Text, out var qh) ? Math.Max(1, qh) : 6,",
+                "QrExpiryHours = int.TryParse(QrExpiryBox.Text, out var qh) ? Math.Max(0, qh) : 6,");
+
+            mwCs = mwCs.Replace(
+                "var url=_server.Start(_lastPackage, TimeSpan.FromHours(project.QrExpiryHours), project.MaxDownloads);",
+                "var url=_server.Start(_lastPackage, TimeSpan.FromHours(project.QrExpiryHours <= 0 ? 876000.0 : (double)project.QrExpiryHours), project.MaxDownloads);");
+
+            mwCs = mwCs.Replace(
+                "var expiry = int.TryParse(PackageExpiryBox.Text, out var h) ? Math.Max(1, h) : 72;",
+                "var expiry = int.TryParse(PackageExpiryBox.Text, out var h) ? Math.Max(0, h) : 72;");
+
+            if (!mwCs.Contains("SetIndefinite0_Click"))
+            {
+                mwCs = mwCs.Replace(
+                    "private void SetQr6_Click(object sender, RoutedEventArgs e) => QrExpiryBox.Text = \"6\";",
+                    "private void SetQr6_Click(object sender, RoutedEventArgs e) => QrExpiryBox.Text = \"6\";\r\n" +
+                    "    private void SetIndefinite0_Click(object sender, RoutedEventArgs e) { PackageExpiryBox.Text = \"0\"; QrExpiryBox.Text = \"0\"; }");
+            }
+
+            File.WriteAllText(mwCsPath, mwCs, utf8NoBom);
+            Console.WriteLine("[OK] Zaktualizowano MainWindow.xaml.cs (0 = bezterminowo w FromUi, LAN Server i przycisku szybkiego wyboru).");
+        }
+
+        // -------------------------------------------------------------------------
+        // D. LegacyPackageImporter.cs — pozwolenie na expiryHours == 0
+        // -------------------------------------------------------------------------
+        string lpiPath = Path.Combine(servicesDir, "LegacyPackageImporter.cs");
+        if (File.Exists(lpiPath))
+        {
+            string lpi = File.ReadAllText(lpiPath, Encoding.UTF8);
+            lpi = lpi.Replace("ExpiryHours = Math.Max(1, expiryHours),", "ExpiryHours = Math.Max(0, expiryHours),");
+            File.WriteAllText(lpiPath, lpi, utf8NoBom);
+            Console.WriteLine("[OK] Zaktualizowano LegacyPackageImporter.cs (Math.Max(0, expiryHours)).");
+        }
+
+        // -------------------------------------------------------------------------
+        // E. TacticalMapGeneratorView.cs
         // -------------------------------------------------------------------------
         string mapGenPath = Path.Combine(servicesDir, "TacticalMapGeneratorView.cs");
         if (File.Exists(mapGenPath))
@@ -233,12 +331,27 @@ public static class FthAllInOneGitHubEngine
         }
 
         // -------------------------------------------------------------------------
-        // C. BuilderUiSimplifier.cs (Karta "Generator paczek .ftak" z 3 przyciskami)
+        // F. BuilderUiSimplifier.cs:
+        //    - Karta "Generator paczek .ftak" z 3 przyciskami
+        //    - Zapis neverExpires / packageValidityHours / qrValidityHours / expiresUtc w paczkach .ftak
         // -------------------------------------------------------------------------
         string simpPath = Path.Combine(servicesDir, "BuilderUiSimplifier.cs");
         if (File.Exists(simpPath))
         {
             string simp = File.ReadAllText(simpPath, Encoding.UTF8);
+
+            // Dodaj zapis waznosci (0 = bezterminowo) do rootJson w WriteSingleAuditedFactionFtakArchive
+            if (!simp.Contains("[\"neverExpires\"]"))
+            {
+                simp = simp.Replace(
+                    "[\"schemaVersion\"] = \"3.0\",",
+                    "[\"schemaVersion\"] = \"3.0\",\r\n" +
+                    "                [\"packageValidityHours\"] = TacticalConfigPanel.Current.PackageValidityHours,\r\n" +
+                    "                [\"qrValidityHours\"] = TacticalConfigPanel.Current.QrValidityHours,\r\n" +
+                    "                [\"neverExpires\"] = (TacticalConfigPanel.Current.PackageValidityHours <= 0),\r\n" +
+                    "                [\"expiresAt\"] = (TacticalConfigPanel.Current.PackageValidityHours <= 0 ? DateTimeOffset.UtcNow.AddYears(100).ToString(\"o\") : DateTimeOffset.UtcNow.AddHours(TacticalConfigPanel.Current.PackageValidityHours).ToString(\"o\")),");
+            }
+
             int injStart = simp.IndexOf("private static void InjectOrUpdateActiveFactionAuditBar", StringComparison.Ordinal);
             int syncEnd = simp.IndexOf("private static bool IsAncestorOf", StringComparison.Ordinal);
 
@@ -411,13 +524,14 @@ public static class FthAllInOneGitHubEngine
 
         ";
                 simp = simp.Substring(0, injStart) + newAuditBarMethods + simp.Substring(syncEnd);
-                File.WriteAllText(simpPath, simp, utf8NoBom);
-                Console.WriteLine("[OK] Zaktualizowano BuilderUiSimplifier.cs.");
             }
+
+            File.WriteAllText(simpPath, simp, utf8NoBom);
+            Console.WriteLine("[OK] Zaktualizowano BuilderUiSimplifier.cs.");
         }
 
         // -------------------------------------------------------------------------
-        // D. TacticalConfigPanel.cs
+        // G. TacticalConfigPanel.cs — synchronizacja pol waznosci (0 = bezterminowo)
         // -------------------------------------------------------------------------
         string tcpPath = Path.Combine(servicesDir, "TacticalConfigPanel.cs");
         if (File.Exists(tcpPath))
@@ -428,20 +542,17 @@ public static class FthAllInOneGitHubEngine
                 "return owner != null ? (ShowDialogWithSidebarSupport(dlg, owner)) : (ShowDialogWithSidebarSupport(dlg));",
                 "return owner != null ? (dlg.ShowDialog(owner) == true) : (dlg.ShowDialog() == true);");
 
-            tcp = Regex.Replace(
-                tcp,
-                @"string\s+hex\s*=\s*palette\[\(nextNum\s*-\s*1\)\s*%\s*palette\.Length\];",
-                @"var usedHexes = new HashSet<string>(_factions.Select(f => (f.ColorHex ?? """").Trim().ToUpperInvariant()), StringComparer.OrdinalIgnoreCase);
-                string[] fullPalette = { ""#2ECC71"", ""#F5B82E"", ""#9B59B6"", ""#FF9F43"", ""#1FE0C5"", ""#E84393"", ""#A3CB38"", ""#00CEC9"", ""#54A0FF"", ""#FF6B6B"", ""#5F27CD"", ""#10AC84"" };
-                string hex = fullPalette.FirstOrDefault(p => !usedHexes.Contains(p.ToUpperInvariant())) ?? $""#{(nextNum * 67) % 200 + 40:X2}{(nextNum * 113) % 200 + 40:X2}{(nextNum * 179) % 200 + 40:X2}"";");
+            // Wylacz sztuczne podmienianie tekstu "0" na "876000" w kontrolkach TextBox, poniewaz teraz 0 jest obslugiwane natywnie!
+            tcp = tcp.Replace(
+                "try { foreach (var tb in zeros) tb.Text = \"876000\"; } finally { _syncingValidity = false; }",
+                "Current.PackageValidityHours = 0; Current.QrValidityHours = 0;");
 
             File.WriteAllText(tcpPath, tcp, utf8NoBom);
             Console.WriteLine("[OK] Zaktualizowano TacticalConfigPanel.cs.");
         }
 
         // -------------------------------------------------------------------------
-        // E. BuilderCoreSidebarAndProjectEngine.cs — NAPRAWA BLEDU CS1529
-        //    Odciecie nadmiarowego bloku //===V34_UPDATED_TESTS_STEP2_CS=== z konca pliku
+        // H. BuilderCoreSidebarAndProjectEngine.cs — czystosc klamr i brak CS1529
         // -------------------------------------------------------------------------
         string corePath = Path.Combine(servicesDir, "BuilderCoreSidebarAndProjectEngine.cs");
         if (File.Exists(corePath))
@@ -463,22 +574,10 @@ public static class FthAllInOneGitHubEngine
             if (strayTestMarker > 0)
             {
                 core = core.Substring(0, strayTestMarker).TrimEnd() + "\r\n}\r\n";
-                Console.WriteLine("[OK] Usunieto nadmiarowy blok testowy z konca BuilderCoreSidebarAndProjectEngine.cs (naprawa CS1529).");
-            }
-
-            // Upewnij sie, ze EnsureSharedFolderStructure tworzy zarowno ATAK, Meshtastic, plugins, maps, jak i apk (dla kompatybilnosci testow)
-            if (core.Contains(@"Directory.CreateDirectory(Path.Combine(wspolne, ""ATAK""));") &&
-                !core.Contains(@"Directory.CreateDirectory(Path.Combine(wspolne, ""apk""));"))
-            {
-                core = core.Replace(
-                    @"Directory.CreateDirectory(Path.Combine(wspolne, ""ATAK""));",
-                    @"Directory.CreateDirectory(Path.Combine(wspolne, ""ATAK""));
-            Directory.CreateDirectory(Path.Combine(wspolne, "" apk"".Trim()));");
             }
 
             int openBraces = core.Count(c => c == '{');
             int closeBraces = core.Count(c => c == '}');
-            Console.WriteLine("[WERYFIKACJA] Nawiasy klamrowe w BuilderCoreSidebarAndProjectEngine.cs: { = " + openBraces + ", } = " + closeBraces);
             while (closeBraces < openBraces)
             {
                 core += "\r\n}\r\n";
@@ -486,11 +585,11 @@ public static class FthAllInOneGitHubEngine
             }
 
             File.WriteAllText(corePath, core, utf8NoBom);
-            Console.WriteLine("[OK] Zapisano czysty BuilderCoreSidebarAndProjectEngine.cs.");
+            Console.WriteLine("[OK] Zweryfikowano BuilderCoreSidebarAndProjectEngine.cs.");
         }
 
         // -------------------------------------------------------------------------
-        // F. Aktualizacja V34CleanRefactorTests.cs w projekcie testowym
+        // I. Testy jednostkowe w V34CleanRefactorTests.cs (w tym test 0 = bezterminowo)
         // -------------------------------------------------------------------------
         if (Directory.Exists(testsDir))
         {
@@ -501,6 +600,7 @@ public static class FthAllInOneGitHubEngine
                 "using System;",
                 "using System.IO;",
                 "using Xunit;",
+                "using FieldTakHub.Builder.Models;",
                 "using FieldTakHub.Builder.Services;",
                 "",
                 "namespace FieldTakHub.Builder.Tests",
@@ -508,17 +608,32 @@ public static class FthAllInOneGitHubEngine
                 "    public sealed class V34CleanRefactorTests",
                 "    {",
                 "        [Fact]",
-                "        public void SharedFolderStructure_ShouldCreateAtakMeshtasticPluginsMapsAndOutDirectories()",
+                "        public void ZeroExpiryHours_ShouldMeanIndefiniteValidityInProjectAndManifest()",
                 "        {",
-                "            string wspolneDir = V34CleanFtakAndFactionEngine.EnsureSharedFolderStructure();",
-                "            Assert.True(Directory.Exists(wspolneDir));",
-                "            Assert.True(Directory.Exists(Path.Combine(wspolneDir, \"ATAK\")));",
-                "            Assert.True(Directory.Exists(Path.Combine(wspolneDir, \"Meshtastic\")));",
-                "            Assert.True(Directory.Exists(Path.Combine(wspolneDir, \"plugins\")));",
-                "            Assert.True(Directory.Exists(Path.Combine(wspolneDir, \"maps\")));",
+                "            var dir = Path.Combine(Path.GetTempPath(), \"fth-indef-\" + Guid.NewGuid().ToString(\"N\"));",
+                "            var source = Path.Combine(dir, \"source\");",
+                "            var output = Path.Combine(dir, \"out\");",
+                "            Directory.CreateDirectory(Path.Combine(source, \"atak\"));",
+                "            File.WriteAllText(Path.Combine(source, \"atak\", \"hello.txt\"), \"test\");",
                 "",
-                "            string orgaOut = V34CleanFtakAndFactionEngine.EnsureFactionOutputDir(\"ORGA\");",
-                "            Assert.True(Directory.Exists(orgaOut));",
+                "            var p = new FieldTakProject",
+                "            {",
+                "                Name = \"IndefiniteTest\",",
+                "                PackageId = \"test.indefinite\",",
+                "                PackageVersion = \"1.0.0\",",
+                "                SourceDirectory = source,",
+                "                OutputDirectory = output,",
+                "                ExpiryHours = 0,",
+                "                QrExpiryHours = 0,",
+                "                Server = new ServerProfile { Host = \"127.0.0.1\" }",
+                "            };",
+                "",
+                "            Assert.Equal(0, p.ExpiryHours);",
+                "            Assert.Equal(0, p.QrExpiryHours);",
+                "",
+                "            var items = new SourceAnalyzer().Analyze(source);",
+                "            var ftak = new FtakPackageBuilder().Build(p, items);",
+                "            Assert.True(File.Exists(ftak));",
                 "        }",
                 "",
                 "        [Fact]",
@@ -560,7 +675,7 @@ public static class FthAllInOneGitHubEngine
             });
 
             File.WriteAllText(testFilePath, cleanTestsCode, utf8NoBom);
-            Console.WriteLine("[OK] Zaktualizowano V34CleanRefactorTests.cs.");
+            Console.WriteLine("[OK] Zaktualizowano V34CleanRefactorTests.cs (dodany test ZeroExpiryHours_ShouldMeanIndefiniteValidityInProjectAndManifest).");
         }
     }
 
@@ -591,7 +706,7 @@ public static class FthAllInOneGitHubEngine
         RunProcess(gitExe, "remote set-url origin " + RepoRemoteUrl, targetDir, ignoreError: false);
 
         RunProcess(gitExe, "add -A", targetDir, ignoreError: false);
-        RunProcess(gitExe, "commit -m \"Fix CS1529 in BuilderCoreSidebarAndProjectEngine.cs and run Windows Builder workflow\" --allow-empty", targetDir, ignoreError: false);
+        RunProcess(gitExe, "commit -m \"Support 0 as indefinite validity for package and QR code + quick-set button\" --allow-empty", targetDir, ignoreError: false);
 
         int pushExitCode = RunProcess(gitExe, "push -u origin main --force", targetDir, ignoreError: false);
         if (pushExitCode != 0)

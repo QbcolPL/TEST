@@ -2262,7 +2262,7 @@ namespace FieldTakHub.Builder.Services
                 var zeros = FindNativeValidityTextBoxes(win).Where(tb => int.TryParse(tb.Text?.Trim(), out int v) && v == 0).ToList();
                 if (zeros.Count == 0) return;
                 _syncingValidity = true;
-                try { foreach (var tb in zeros) tb.Text = "876000"; } finally { _syncingValidity = false; }
+                Current.PackageValidityHours = 0; Current.QrValidityHours = 0;
                 _ = win.Dispatcher.BeginInvoke(new Action(() =>
                 {
                     _syncingValidity = true;

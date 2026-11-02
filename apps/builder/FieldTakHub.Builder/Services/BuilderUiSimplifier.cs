@@ -424,6 +424,10 @@ namespace FieldTakHub.Builder.Services
             var rootJson = new JsonObject
             {
                 ["schemaVersion"] = "3.0",
+                ["packageValidityHours"] = TacticalConfigPanel.Current.PackageValidityHours,
+                ["qrValidityHours"] = TacticalConfigPanel.Current.QrValidityHours,
+                ["neverExpires"] = (TacticalConfigPanel.Current.PackageValidityHours <= 0),
+                ["expiresAt"] = (TacticalConfigPanel.Current.PackageValidityHours <= 0 ? DateTimeOffset.UtcNow.AddYears(100).ToString("o") : DateTimeOffset.UtcNow.AddHours(TacticalConfigPanel.Current.PackageValidityHours).ToString("o")),
                 ["eventName"] = eventName,
                 ["activeFaction"] = fac.Name,
                 ["Name"] = fac.Name,
@@ -783,6 +787,10 @@ namespace FieldTakHub.Builder.Services
             var offlineJsonObj = new JsonObject
             {
                 ["schemaVersion"] = "3.0",
+                ["packageValidityHours"] = TacticalConfigPanel.Current.PackageValidityHours,
+                ["qrValidityHours"] = TacticalConfigPanel.Current.QrValidityHours,
+                ["neverExpires"] = (TacticalConfigPanel.Current.PackageValidityHours <= 0),
+                ["expiresAt"] = (TacticalConfigPanel.Current.PackageValidityHours <= 0 ? DateTimeOffset.UtcNow.AddYears(100).ToString("o") : DateTimeOffset.UtcNow.AddHours(TacticalConfigPanel.Current.PackageValidityHours).ToString("o")),
                 ["eventName"] = eventName,
                 ["activeFaction"] = fac.Name,
                 ["factions"] = new JsonArray

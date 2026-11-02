@@ -108,8 +108,8 @@
   <sys:String x:Key="UI_EventInfo">1. Event information</sys:String>
   <sys:String x:Key="UI_EventName">Event name</sys:String>
   <sys:String x:Key="UI_Profile">Profile</sys:String>
-  <sys:String x:Key="UI_PackageValidity">Package validity</sys:String>
-  <sys:String x:Key="UI_QrValidity">QR code validity</sys:String>
+  <sys:String x:Key="UI_PackageValidity">Package validity (0 = never expires)</sys:String>
+  <sys:String x:Key="UI_QrValidity">QR code validity (0 = never expires)</sys:String>
   <sys:String x:Key="UI_Description">Description (optional)</sys:String>
   <sys:String x:Key="UI_Contents">2. Package contents</sys:String>
   <sys:String x:Key="UI_ContentsHelp">Choose the elements to include in the .FTAK package</sys:String>

@@ -108,8 +108,8 @@
   <sys:String x:Key="UI_EventInfo">1. Informacje o wydarzeniu</sys:String>
   <sys:String x:Key="UI_EventName">Nazwa wydarzenia</sys:String>
   <sys:String x:Key="UI_Profile">Profil</sys:String>
-  <sys:String x:Key="UI_PackageValidity">Ważność paczki</sys:String>
-  <sys:String x:Key="UI_QrValidity">Ważność kodu QR</sys:String>
+  <sys:String x:Key="UI_PackageValidity">Ważność paczki (0 = bezterminowo)</sys:String>
+  <sys:String x:Key="UI_QrValidity">Ważność kodu QR (0 = bezterminowo)</sys:String>
   <sys:String x:Key="UI_Description">Opis (opcjonalnie)</sys:String>
   <sys:String x:Key="UI_Contents">2. Zawartość paczki</sys:String>
   <sys:String x:Key="UI_ContentsHelp">Wybierz elementy, które mają być zawarte w paczce .FTAK</sys:String>

@@ -173,8 +173,8 @@ public partial class MainWindow : Window
     {
         PackageId = IdBox.Text.Trim(), Name = NameBox.Text.Trim(), PackageVersion = VersionBox.Text.Trim(), PublisherName = PublisherBox.Text.Trim(),
         SourceDirectory = SourceBox.Text.Trim(), OutputDirectory = OutputBox.Text.Trim(), AtakMinVersion = AtakMinBox.Text.Trim(), AtakMaxVersion = AtakMaxBox.Text.Trim(),
-        ExpiryHours = int.TryParse(PackageExpiryBox.Text, out var ph) ? Math.Max(1, ph) : 6,
-        QrExpiryHours = int.TryParse(QrExpiryBox.Text, out var qh) ? Math.Max(1, qh) : 6,
+        ExpiryHours = int.TryParse(PackageExpiryBox.Text, out var ph) ? Math.Max(0, ph) : 6,
+        QrExpiryHours = int.TryParse(QrExpiryBox.Text, out var qh) ? Math.Max(0, qh) : 6,
         BuilderMode = (BuilderModeBox.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? "simple",
         MaxDownloads = int.TryParse(MaxDownloadsBox.Text, out var md) ? Math.Max(1, md) : 50,
         Server = ServerFromUi(),
@@ -461,7 +461,7 @@ public partial class MainWindow : Window
         {
             if(string.IsNullOrWhiteSpace(_lastPackage) || !File.Exists(_lastPackage)) { MessageBox.Show(T("BuildFirst","Build a package first."),T("WindowTitle","Field TAK Hub Builder")); return; }
             var project=FromUi(); ServerValidator.Validate(project.Server);
-            var url=_server.Start(_lastPackage, TimeSpan.FromHours(project.QrExpiryHours), project.MaxDownloads); UrlText.Text=url;
+            var url=_server.Start(_lastPackage, TimeSpan.FromHours(project.QrExpiryHours <= 0 ? 876000.0 : (double)project.QrExpiryHours), project.MaxDownloads); UrlText.Text=url;
             var deepLink=$"fieldtak://provision?url={Uri.EscapeDataString(url)}";
             ShowQr(deepLink,_qr.CreatePng(deepLink));
             Log(string.Format(T("LogLanStarted","LAN distribution started. HTTP Range/206 resume is enabled. Plain HTTP is intended only for private LAN; Hub rejects public cleartext URLs.\r\nDescriptor: {0}\r\nQR deep-link: {1}"),url,deepLink));
@@ -572,7 +572,7 @@ public partial class MainWindow : Window
         try
         {
             var publisher = string.IsNullOrWhiteSpace(PublisherBox.Text) ? Environment.UserName : PublisherBox.Text.Trim();
-            var expiry = int.TryParse(PackageExpiryBox.Text, out var h) ? Math.Max(1, h) : 72;
+            var expiry = int.TryParse(PackageExpiryBox.Text, out var h) ? Math.Max(0, h) : 72;
             var maxDownloads = int.TryParse(MaxDownloadsBox.Text, out var md) ? Math.Max(1, md) : 50;
             var result = _legacy.Import(d.FileName, _workspace, publisher, expiry, maxDownloads);
             _projects.Save(result.ProjectFile, result.Project);
@@ -925,6 +925,7 @@ public partial class MainWindow : Window
     private void SetPackage24_Click(object sender, RoutedEventArgs e) => PackageExpiryBox.Text = "24";
     private void SetPackage48_Click(object sender, RoutedEventArgs e) => PackageExpiryBox.Text = "48";
     private void SetQr6_Click(object sender, RoutedEventArgs e) => QrExpiryBox.Text = "6";
+    private void SetIndefinite0_Click(object sender, RoutedEventArgs e) { PackageExpiryBox.Text = "0"; QrExpiryBox.Text = "0"; }
     private void SetLanguagePl_Click(object sender, RoutedEventArgs e) => LanguageBox.SelectedIndex = 0;
     private void SetLanguageEn_Click(object sender, RoutedEventArgs e) => LanguageBox.SelectedIndex = 1;
 
