@@ -1824,7 +1824,7 @@ namespace FieldTakHub.Builder.Services
                 var w = win ?? Application.Current?.MainWindow;
                 if (mainOpordStack == null) return;
 
-                var model = V34CleanOpordDataEngine.GetLiveOpordModel();
+                var model = OpordBuilderManager.GetOrCreateModel(string.IsNullOrWhiteSpace(activeFactionName) ? "BLUFOR" : activeFactionName);
                 OpordDayPlanModel activeDay = null;
                 if (model != null && model.Days != null && model.Days.Count > 0)
                 {
@@ -1853,10 +1853,7 @@ namespace FieldTakHub.Builder.Services
                 }
 
                 // 4. Zalacznik 3 i integracja eksportu
-                if (model != null && activeDay != null)
-                {
-                    V34CleanAnnex3AndDiscordEngine.AttachToOpordForm(w, mainOpordStack, model, activeDay, activeFactionName);
-                }
+                V34CleanAnnex3AndDiscordEngine.AttachToOpordForm(w, mainOpordStack, model, activeDay, activeFactionName);
             }
             catch { }
         }
@@ -2790,7 +2787,19 @@ namespace FieldTakHub.Builder.Services
 
             outerStack.Children.Add(bodyStack);
             annex3Card.Child = outerStack;
-            mainStack.Children.Add(annex3Card);
+            int annex2Idx = -1;
+            for (int i = 0; i < mainStack.Children.Count; i++)
+            {
+                var chTexts = V34CleanSidebarAndHeaderEngine.GetLogicalTreeNodes(mainStack.Children[i]).OfType<TextBlock>().Select(t => t.Text ?? "").ToList();
+                if (chTexts.Any(t => t.Contains("ZA\u0141\u0104CZNIK 2", StringComparison.OrdinalIgnoreCase) || t.Contains("ANNEX 2", StringComparison.OrdinalIgnoreCase)))
+                {
+                    annex2Idx = i;
+                }
+            }
+            if (annex2Idx >= 0 && annex2Idx + 1 <= mainStack.Children.Count)
+                mainStack.Children.Insert(annex2Idx + 1, annex3Card);
+            else
+                mainStack.Children.Add(annex3Card);
         }
 
         public static string BuildAnnex3HtmlSection(Window win, string factionName, string dayTitle)

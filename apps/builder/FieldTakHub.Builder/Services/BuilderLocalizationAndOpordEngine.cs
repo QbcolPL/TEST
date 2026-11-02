@@ -2030,26 +2030,16 @@ namespace FieldTakHub.Builder.Services
         {
             try
             {
-                var flags = System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic;
-                foreach (var f in typeof(OpordBuilderManager).GetFields(flags))
-                {
-                    if (typeof(OpordParagraphModel).IsAssignableFrom(f.FieldType))
-                    {
-                        var model = f.GetValue(null) as OpordParagraphModel;
-                        if (model != null) return model;
-                    }
-                }
-                foreach (var p in typeof(OpordBuilderManager).GetProperties(flags))
-                {
-                    if (typeof(OpordParagraphModel).IsAssignableFrom(p.PropertyType))
-                    {
-                        var model = p.GetValue(null, null) as OpordParagraphModel;
-                        if (model != null) return model;
-                    }
-                }
+                var factions = TacticalConfigPanel.GetInternalFactionsList();
+                string facName = (factions != null && factions.Count > 0 && !string.IsNullOrWhiteSpace(factions[0].Name))
+                    ? factions[0].Name
+                    : "BLUFOR";
+                return OpordBuilderManager.GetOrCreateModel(facName);
             }
-            catch { }
-            return null;
+            catch
+            {
+                return null;
+            }
         }
 
         public static bool IsGarbageFactionName(string name)

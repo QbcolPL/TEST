@@ -1,1 +1,1 @@
-Field TAK Hub OPORD Minus UI & Annex 3 Map Trigger UTC: 2026-11-02T19:38:10.9817765Z | RunId: dc2f659a79b8421db393cfef329c3a0d
+Field TAK Hub Annex 3 Visibility Fix UTC: 2026-11-02T20:29:20.9479600Z | RunId: 7225011df17c4c029a4524e75b481ffd
