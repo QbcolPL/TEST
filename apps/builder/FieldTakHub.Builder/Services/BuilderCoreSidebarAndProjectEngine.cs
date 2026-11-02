@@ -103,7 +103,7 @@ namespace FieldTakHub.Builder.Services
                     }
                 };
                 win.ContentRendered += (_, __) => EnsureRootDockSidebar(win);
-                win.LayoutUpdated += (_, __) => EnforceRootSidebarColumnBounds(win);
+                // win.LayoutUpdated += (_, __) => EnforceRootSidebarColumnBounds(win); // Eliminated jitter
             }
 
             EnsureRootDockSidebar(win);
