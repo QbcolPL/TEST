@@ -1863,39 +1863,25 @@ private static void CaptureAndCollapseTopMenuBar(List<DependencyObject> allEleme
 // [START_V34_CLEAN_SIDEBAR_ENGINE]
     public static class V34CleanSidebarAndHeaderEngine
     {
-        public static event Action<Window> OnApplyAdditionalModuleFixes;
-
         public static void ApplySidebarAndHeaderFixes(Window win)
         {
             var w = win ?? Application.Current?.MainWindow;
             if (w == null) return;
-
             try
             {
                 if (w.MinWidth > 900) w.MinWidth = 900;
                 if (w.MinHeight > 560) w.MinHeight = 560;
-
                 RemoveLegacyTopBarAndBlackHeaderGap(w);
-                // UpdateSidebarIconsAndCollapseButton(w);
-
-                OnApplyAdditionalModuleFixes?.Invoke(w);
             }
             catch { }
         }
 
-        /// <summary>
-        /// Usuwa pozostalosci po starym gornym pasku (dwie poziome linie cyjanowe TRYB PRACY BUILDERA)
-        /// oraz czarna przerwe nad naglowkiem BUILDER (zeruje stary RowDefinition i pusty Border).
-        /// </summary>
         public static void RemoveLegacyTopBarAndBlackHeaderGap(Window win)
         {
             var elements = GetLogicalTreeNodes(win);
-
             foreach (var tb in elements.OfType<TextBlock>())
             {
                 string txt = (tb.Text ?? "").Trim();
-
-                // 1. Całkowite usunięcie starego paska "TRYB PRACY BUILDERA" / "BUILDER MODE" i jego cyjanowych linii
                 if (txt.Contains("TRYB PRACY BUILDERA", StringComparison.OrdinalIgnoreCase) ||
                     txt.Contains("BUILDER MODE", StringComparison.OrdinalIgnoreCase))
                 {
@@ -1912,182 +1898,8 @@ private static void CaptureAndCollapseTopMenuBar(List<DependencyObject> allEleme
                             b.BorderThickness = new Thickness(0);
                             b.BorderBrush = Brushes.Transparent;
                             b.Background = Brushes.Transparent;
-
-                            var parent = LogicalTreeHelper.GetParent(b) ?? VisualTreeHelper.GetParent(b);
-                            if (parent is Grid g)
-                            {
-                                int r = Grid.GetRow(b);
-                                if (r >= 0 && r < g.RowDefinitions.Count)
-                                {
-                                    g.RowDefinitions[r].Height = new GridLength(0);
-                                    g.RowDefinitions[r].MinHeight = 0;
-                                }
-                            }
                         }
                         cur = LogicalTreeHelper.GetParent(cur) ?? VisualTreeHelper.GetParent(cur);
-                    }
-                }
-
-                // 2. Usunięcie czarnej przerwy nad nagłówkiem BUILDER
-                if (txt.StartsWith("BUILDER", StringComparison.OrdinalIgnoreCase) && tb.FontSize >= 15)
-                {
-                    tb.Margin = new Thickness(tb.Margin.Left, 0, tb.Margin.Right, tb.Margin.Bottom);
-
-                    DependencyObject p = LogicalTreeHelper.GetParent(tb) ?? VisualTreeHelper.GetParent(tb);
-                    for (int step = 0; step < 5 && p != null && !(p is Window); step++)
-                    {
-                        if (p is FrameworkElement fe && fe.Margin.Top > 4)
-                        {
-                            fe.Margin = new Thickness(fe.Margin.Left, 0, fe.Margin.Right, fe.Margin.Bottom);
-                        }
-                        if (p is Border pb && pb.Padding.Top > 6)
-                        {
-                            pb.Padding = new Thickness(pb.Padding.Left, 4, pb.Padding.Right, pb.Padding.Bottom);
-                        }
-                        if (p is Grid g && g.RowDefinitions.Count >= 2)
-                        {
-                            bool row0HasRealContent = false;
-                            foreach (UIElement ch in g.Children)
-                            {
-                                if (ch != null && Grid.GetRow(ch) == 0 && ch.Visibility == Visibility.Visible)
-                                {
-                                    if (ch is Border rb && (rb.Height == 0 || rb.Child == null))
-                                        continue;
-                                    row0HasRealContent = true;
-                                    break;
-                                }
-                            }
-                            if (!row0HasRealContent)
-                            {
-                                g.RowDefinitions[0].Height = new GridLength(0);
-                                g.RowDefinitions[0].MinHeight = 0;
-                            }
-                        }
-                        p = LogicalTreeHelper.GetParent(p) ?? VisualTreeHelper.GetParent(p);
-                    }
-                }
-            }
-
-            // 3. Wyzerowanie pustych ramek z poziomymi liniami podziału
-            foreach (var b in elements.OfType<Border>())
-            {
-                if (b.Child == null && b.Height <= 4 && (b.BorderThickness.Top >= 1 || b.BorderThickness.Bottom >= 1))
-                {
-                    b.BorderThickness = new Thickness(0);
-                    b.Height = 0;
-                    b.Visibility = Visibility.Collapsed;
-                }
-            }
-        }
-
-        /// <summary>
-        /// Pasek boczny (Sidebar): Rozróżnia przycisk zwijania (❮/❯) od przycisków modułów
-        /// (sprawdza, czy zawartością przycisku jest Panel z ikoną), dzięki czemu po schowaniu
-        /// paska bocznego wszystkie ikony modułów są w pełni widoczne i wyśrodkowane.
-        /// </summary>
-        public static void UpdateSidebarIconsAndCollapseButton(Window win)
-        {
-            var elements = GetLogicalTreeNodes(win);
-
-            Border sidebarBorder = null;
-            foreach (var b in elements.OfType<Border>())
-            {
-                if (Grid.GetColumn(b) == 0 && (b.Width >= 44 && b.Width <= 290 || b.ActualWidth >= 44 && b.ActualWidth <= 290))
-                {
-                    var btns = GetLogicalTreeNodes(b).OfType<Button>().ToList();
-                    if (btns.Count >= 4)
-                    {
-                        sidebarBorder = b;
-                        break;
-                    }
-                }
-            }
-
-            if (sidebarBorder == null) return;
-
-            double currentWidth = sidebarBorder.ActualWidth > 0 ? sidebarBorder.ActualWidth : sidebarBorder.Width;
-            bool isCollapsed = currentWidth > 0 && currentWidth < 95;
-
-            var sideButtons = GetLogicalTreeNodes(sidebarBorder).OfType<Button>().ToList();
-            for (int i = 0; i < sideButtons.Count; i++)
-            {
-                var btn = sideButtons[i];
-
-                // A. Przycisk modułu (jego zawartością jest Panel zawierający ikonę i tytuł)
-                if (btn.Content is Panel modulePanel)
-                {
-                    var textBlocks = modulePanel.Children.OfType<TextBlock>().ToList();
-                    if (isCollapsed)
-                    {
-                        btn.Padding = new Thickness(0);
-                        btn.HorizontalContentAlignment = HorizontalAlignment.Center;
-                        btn.VerticalContentAlignment = VerticalAlignment.Center;
-
-                        modulePanel.HorizontalAlignment = HorizontalAlignment.Center;
-                        modulePanel.VerticalAlignment = VerticalAlignment.Center;
-                        modulePanel.Margin = new Thickness(0);
-
-                        if (textBlocks.Count >= 1)
-                        {
-                            textBlocks[0].Visibility = Visibility.Visible;
-                            textBlocks[0].Margin = new Thickness(0);
-                            textBlocks[0].Padding = new Thickness(0);
-                            textBlocks[0].Width = double.NaN;
-                            textBlocks[0].FontSize = 18;
-                            textBlocks[0].TextAlignment = TextAlignment.Center;
-                            textBlocks[0].HorizontalAlignment = HorizontalAlignment.Center;
-                            textBlocks[0].VerticalAlignment = VerticalAlignment.Center;
-                        }
-
-                        for (int t = 1; t < textBlocks.Count; t++)
-                        {
-                            textBlocks[t].Visibility = Visibility.Collapsed;
-                        }
-                    }
-                    else
-                    {
-                        btn.Padding = new Thickness(12, 8, 12, 8);
-                        btn.HorizontalContentAlignment = HorizontalAlignment.Left;
-                        btn.VerticalContentAlignment = VerticalAlignment.Center;
-
-                        modulePanel.HorizontalAlignment = HorizontalAlignment.Left;
-
-                        if (textBlocks.Count >= 1)
-                        {
-                            textBlocks[0].Visibility = Visibility.Visible;
-                            textBlocks[0].Margin = new Thickness(0, 0, 10, 0);
-                            textBlocks[0].FontSize = 15;
-                        }
-
-                        for (int t = 1; t < textBlocks.Count; t++)
-                        {
-                            textBlocks[t].Visibility = Visibility.Visible;
-                        }
-                    }
-                    continue;
-                }
-
-                // B. Przycisk zwijania / rozwijania paska bocznego (nie jest Panelem z ikoną modułu)
-                string rawText = (btn.Content?.ToString() ?? "").Trim();
-                if (i == 0 || rawText == "<" || rawText == ">" || rawText == "❮" || rawText == "❯" || rawText == "«" || rawText == "»" || btn.Width <= 42)
-                {
-                    btn.Padding = new Thickness(0);
-                    btn.HorizontalContentAlignment = HorizontalAlignment.Center;
-                    btn.VerticalContentAlignment = VerticalAlignment.Center;
-                    btn.FontSize = 14;
-                    btn.FontWeight = FontWeights.Bold;
-                    btn.Content = isCollapsed ? "❯" : "❮";
-
-                    if (btn.Tag?.ToString() != "V34_SIDEBAR_TOGGLE_HOOKED")
-                    {
-                        btn.Tag = "V34_SIDEBAR_TOGGLE_HOOKED";
-                        btn.Click += (_, __) =>
-                        {
-                            win.Dispatcher.BeginInvoke(new Action(() =>
-                            {
-                                UpdateSidebarIconsAndCollapseButton(win);
-                            }), System.Windows.Threading.DispatcherPriority.Loaded);
-                        };
                     }
                 }
             }
@@ -2129,22 +1941,412 @@ private static void CaptureAndCollapseTopMenuBar(List<DependencyObject> allEleme
                     queue.Enqueue(ccContent);
                 }
             }
-
             return result;
         }
     }
     // [END_V34_CLEAN_SIDEBAR_ENGINE]
 
+    // [START_V34_CLEAN_FTAK_ENGINE]
+    public sealed class V34FactionVoiceChannelRow
+    {
+        public string Role { get; set; } = "Dowodzenie HQ";
+        public string Band { get; set; } = "PMR";
+        public string Freq { get; set; } = "CH 1 (446.00625 MHz)";
+        public string Tone { get; set; } = "CTCSS 67.0 Hz";
+    }
 
+    public sealed class V34FactionSnapshot
+    {
+        public string FactionName { get; set; } = "ORGA";
+        public string ColorHex { get; set; } = "#2684FF";
+        public string ChannelName { get; set; } = "ORGA-MESH";
+        public string Region { get; set; } = "EU_868";
+        public string ModemPreset { get; set; } = "SHORT_FAST";
+        public string OtsHost { get; set; } = "";
+        public string EmergencyPhone { get; set; } = "Brak / 112";
+        public int ExpirationHours { get; set; } = 0;
+        public List<V34FactionVoiceChannelRow> VoiceRows { get; set; } = new List<V34FactionVoiceChannelRow>();
+    }
 
+    public static class V34CleanFtakAndFactionEngine
+    {
+        private static readonly string[] TacticalRgbPalette = new string[]
+        {
+            "#2684FF", "#EB4034", "#2ECC71", "#FAD02C",
+            "#9B59B6", "#FF9F43", "#1FE0C5", "#E84393",
+            "#A3CB38", "#00CEC9", "#FF6B6B", "#54A0FF",
+            "#5F27CD", "#10AC84", "#F368E0", "#FF9FF3"
+        };
 
+        private static readonly HashSet<string> _allocatedColors = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "#2684FF"
+        };
+
+        public static List<V34FactionSnapshot> CachedFactions { get; } = new List<V34FactionSnapshot>();
+
+        public static string GetNextUniqueFactionColorHex(Window win = null)
+        {
+            try
+            {
+                var w = win ?? Application.Current?.MainWindow;
+                if (w != null)
+                {
+                    var all = V34CleanSidebarAndHeaderEngine.GetLogicalTreeNodes(w);
+                    foreach (var btn in all.OfType<Button>())
+                    {
+                        string bt = ExtractButtonTextSafe(btn);
+                        Match m = Regex.Match(bt, @"#[0-9A-Fa-f]{6}");
+                        if (m.Success) _allocatedColors.Add(m.Value.ToUpperInvariant());
+                    }
+                }
+            }
+            catch { }
+
+            var rng = new Random(Guid.NewGuid().GetHashCode());
+            var free = TacticalRgbPalette.Where(c => !_allocatedColors.Contains(c)).OrderBy(_ => rng.Next()).ToList();
+            string chosen;
+            if (free.Count > 0)
+            {
+                chosen = free[0];
+            }
+            else
+            {
+                do
+                {
+                    chosen = string.Format("#{0:X2}{1:X2}{2:X2}", rng.Next(45, 240), rng.Next(55, 240), rng.Next(45, 240));
+                } while (_allocatedColors.Contains(chosen));
+            }
+
+            _allocatedColors.Add(chosen);
+            return chosen;
+        }
+
+        public static string EnsureSharedFolderStructure()
+        {
+            string root = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "FieldTakHub");
+            string wspolne = Path.Combine(root, "wspolne");
+            Directory.CreateDirectory(Path.Combine(wspolne, "ATAK"));
+            Directory.CreateDirectory(Path.Combine(wspolne, "Meshtastic"));
+            Directory.CreateDirectory(Path.Combine(wspolne, "apk"));
+            Directory.CreateDirectory(Path.Combine(wspolne, "plugins"));
+            Directory.CreateDirectory(Path.Combine(wspolne, "maps"));
+            Directory.CreateDirectory(Path.Combine(root, "out"));
+            return wspolne;
+        }
+
+        public static string EnsureFactionOutputDir(string factionName)
+        {
+            EnsureSharedFolderStructure();
+            string root = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "FieldTakHub");
+            string outDir = Path.Combine(root, "out", SanitizeFolderName(factionName));
+            Directory.CreateDirectory(outDir);
+            return outDir;
+        }
+
+        public static string SanitizeFileName(string name) => SanitizeFolderName(name);
+
+        public static string SanitizeFolderName(string name)
+        {
+            if (string.IsNullOrWhiteSpace(name)) return "ORGA";
+            char[] inv = Path.GetInvalidFileNameChars();
+            StringBuilder sb = new StringBuilder();
+            foreach (char c in name.Trim())
+            {
+                sb.Append(Array.IndexOf(inv, c) >= 0 ? '_' : c);
+            }
+            string r = sb.ToString().Trim();
+            return string.IsNullOrEmpty(r) ? "ORGA" : r;
+        }
+
+        public static void ApplyFactionAndPackageFixes(Window win)
+        {
+            var w = win ?? Application.Current?.MainWindow;
+            if (w == null) return;
+
+            EnsureSharedFolderStructure();
+            var all = ScanAllWindowRoots(w);
+
+            foreach (var tb in all.OfType<TextBlock>())
+            {
+                string txt = (tb.Text ?? "").Trim();
+                if ((txt.Contains("Wa\u017Cno\u015B\u0107 paczki", StringComparison.OrdinalIgnoreCase) ||
+                     txt.Contains("Wa\u017Cno\u015B\u0107 kodu QR", StringComparison.OrdinalIgnoreCase) ||
+                     txt.Contains("Expiration", StringComparison.OrdinalIgnoreCase)) &&
+                    !txt.Contains("0 = bezterminowo", StringComparison.OrdinalIgnoreCase))
+                {
+                    tb.Text = txt.TrimEnd(':') + " (0 = bezterminowo):";
+                }
+            }
+
+            EnforceUniqueColorsAndNamesOnCards(all);
+            RefreshCachedFactions(w, all);
+        }
+
+        private static void EnforceUniqueColorsAndNamesOnCards(List<DependencyObject> all)
+        {
+            var usedColors = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var usedNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            var headers = all.OfType<TextBlock>()
+                .Where(t => (t.Text ?? "").Contains("Generator Stron \u2014", StringComparison.OrdinalIgnoreCase))
+                .ToList();
+
+            for (int i = 0; i < headers.Count; i++)
+            {
+                var hdr = headers[i];
+                var card = FindFactionCardContainer(hdr);
+                if (card == null) continue;
+
+                var elems = V34CleanSidebarAndHeaderEngine.GetLogicalTreeNodes(card);
+                var firstBox = elems.OfType<TextBox>().FirstOrDefault();
+                if (firstBox != null)
+                {
+                    string curName = (firstBox.Text ?? "").Trim();
+                    if (usedNames.Contains(curName) && curName.StartsWith("STRONA-", StringComparison.OrdinalIgnoreCase))
+                    {
+                        int n = i + 1;
+                        while (usedNames.Contains("STRONA-" + n)) n++;
+                        curName = "STRONA-" + n;
+                        firstBox.Text = curName;
+                        hdr.Text = "Generator Stron \u2014 " + curName;
+                    }
+                    if (!string.IsNullOrWhiteSpace(curName))
+                        usedNames.Add(curName);
+                }
+
+                var colorBtn = elems.OfType<Button>().FirstOrDefault(b => Regex.IsMatch(ExtractButtonTextSafe(b), @"#[0-9A-Fa-f]{6}"));
+                if (colorBtn != null)
+                {
+                    Match m = Regex.Match(ExtractButtonTextSafe(colorBtn), @"#[0-9A-Fa-f]{6}");
+                    if (m.Success)
+                    {
+                        string hex = m.Value.ToUpperInvariant();
+                        if (usedColors.Contains(hex))
+                        {
+                            hex = GetNextUniqueFactionColorHex(null);
+                            ApplyHexColorToButton(colorBtn, hdr, hex);
+                        }
+                        usedColors.Add(hex);
+                        _allocatedColors.Add(hex);
+                    }
+                }
+            }
+        }
+
+        private static void ApplyHexColorToButton(Button colorBtn, TextBlock hdrTb, string hex)
+        {
+            try
+            {
+                var brush = new SolidColorBrush((Color)ColorConverter.ConvertFromString(hex));
+                if (colorBtn.Content is string)
+                {
+                    colorBtn.Content = "\u25A0 " + hex;
+                }
+                else if (colorBtn.Content is Panel p)
+                {
+                    foreach (var b in p.Children.OfType<Border>()) b.Background = brush;
+                    foreach (var s in p.Children.OfType<System.Windows.Shapes.Shape>()) s.Fill = brush;
+                    foreach (var t in p.Children.OfType<TextBlock>())
+                        if (t.Text != null && t.Text.Contains("#")) t.Text = hex;
+                }
+                colorBtn.BorderBrush = brush;
+
+                if (LogicalTreeHelper.GetParent(hdrTb) is Panel hdrParent)
+                {
+                    foreach (var s in hdrParent.Children.OfType<System.Windows.Shapes.Shape>()) s.Fill = brush;
+                    foreach (var b in hdrParent.Children.OfType<Border>())
+                        if (b.Width <= 20 && b.Height <= 20) b.Background = brush;
+                }
+            }
+            catch { }
+        }
+
+        public static DependencyObject FindFactionCardContainer(TextBlock hdrTb)
+        {
+            if (hdrTb == null) return null;
+            DependencyObject cur = hdrTb;
+            DependencyObject bestBorder = null;
+
+            for (int depth = 0; depth < 9 && cur != null; depth++)
+            {
+                cur = LogicalTreeHelper.GetParent(cur) ?? VisualTreeHelper.GetParent(cur);
+                if (cur is Border || cur is Panel)
+                {
+                    var elems = V34CleanSidebarAndHeaderEngine.GetLogicalTreeNodes(cur);
+                    var texts = elems.OfType<TextBlock>().Select(x => x.Text ?? "").ToList();
+                    int hdrCount = texts.Count(x => x.Contains("Generator Stron \u2014", StringComparison.OrdinalIgnoreCase));
+                    if (hdrCount > 1) break;
+
+                    if (cur is Border b && b.BorderThickness.Top >= 1)
+                        bestBorder = b;
+
+                    if (hdrCount == 1 &&
+                        texts.Any(x => x.Contains("Nazwa strony", StringComparison.OrdinalIgnoreCase)) &&
+                        texts.Any(x => x.Contains("Kana\u0142y G\u0142osowe", StringComparison.OrdinalIgnoreCase)))
+                    {
+                        return cur;
+                    }
+                }
+            }
+            return bestBorder;
+        }
+
+        public static List<V34FactionSnapshot> RefreshCachedFactions(Window win, List<DependencyObject> preScanned = null)
+        {
+            var list = new List<V34FactionSnapshot>();
+            try
+            {
+                var all = preScanned ?? ScanAllWindowRoots(win ?? Application.Current?.MainWindow);
+                var headers = all.OfType<TextBlock>()
+                    .Where(t => (t.Text ?? "").Contains("Generator Stron \u2014", StringComparison.OrdinalIgnoreCase))
+                    .ToList();
+
+                foreach (var hdr in headers)
+                {
+                    var card = FindFactionCardContainer(hdr);
+                    if (card == null) continue;
+
+                    var items = V34CleanSidebarAndHeaderEngine.GetLogicalTreeNodes(card);
+                    var boxes = items.OfType<TextBox>().ToList();
+                    var snap = new V34FactionSnapshot();
+
+                    snap.FactionName = (boxes.Count > 0 && !string.IsNullOrWhiteSpace(boxes[0].Text))
+                        ? boxes[0].Text.Trim()
+                        : (hdr.Text ?? "").Replace("Generator Stron \u2014", "").Trim();
+
+                    if (string.IsNullOrWhiteSpace(snap.FactionName) ||
+                        snap.FactionName.Equals("PLI", StringComparison.OrdinalIgnoreCase) ||
+                        snap.FactionName.Equals("GeoChat", StringComparison.OrdinalIgnoreCase) ||
+                        snap.FactionName.Equals("TAK", StringComparison.OrdinalIgnoreCase))
+                    {
+                        snap.FactionName = "ORGA";
+                    }
+
+                    snap.ChannelName = snap.FactionName.ToUpperInvariant() + "-MESH";
+
+                    var colBtn = items.OfType<Button>().FirstOrDefault(b => Regex.IsMatch(ExtractButtonTextSafe(b), @"#[0-9A-Fa-f]{6}"));
+                    if (colBtn != null)
+                    {
+                        Match m = Regex.Match(ExtractButtonTextSafe(colBtn), @"#[0-9A-Fa-f]{6}");
+                        if (m.Success) snap.ColorHex = m.Value.ToUpperInvariant();
+                    }
+
+                    foreach (var tb in boxes)
+                    {
+                        var p = LogicalTreeHelper.GetParent(tb) as Panel;
+                        if (p != null && p.Children.OfType<TextBlock>().Any(l => (l.Text ?? "").Contains("Telefon alarmowy", StringComparison.OrdinalIgnoreCase)))
+                        {
+                            if (!string.IsNullOrWhiteSpace(tb.Text)) snap.EmergencyPhone = tb.Text.Trim();
+                        }
+                    }
+
+                    foreach (var panel in items.OfType<Panel>())
+                    {
+                        var directInputs = panel.Children.Cast<UIElement>().Where(x => x is TextBox || x is ComboBox).ToList();
+                        if (directInputs.Count >= 2 && directInputs.Any(x => x is TextBox))
+                        {
+                            bool isNameRow = panel.Children.OfType<StackPanel>().Any(sp => sp.Children.OfType<TextBlock>().Any(t => (t.Text ?? "").Contains("Nazwa strony", StringComparison.OrdinalIgnoreCase)));
+                            if (isNameRow) continue;
+
+                            string ReadVal(UIElement el)
+                            {
+                                if (el is TextBox tbx) return (tbx.Text ?? "").Trim();
+                                if (el is ComboBox cbx) return ((cbx.SelectedItem is ComboBoxItem cbi ? cbi.Content?.ToString() : cbx.SelectedItem?.ToString()) ?? cbx.Text ?? "").Trim();
+                                return "";
+                            }
+
+                            var vals = directInputs.Select(ReadVal).ToList();
+                            string role = vals[0];
+                            string band = vals.Count >= 2 ? vals[1] : "PMR";
+                            string freq = vals.Count >= 3 ? vals[2] : vals[1];
+                            string tone = vals.Count >= 4 ? vals[3] : "-";
+
+                            if (role.Equals("PMR", StringComparison.OrdinalIgnoreCase) ||
+                                role.Equals("VHF", StringComparison.OrdinalIgnoreCase) ||
+                                role.Equals("UHF", StringComparison.OrdinalIgnoreCase) ||
+                                role.Equals("DMR", StringComparison.OrdinalIgnoreCase) ||
+                                role.Contains("VHF/", StringComparison.OrdinalIgnoreCase))
+                            {
+                                band = role;
+                                role = vals.Count >= 2 ? vals[1] : "Kana\u0142";
+                                freq = vals.Count >= 3 ? vals[2] : "-";
+                            }
+
+                            if (!string.IsNullOrWhiteSpace(role) || !string.IsNullOrWhiteSpace(freq))
+                            {
+                                snap.VoiceRows.Add(new V34FactionVoiceChannelRow
+                                {
+                                    Role = string.IsNullOrWhiteSpace(role) ? "Kana\u0142" : role,
+                                    Band = string.IsNullOrWhiteSpace(band) ? "PMR" : band,
+                                    Freq = string.IsNullOrWhiteSpace(freq) ? "-" : freq,
+                                    Tone = string.IsNullOrWhiteSpace(tone) ? "-" : tone
+                                });
+                            }
+                        }
+                    }
+
+                    if (snap.VoiceRows.Count == 0)
+                        snap.VoiceRows.Add(new V34FactionVoiceChannelRow());
+
+                    list.Add(snap);
+                }
+            }
+            catch { }
+
+            if (list.Count > 0)
+            {
+                CachedFactions.Clear();
+                CachedFactions.AddRange(list);
+            }
+            return CachedFactions;
+        }
+
+        public static List<DependencyObject> ScanAllWindowRoots(Window win)
+        {
+            var result = new List<DependencyObject>(256);
+            var visited = new HashSet<DependencyObject>();
+
+            void AddTree(DependencyObject r)
+            {
+                if (r == null || !visited.Add(r)) return;
+                result.AddRange(V34CleanSidebarAndHeaderEngine.GetLogicalTreeNodes(r));
+            }
+
+            if (win != null)
+            {
+                AddTree(win);
+                foreach (var f in win.GetType().GetFields(System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic))
+                {
+                    try { if (f.GetValue(win) is DependencyObject d) AddTree(d); } catch { }
+                }
+            }
+
+            foreach (var t in typeof(V34CleanFtakAndFactionEngine).Assembly.GetTypes())
+            {
+                if (t.Namespace == null || !t.Namespace.StartsWith("FieldTakHub.Builder")) continue;
+                foreach (var sf in t.GetFields(System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic))
+                {
+                    try { if (typeof(DependencyObject).IsAssignableFrom(sf.FieldType) && sf.GetValue(null) is DependencyObject sd) AddTree(sd); } catch { }
+                }
+            }
+
+            return result;
+        }
+
+        public static string ExtractButtonTextSafe(Button btn)
+        {
+            if (btn == null) return "";
+            if (btn.Content is string s) return s;
+            if (btn.Content is TextBlock tb) return tb.Text ?? "";
+            if (btn.Content is Panel p)
+                return string.Join(" ", V34CleanSidebarAndHeaderEngine.GetLogicalTreeNodes(p).OfType<TextBlock>().Select(x => x.Text ?? ""));
+            return btn.Content?.ToString() ?? "";
+        }
+    }
+    // [END_V34_CLEAN_FTAK_ENGINE]
 
     // [START_V34_CLEAN_MAP_STUDIO_ENGINE]
-    /// <summary>
-    /// Krok 4: Most geodezyjny dla Modułu 1 (Generator Map Taktycznych 1:1 — Hybryda Orto + Turbo LiDAR ISOK / Siatka MGRS).
-    /// Weryfikuje, czy użytkownik faktycznie wyznaczył wielokąt AO lub punkty POI na mapie (blokując pobieranie METOC
-    /// dla samego pustego arkusza mapy) oraz konwertuje współrzędne na wybrany w Studio Map układ (MGRS / UTM / DMS / WGS84).
-    /// </summary>
     public static class V34CleanMapStudioBridge
     {
         private static readonly string[] MgrsCols = { "ABCDEFGH", "JKLMNPQR", "STUVWXYZ" };
@@ -2166,17 +2368,15 @@ private static void CaptureAndCollapseTopMenuBar(List<DependencyObject> allEleme
                 var all = V34CleanFtakAndFactionEngine.ScanAllWindowRoots(w);
                 bool foundAoOrPois = false;
 
-                // 1. Odczyt aktywnego układu współrzędnych wybranego w Studio Map 1:1
                 foreach (var cb in all.OfType<ComboBox>())
                 {
                     string sel = ((cb.SelectedItem is ComboBoxItem cbi ? cbi.Content?.ToString() : cb.SelectedItem?.ToString()) ?? cb.Text ?? "").Trim();
                     if (sel.Contains("MGRS", StringComparison.OrdinalIgnoreCase)) ActiveCoordinateSystem = "MGRS";
                     else if (sel.Contains("DMS", StringComparison.OrdinalIgnoreCase) || sel.Contains("Stopnie", StringComparison.OrdinalIgnoreCase)) ActiveCoordinateSystem = "DMS";
                     else if (sel.Contains("UTM", StringComparison.OrdinalIgnoreCase) && !sel.Contains("MGRS", StringComparison.OrdinalIgnoreCase)) ActiveCoordinateSystem = "UTM";
-                    else if (sel.Contains("WGS84", StringComparison.OrdinalIgnoreCase) || sel.Contains("Dziesiętne", StringComparison.OrdinalIgnoreCase)) ActiveCoordinateSystem = "WGS84";
+                    else if (sel.Contains("WGS84", StringComparison.OrdinalIgnoreCase) || sel.Contains("Dziesi\u0119tne", StringComparison.OrdinalIgnoreCase)) ActiveCoordinateSystem = "WGS84";
                 }
 
-                // 2. Sprawdzenie natywnego obiektu danych mapy (GetExtractedMapData / ExtractMapData)
                 var flags = System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static;
                 var mExtract = typeof(OpordBuilderManager).GetMethod("GetExtractedMapData", flags)
                             ?? typeof(OpordBuilderManager).GetMethod("ExtractMapData", flags);
@@ -2206,7 +2406,6 @@ private static void CaptureAndCollapseTopMenuBar(List<DependencyObject> allEleme
                     }
                 }
 
-                // 3. Sprawdzenie wielokąta AO bezpośrednio na płótnie Canvas w Studio Map 1:1
                 if (!foundAoOrPois)
                 {
                     foreach (var canvas in all.OfType<Canvas>())
@@ -2239,7 +2438,7 @@ private static void CaptureAndCollapseTopMenuBar(List<DependencyObject> allEleme
             if (sys.Contains("MGRS")) return LatLonToMgrs(lat, lon);
             if (sys.Contains("UTM")) return LatLonToUtm(lat, lon);
             if (sys.Contains("DMS")) return LatLonToDms(lat, lon);
-            return string.Format(CultureInfo.InvariantCulture, "{0:F5}°N, {1:F5}°E", lat, lon);
+            return string.Format(CultureInfo.InvariantCulture, "{0:F5}\u00B0N, {1:F5}\u00B0E", lat, lon);
         }
 
         public static string LatLonToMgrs(double lat, double lon)
@@ -2303,17 +2502,12 @@ private static void CaptureAndCollapseTopMenuBar(List<DependencyObject> allEleme
             double mf = (abs - d) * 60.0;
             int m = (int)Math.Floor(mf);
             double s = (mf - m) * 60.0;
-            return string.Format(CultureInfo.InvariantCulture, "{0:00}°{1:00}'{2:00.0}\"{3}", d, m, s, hem);
+            return string.Format(CultureInfo.InvariantCulture, "{0:00}\u00B0{1:00}'{2:00.0}\"{3}", d, m, s, hem);
         }
     }
     // [END_V34_CLEAN_MAP_STUDIO_ENGINE]
 
-// [START_V34_CLEAN_USB_BRIDGE]
-    /// <summary>
-    /// Krok 8: Czysta synchronizacja Modułu 4 (Masowy Programator Płytek USB LoRa Meshtastic).
-    /// Synchronizuje selektor stron konfliktu z kartami Generatora Stron (odrzucając śmieciowe wpisy PLI / GeoChat)
-    /// oraz dba o prawidłowy wygląd przycisków portów COM dla płytek Heltec V3 / T-Beam.
-    /// </summary>
+    // [START_V34_CLEAN_USB_BRIDGE]
     public static class V34CleanUsbProgrammerBridge
     {
         public static void SyncUsbProgrammerUi(Window win)
@@ -2329,7 +2523,7 @@ private static void CaptureAndCollapseTopMenuBar(List<DependencyObject> allEleme
                 foreach (var tb in all.OfType<TextBlock>())
                 {
                     string txt = (tb.Text ?? "").Trim();
-                    if (txt.Contains("PROGRAMATOR PŁYTEK USB", StringComparison.OrdinalIgnoreCase) ||
+                    if (txt.Contains("PROGRAMATOR P\u0141YTEK USB", StringComparison.OrdinalIgnoreCase) ||
                         txt.Contains("MASOWY PROGRAMATOR", StringComparison.OrdinalIgnoreCase) ||
                         txt.Contains("USB BOARD PROGRAMMER", StringComparison.OrdinalIgnoreCase))
                     {
@@ -2381,12 +2575,9 @@ private static void CaptureAndCollapseTopMenuBar(List<DependencyObject> allEleme
     }
     // [END_V34_CLEAN_USB_BRIDGE]
 
-
-
-// [START_V34_STEP1_SHELL_FIXER]
+    // [START_V34_STEP1_SHELL_FIXER]
     public static class V34Step1ShellAndSidebarFixer
     {
-        public static event Action<Window> OnStep2ApplyPackageFixes;
         public static void AttachToMainWindow(Window win) { }
         public static void ApplyAllStep1Fixes(Window win) { }
         public static List<DependencyObject> CollectAllNodes(DependencyObject root) => V34CleanSidebarAndHeaderEngine.GetLogicalTreeNodes(root);
