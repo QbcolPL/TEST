@@ -1167,7 +1167,7 @@ namespace FieldTakHub.Builder.Services
             }
 
             win.Loaded += (_, __) => EnforceSimplification(win);
-            // [ETAP2_CLEAN] ContentRendered pass removed to prevent multi-frame startup bounce
+            win.ContentRendered += (_, __) => EnforceSimplification(win);
             // [CLEAN_V34] LayoutUpdated removed
             win.Closed += (_, __) => CleanFactionPackageEngine.StopPcFtakHttpServer();
 
@@ -1185,7 +1185,7 @@ namespace FieldTakHub.Builder.Services
             };
 
             _ = win.Dispatcher.BeginInvoke(new Action(() => EnforceSimplification(win)), DispatcherPriority.Loaded);
-            // [ETAP2_CLEAN] Background pass removed to prevent multi-frame startup bounce
+            _ = win.Dispatcher.BeginInvoke(new Action(() => EnforceSimplification(win)), DispatcherPriority.Background);
         }
 
         public static void EnforceSimplification(Window win)

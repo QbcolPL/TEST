@@ -102,8 +102,8 @@ namespace FieldTakHub.Builder.Services
                         ResetMainWindowTextBoxesToZeroState(win);
                     }
                 };
-                // [ETAP2_CLEAN] ContentRendered duplicate sidebar pass removed
-                // win.LayoutUpdated += (_, __) => EnforceRootSidebarColumnBounds(win); // Eliminated jitter
+                win.ContentRendered += (_, __) => EnsureRootDockSidebar(win);
+                win.LayoutUpdated += (_, __) => EnforceRootSidebarColumnBounds(win);
             }
 
             EnsureRootDockSidebar(win);

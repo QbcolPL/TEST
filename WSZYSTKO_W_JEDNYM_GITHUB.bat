@@ -5,28 +5,29 @@ cd /d "%~dp0"
 set "BAT_FILE=%~f0"
 
 echo ============================================================================
-echo [ETAP 2] Konsolidacja potoku renderowania Generatora OPORD i usuniecie
-echo          opoznionego przebudowywania klatek (Dispatcher.BeginInvoke)...
+echo [NAPRAWA / REVERT ETAPU 2] Przywracanie pojedynczego paska bocznego,
+echo karty 3 przyciskow .ftak, nowego Generatora OPORD (przycisk u gory,
+echo Tabela Lacznosci, METOC AO, Zalacznik nr 3) i wysylka na GitHub Actions...
 echo ============================================================================
-powershell -NoProfile -ExecutionPolicy Bypass -Command "Add-Type -TypeDefinition ([System.Text.RegularExpressions.Regex]::Split([System.IO.File]::ReadAllText([System.Environment]::GetEnvironmentVariable('BAT_FILE'), [System.Text.Encoding]::UTF8), '//===' + 'ETAP2_OPORD_CLEAN_CS===')[1]); [FthEtap2OpordCleaner]::Run()"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "Add-Type -TypeDefinition ([System.Text.RegularExpressions.Regex]::Split([System.IO.File]::ReadAllText([System.Environment]::GetEnvironmentVariable('BAT_FILE'), [System.Text.Encoding]::UTF8), '//===' + 'REVERT_STAGE2_AND_FIX_CS===')[1]); [FthRevertStage2AndFix]::Run()"
 
 if errorlevel 1 (
     echo.
-    echo [BLAD] Wystapil blad podczas wykonywania Etapu 2 lub wysylki na GitHub!
+    echo [BLAD] Wystapil blad podczas przywracania plikow lub wysylki na GitHub!
     pause
     exit /b 1
 )
 
 echo.
 echo ============================================================================
-echo [SUKCES - ETAP 2] Kod Generatora OPORD i potoku startowego zostal
-echo uporzadkowany i wyslany na GitHub (QbcolPL/TEST)!
+echo [SUKCES] Etap 2 zostal cofniety, a wszystkie moduly (Pasek boczny, Generator
+echo Paczek .ftak, Generator Map i Generator OPORD z Zalacznikiem 3) przywrocone!
 echo Kompilacja na GitHub Actions zostala uruchomiona.
 echo ============================================================================
 pause
 exit /b 0
 
-//===ETAP2_OPORD_CLEAN_CS===
+//===REVERT_STAGE2_AND_FIX_CS===
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -35,7 +36,7 @@ using System.Linq;
 using System.Text;
 using System.Text.RegularExpressions;
 
-public static class FthEtap2OpordCleaner
+public static class FthRevertStage2AndFix
 {
     private const string RepoRemoteUrl = "https://github.com/QbcolPL/TEST.git";
     private const string RepoActionsUrl = "https://github.com/QbcolPL/TEST/actions";
@@ -49,167 +50,24 @@ public static class FthEtap2OpordCleaner
         UTF8Encoding utf8NoBom = new UTF8Encoding(false);
         string servicesDir = Path.Combine(targetDir, @"apps\builder\FieldTakHub.Builder\Services");
 
-        // 1. Konsolidacja synchronicznego budowania widoku w BuilderLocalizationAndOpordEngine.UiPart.cs
-        CleanOpordUiPartPipeline(servicesDir, utf8NoBom);
+        // 1. Napraw w TacticalMapGeneratorView.cs podwojne opakowywanie win.Content (prawdziwe zrodlo zdublowanego paska i kiwania sie okna)
+        FixMapGeneratorDoubleShellWrap(servicesDir, utf8NoBom);
 
-        // 2. Uporzadkowanie V34CleanOpordDataEngine w BuilderLocalizationAndOpordEngine.cs (brak opoznienia BeginInvoke i dokladne rozwiazywanie aktywnej strony)
-        CleanOpordDataEnginePipeline(servicesDir, utf8NoBom);
+        // 2. Przywroc pelny cykl zycia w BuilderCoreSidebarAndProjectEngine.cs (usuwanie duplikatow paska bocznego)
+        RestoreSidebarEngineLifecycle(servicesDir, utf8NoBom);
 
-        // 3. Usuniecie nadmiarowych przebiegow startowych w BuilderUiSimplifier.cs i BuilderCoreSidebarAndProjectEngine.cs
-        CleanRedundantStartupPasses(servicesDir, utf8NoBom);
+        // 3. Przywroc pelny cykl zycia w BuilderUiSimplifier.cs oraz TacticalConfigPanel.cs (karta 3 przyciskow .ftak i ukrycie 3. Dodatkowe opcje)
+        RestorePackageSimplifierLifecycle(servicesDir, utf8NoBom);
 
-        // 4. Znacznik wyzwalajacy dla GitHub Actions i wysylka
+        // 4. Przywroc wywolanie V34CleanOpordUiTransformer.ApplyToOpordForm w BuilderLocalizationAndOpordEngine.UiPart.cs i .cs
+        //    (przycisk Pobierz na gorze, nowa Tabela Lacznosci, walidacja METOC AO oraz Zalacznik nr 3 z mapa)
+        RestoreOpordTransformerAndAnnex3(servicesDir, utf8NoBom);
+
+        // 5. Zapisz znacznik wyzwalajacy dla GitHub Actions i wyslij zmiany
         string triggerPath = Path.Combine(targetDir, ".fth_build_trigger.txt");
-        File.WriteAllText(triggerPath, "Field TAK Hub Etap 2 Clean OPORD Pipeline UTC: " + DateTime.UtcNow.ToString("O") + " | RunId: " + Guid.NewGuid().ToString("N") + "\n", utf8NoBom);
+        File.WriteAllText(triggerPath, "Field TAK Hub Revert Stage 2 & Full Restore UTC: " + DateTime.UtcNow.ToString("O") + " | RunId: " + Guid.NewGuid().ToString("N") + "\n", utf8NoBom);
 
         PushAndTriggerGitHubActions(targetDir);
-    }
-
-    private static void CleanOpordUiPartPipeline(string servicesDir, UTF8Encoding utf8NoBom)
-    {
-        string uiPartPath = Path.Combine(servicesDir, "BuilderLocalizationAndOpordEngine.UiPart.cs");
-        if (!File.Exists(uiPartPath))
-            throw new Exception("Nie znaleziono pliku BuilderLocalizationAndOpordEngine.UiPart.cs!");
-
-        string uiPart = File.ReadAllText(uiPartPath, Encoding.UTF8);
-
-        // A. Usun asynchroniczny Dispatcher.BeginInvoke z poczatku RebuildOpordForm(), ktory powodowal migniecie formularza w drugiej klatce
-        uiPart = uiPart.Replace(
-            "win?.Dispatcher.BeginInvoke(new Action(() => V34CleanOpordUiTransformer.ApplyToOpordForm(win, mainStack, _activeOpordFaction, RebuildOpordForm)), System.Windows.Threading.DispatcherPriority.Loaded);",
-            "// [ETAP2_SYNC_PIPELINE] ApplyToOpordForm runs synchronously at the end of RebuildOpordForm");
-
-        // B. Upewnij sie, ze ActiveOpordFactionName jest dostepne dla silnika danych
-        if (!uiPart.Contains("internal static string ActiveOpordFactionName => _activeOpordFaction;"))
-        {
-            uiPart = uiPart.Replace(
-                "public static Action RebuildActiveOpordViewAction;",
-                "public static Action RebuildActiveOpordViewAction;\r\n        internal static string ActiveOpordFactionName => _activeOpordFaction;");
-        }
-
-        // C. Wywoluj V34CleanOpordUiTransformer.ApplyToOpordForm synchronicznie bezposrednio na koncu RebuildOpordForm()
-        //    (przed zamknieciem funkcji lokalnej RebuildOpordForm i przed pierwszym jej wywolaniem)
-        uiPart = uiPart.Replace(
-            "RebuildOpordForm();\r\n            V34CleanOpordUiTransformer.ApplyToOpordForm(win, mainStack, _activeOpordFaction, RebuildOpordForm);\r\n            return rootBorder;",
-            "RebuildOpordForm();\r\n            return rootBorder;");
-
-        uiPart = uiPart.Replace(
-            "RebuildOpordForm();\n            V34CleanOpordUiTransformer.ApplyToOpordForm(win, mainStack, _activeOpordFaction, RebuildOpordForm);\n            return rootBorder;",
-            "RebuildOpordForm();\n            return rootBorder;");
-
-        if (!uiPart.Contains("// [ETAP2_END_OF_REBUILD_HOOK]"))
-        {
-            uiPart = Regex.Replace(
-                uiPart,
-                @"(\}\s*)(RebuildOpordForm\(\);\s*return\s+rootBorder;)",
-                "    // [ETAP2_END_OF_REBUILD_HOOK]\r\n                V34CleanOpordUiTransformer.ApplyToOpordForm(win, mainStack, _activeOpordFaction, RebuildOpordForm);\r\n            $1$2");
-        }
-
-        int openB = uiPart.Count(c => c == '{');
-        int closeB = uiPart.Count(c => c == '}');
-        Console.WriteLine("[WERYFIKACJA] Nawiasy klamrowe w BuilderLocalizationAndOpordEngine.UiPart.cs: { = " + openB + ", } = " + closeB);
-        if (openB != closeB)
-            throw new Exception("Niezgodnosc nawiasow klamrowych w BuilderLocalizationAndOpordEngine.UiPart.cs!");
-
-        File.WriteAllText(uiPartPath, uiPart, utf8NoBom);
-        Console.WriteLine("[OK] Skonsolidowano synchroniczny potok RebuildOpordForm w BuilderLocalizationAndOpordEngine.UiPart.cs.");
-    }
-
-    private static void CleanOpordDataEnginePipeline(string servicesDir, UTF8Encoding utf8NoBom)
-    {
-        string opEnginePath = Path.Combine(servicesDir, "BuilderLocalizationAndOpordEngine.cs");
-        if (!File.Exists(opEnginePath))
-            throw new Exception("Nie znaleziono pliku BuilderLocalizationAndOpordEngine.cs!");
-
-        string opEng = File.ReadAllText(opEnginePath, Encoding.UTF8);
-
-        // Zastap metode OnSwitchedToOpordTab oraz GetLiveOpordModel wersja synchroniczna (bez Dispatcher.BeginInvoke)
-        int swStart = opEng.IndexOf("public static void OnSwitchedToOpordTab(Window win, string modeKey)", StringComparison.Ordinal);
-        int isGarbIdx = opEng.IndexOf("public static bool IsGarbageFactionName(string name)", StringComparison.Ordinal);
-        if (swStart > 0 && isGarbIdx > swStart)
-        {
-            string cleanDataEngineMethods = @"public static void OnSwitchedToOpordTab(Window win, string modeKey)
-        {
-            if (string.IsNullOrWhiteSpace(modeKey) || !modeKey.Contains(""OPORD"", StringComparison.OrdinalIgnoreCase))
-                return;
-
-            var w = win ?? Application.Current?.MainWindow;
-            if (w == null || _isRefreshingOpord) return;
-
-            try
-            {
-                _isRefreshingOpord = true;
-                SyncFactionsAndMapToOpordModel(w);
-                OpordBuilderManager.RebuildActiveOpordViewAction?.Invoke();
-            }
-            catch { }
-            finally
-            {
-                _isRefreshingOpord = false;
-            }
-        }
-
-        internal static OpordParagraphModel GetLiveOpordModel()
-        {
-            try
-            {
-                string activeFac = OpordBuilderManager.ActiveOpordFactionName;
-                if (string.IsNullOrWhiteSpace(activeFac) || IsGarbageFactionName(activeFac))
-                {
-                    var factions = TacticalConfigPanel.GetInternalFactionsList();
-                    activeFac = (factions != null && factions.Count > 0 && !string.IsNullOrWhiteSpace(factions[0].Name))
-                        ? factions[0].Name
-                        : ""BLUFOR"";
-                }
-                return OpordBuilderManager.GetOrCreateModel(activeFac);
-            }
-            catch
-            {
-                return null;
-            }
-        }
-
-        ";
-            opEng = opEng.Substring(0, swStart) + cleanDataEngineMethods + opEng.Substring(isGarbIdx);
-        }
-
-        int openB = opEng.Count(c => c == '{');
-        int closeB = opEng.Count(c => c == '}');
-        Console.WriteLine("[WERYFIKACJA] Nawiasy klamrowe w BuilderLocalizationAndOpordEngine.cs: { = " + openB + ", } = " + closeB);
-        if (openB != closeB)
-            throw new Exception("Niezgodnosc nawiasow klamrowych w BuilderLocalizationAndOpordEngine.cs!");
-
-        File.WriteAllText(opEnginePath, opEng, utf8NoBom);
-        Console.WriteLine("[OK] Uporzadkowano V34CleanOpordDataEngine w BuilderLocalizationAndOpordEngine.cs.");
-    }
-
-    private static void CleanRedundantStartupPasses(string servicesDir, UTF8Encoding utf8NoBom)
-    {
-        // A. BuilderUiSimplifier.cs — usuniecie dublujacych sie przebiegow ContentRendered i Background przy starcie
-        string simpPath = Path.Combine(servicesDir, "BuilderUiSimplifier.cs");
-        if (File.Exists(simpPath))
-        {
-            string simp = File.ReadAllText(simpPath, Encoding.UTF8);
-            simp = simp.Replace(
-                "win.ContentRendered += (_, __) => EnforceSimplification(win);",
-                "// [ETAP2_CLEAN] ContentRendered pass removed to prevent multi-frame startup bounce");
-            simp = simp.Replace(
-                "_ = win.Dispatcher.BeginInvoke(new Action(() => EnforceSimplification(win)), DispatcherPriority.Background);",
-                "// [ETAP2_CLEAN] Background pass removed to prevent multi-frame startup bounce");
-            File.WriteAllText(simpPath, simp, utf8NoBom);
-            Console.WriteLine("[OK] Usunieto nadmiarowe przebiegi startowe w BuilderUiSimplifier.cs.");
-        }
-
-        // B. BuilderCoreSidebarAndProjectEngine.cs — usuniecie dublujacego ContentRendered
-        string corePath = Path.Combine(servicesDir, "BuilderCoreSidebarAndProjectEngine.cs");
-        if (File.Exists(corePath))
-        {
-            string core = File.ReadAllText(corePath, Encoding.UTF8);
-            core = core.Replace(
-                "win.ContentRendered += (_, __) => EnsureRootDockSidebar(win);",
-                "// [ETAP2_CLEAN] ContentRendered duplicate sidebar pass removed");
-            File.WriteAllText(corePath, core, utf8NoBom);
-            Console.WriteLine("[OK] Usunieto nadmiarowy przebieg ContentRendered w BuilderCoreSidebarAndProjectEngine.cs.");
-        }
     }
 
     private static string ResolveTargetProjectDirectory(string baseDir)
@@ -228,6 +86,153 @@ public static class FthEtap2OpordCleaner
             if (File.Exists(Path.Combine(parentTestMain, csprojRel))) return parentTestMain;
         }
         throw new Exception("Nie znaleziono projektu FieldTakHub.Builder w katalogu: " + baseDir);
+    }
+
+    private static void FixMapGeneratorDoubleShellWrap(string servicesDir, UTF8Encoding utf8NoBom)
+    {
+        string tmgPath = Path.Combine(servicesDir, "TacticalMapGeneratorView.cs");
+        if (!File.Exists(tmgPath))
+            throw new Exception("Nie znaleziono pliku TacticalMapGeneratorView.cs!");
+
+        string tmg = File.ReadAllText(tmgPath, Encoding.UTF8);
+
+        // Jezeli _fullScreenOverlay zostal juz utworzony lub win.Content to FTH_ROOT_LAYOUT_GRID,
+        // NIGDY nie opakowuj okna po raz drugi podczas wywolania ContextIdle!
+        tmg = tmg.Replace(
+            @"if (win.Content is FrameworkElement existingFe && existingFe.Tag?.ToString() == ""FTH_MASTER_SHELL"") return;",
+            @"if (_fullScreenOverlay != null || (win.Content is FrameworkElement existingFe && (existingFe.Tag?.ToString() == ""FTH_MASTER_SHELL"" || existingFe.Tag?.ToString() == ""FTH_ROOT_LAYOUT_GRID""))) return;");
+
+        File.WriteAllText(tmgPath, tmg, utf8NoBom);
+        Console.WriteLine("[OK] Zablokowano podwojne opakowywanie okna w TacticalMapGeneratorView.cs (eliminacja drugiego paska bocznego i kiwania UI).");
+    }
+
+    private static void RestoreSidebarEngineLifecycle(string servicesDir, UTF8Encoding utf8NoBom)
+    {
+        string corePath = Path.Combine(servicesDir, "BuilderCoreSidebarAndProjectEngine.cs");
+        if (!File.Exists(corePath)) return;
+
+        string core = File.ReadAllText(corePath, Encoding.UTF8);
+
+        core = core.Replace(
+            "// win.LayoutUpdated += (_, __) => EnforceRootSidebarColumnBounds(win); // Eliminated jitter",
+            "win.LayoutUpdated += (_, __) => EnforceRootSidebarColumnBounds(win);");
+
+        core = core.Replace(
+            "// [ETAP2_CLEAN] ContentRendered duplicate sidebar pass removed",
+            "win.ContentRendered += (_, __) => EnsureRootDockSidebar(win);");
+
+        File.WriteAllText(corePath, core, utf8NoBom);
+        Console.WriteLine("[OK] Przywrocono cykl zycia paska bocznego w BuilderCoreSidebarAndProjectEngine.cs.");
+    }
+
+    private static void RestorePackageSimplifierLifecycle(string servicesDir, UTF8Encoding utf8NoBom)
+    {
+        string simpPath = Path.Combine(servicesDir, "BuilderUiSimplifier.cs");
+        if (File.Exists(simpPath))
+        {
+            string simp = File.ReadAllText(simpPath, Encoding.UTF8);
+
+            simp = simp.Replace(
+                "// [ETAP2_CLEAN] ContentRendered pass removed to prevent multi-frame startup bounce",
+                "win.ContentRendered += (_, __) => EnforceSimplification(win);");
+
+            simp = simp.Replace(
+                "// [ETAP2_CLEAN] Background pass removed to prevent multi-frame startup bounce",
+                "_ = win.Dispatcher.BeginInvoke(new Action(() => EnforceSimplification(win)), DispatcherPriority.Background);");
+
+            File.WriteAllText(simpPath, simp, utf8NoBom);
+            Console.WriteLine("[OK] Przywrocono pelne wywolywanie EnforceSimplification w BuilderUiSimplifier.cs (karta 3 przyciskow .ftak i ukrycie sekcji 3).");
+        }
+
+        // Dodatkowo w TacticalConfigPanel.cs wywolaj BuilderUiSimplifier.EnforceSimplification(win) zaraz po wstawieniu _factionsCardElement,
+        // aby karta 3 przyciskow "Generator paczek .ftak" pojawiala sie zawsze ze 100% pewnoscia
+        string tcpPath = Path.Combine(servicesDir, "TacticalConfigPanel.cs");
+        if (File.Exists(tcpPath))
+        {
+            string tcp = File.ReadAllText(tcpPath, Encoding.UTF8);
+            if (!tcp.Contains("BuilderUiSimplifier.EnforceSimplification(win);"))
+            {
+                tcp = tcp.Replace(
+                    "TacticalMapGeneratorView.AttachFullScreenTab(win);",
+                    "TacticalMapGeneratorView.AttachFullScreenTab(win);\r\n                    BuilderUiSimplifier.EnforceSimplification(win);");
+                File.WriteAllText(tcpPath, tcp, utf8NoBom);
+            }
+        }
+    }
+
+    private static void RestoreOpordTransformerAndAnnex3(string servicesDir, UTF8Encoding utf8NoBom)
+    {
+        string uiPartPath = Path.Combine(servicesDir, "BuilderLocalizationAndOpordEngine.UiPart.cs");
+        if (!File.Exists(uiPartPath))
+            throw new Exception("Nie znaleziono pliku BuilderLocalizationAndOpordEngine.UiPart.cs!");
+
+        string uiPart = File.ReadAllText(uiPartPath, Encoding.UTF8);
+
+        // 1. Przywroc wywolanie Dispatcher.BeginInvoke w RebuildOpordForm(), ktore wykonuje sie zaraz po dodaniu kontrolek do mainStack
+        uiPart = uiPart.Replace(
+            "// [ETAP2_SYNC_PIPELINE] ApplyToOpordForm runs synchronously at the end of RebuildOpordForm",
+            "win?.Dispatcher.BeginInvoke(new Action(() => V34CleanOpordUiTransformer.ApplyToOpordForm(win, mainStack, _activeOpordFaction, RebuildOpordForm)), System.Windows.Threading.DispatcherPriority.Loaded);");
+
+        // Usun ewentualny duplikat z konca RebuildOpordForm, jesli zostal dodany
+        uiPart = uiPart.Replace(
+            "// [ETAP2_END_OF_REBUILD_HOOK]\r\n                V34CleanOpordUiTransformer.ApplyToOpordForm(win, mainStack, _activeOpordFaction, RebuildOpordForm);",
+            "");
+
+        // 2. Upewnij sie, ze w ApplyToOpordForm wywolanie V34CleanAnnex3AndDiscordEngine.AttachToOpordForm jest bezwarunkowe i zawsze dodaje karte na dole formularza
+        uiPart = Regex.Replace(
+            uiPart,
+            @"if\s*\(\s*model\s*!=\s*null\s*&&\s*activeDay\s*!=\s*null\s*\)\s*\{\s*V34CleanAnnex3AndDiscordEngine\.AttachToOpordForm\([^;]+;\s*\}",
+            "V34CleanAnnex3AndDiscordEngine.AttachToOpordForm(w, mainOpordStack, model, activeDay, activeFactionName);");
+
+        int openUi = uiPart.Count(c => c == '{');
+        int closeUi = uiPart.Count(c => c == '}');
+        Console.WriteLine("[WERYFIKACJA] Nawiasy klamrowe w BuilderLocalizationAndOpordEngine.UiPart.cs: { = " + openUi + ", } = " + closeUi);
+        if (openUi != closeUi)
+            throw new Exception("Niezgodnosc nawiasow klamrowych w BuilderLocalizationAndOpordEngine.UiPart.cs!");
+
+        File.WriteAllText(uiPartPath, uiPart, utf8NoBom);
+        Console.WriteLine("[OK] Przywrocono transformacje UI OPORD (przycisk Pobierz na gorze, nowa Tabela Lacznosci, METOC AO i Zalacznik nr 3) w BuilderLocalizationAndOpordEngine.UiPart.cs.");
+
+        // 3. Przywroc w BuilderLocalizationAndOpordEngine.cs wywolanie w OnSwitchedToOpordTab na priorytecie Loaded
+        string opEnginePath = Path.Combine(servicesDir, "BuilderLocalizationAndOpordEngine.cs");
+        if (File.Exists(opEnginePath))
+        {
+            string opEng = File.ReadAllText(opEnginePath, Encoding.UTF8);
+
+            int swStart = opEng.IndexOf("public static void OnSwitchedToOpordTab(Window win, string modeKey)", StringComparison.Ordinal);
+            int gmStart = opEng.IndexOf("internal static OpordParagraphModel GetLiveOpordModel()", StringComparison.Ordinal);
+            if (swStart > 0 && gmStart > swStart)
+            {
+                string restoredOnSwitch = @"public static void OnSwitchedToOpordTab(Window win, string modeKey)
+        {
+            if (string.IsNullOrWhiteSpace(modeKey) || !modeKey.Contains(""OPORD"", StringComparison.OrdinalIgnoreCase))
+                return;
+
+            var w = win ?? Application.Current?.MainWindow;
+            if (w == null || _isRefreshingOpord) return;
+
+            w.Dispatcher.BeginInvoke(new Action(() =>
+            {
+                try
+                {
+                    _isRefreshingOpord = true;
+                    SyncFactionsAndMapToOpordModel(w);
+                    OpordBuilderManager.RebuildActiveOpordViewAction?.Invoke();
+                }
+                catch { }
+                finally
+                {
+                    _isRefreshingOpord = false;
+                }
+            }), System.Windows.Threading.DispatcherPriority.Loaded);
+        }
+
+        ";
+                opEng = opEng.Substring(0, swStart) + restoredOnSwitch + opEng.Substring(gmStart);
+                File.WriteAllText(opEnginePath, opEng, utf8NoBom);
+                Console.WriteLine("[OK] Przywrocono OnSwitchedToOpordTab w BuilderLocalizationAndOpordEngine.cs.");
+            }
+        }
     }
 
     private static void PushAndTriggerGitHubActions(string targetDir)
@@ -257,7 +262,7 @@ public static class FthEtap2OpordCleaner
         RunProcess(gitExe, "remote set-url origin " + RepoRemoteUrl, targetDir, ignoreError: false);
 
         RunProcess(gitExe, "add -A", targetDir, ignoreError: false);
-        RunProcess(gitExe, "commit -m \"Stage 2 Refactor: Consolidate synchronous OPORD rendering pipeline and remove duplicate startup passes\" --allow-empty", targetDir, ignoreError: false);
+        RunProcess(gitExe, "commit -m \"Revert Stage 2 regressions, prevent double shell wrap in AttachFullScreenTab, and restore OPORD & Package Generator UI\" --allow-empty", targetDir, ignoreError: false);
 
         int pushExitCode = RunProcess(gitExe, "push -u origin main --force", targetDir, ignoreError: false);
         if (pushExitCode != 0)
@@ -295,4 +300,4 @@ public static class FthEtap2OpordCleaner
         }
     }
 }
-//===ETAP2_OPORD_CLEAN_CS===
+//===REVERT_STAGE2_AND_FIX_CS===

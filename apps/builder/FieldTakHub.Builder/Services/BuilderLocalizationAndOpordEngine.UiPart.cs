@@ -62,7 +62,7 @@ namespace FieldTakHub.Builder.Services
             {
                 RebuildActiveOpordViewAction = RebuildOpordForm;
                 mainStack.Children.Clear();
-                // [ETAP2_SYNC_PIPELINE] ApplyToOpordForm runs synchronously at the end of RebuildOpordForm
+                win?.Dispatcher.BeginInvoke(new Action(() => V34CleanOpordUiTransformer.ApplyToOpordForm(win, mainStack, _activeOpordFaction, RebuildOpordForm)), System.Windows.Threading.DispatcherPriority.Loaded);
                 var configuredFactions = TacticalConfigPanel.GetConfiguredFactions();
                 if (configuredFactions.Count > 0 && !configuredFactions.Any(f => f.Name.Equals(_activeOpordFaction, StringComparison.OrdinalIgnoreCase)))
                 {

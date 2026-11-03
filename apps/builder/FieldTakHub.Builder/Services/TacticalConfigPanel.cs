@@ -981,6 +981,7 @@ namespace FieldTakHub.Builder.Services
                     }
 
                     TacticalMapGeneratorView.AttachFullScreenTab(win);
+                    BuilderUiSimplifier.EnforceSimplification(win);
                     ConsumePendingMapStateIfAny();
                     HookNativeValidityControls(win);
                 }

@@ -2010,17 +2010,20 @@ namespace FieldTakHub.Builder.Services
             var w = win ?? Application.Current?.MainWindow;
             if (w == null || _isRefreshingOpord) return;
 
-            try
+            w.Dispatcher.BeginInvoke(new Action(() =>
             {
-                _isRefreshingOpord = true;
-                SyncFactionsAndMapToOpordModel(w);
-                OpordBuilderManager.RebuildActiveOpordViewAction?.Invoke();
-            }
-            catch { }
-            finally
-            {
-                _isRefreshingOpord = false;
-            }
+                try
+                {
+                    _isRefreshingOpord = true;
+                    SyncFactionsAndMapToOpordModel(w);
+                    OpordBuilderManager.RebuildActiveOpordViewAction?.Invoke();
+                }
+                catch { }
+                finally
+                {
+                    _isRefreshingOpord = false;
+                }
+            }), System.Windows.Threading.DispatcherPriority.Loaded);
         }
 
         internal static OpordParagraphModel GetLiveOpordModel()

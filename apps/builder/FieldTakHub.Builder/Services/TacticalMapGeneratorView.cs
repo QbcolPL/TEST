@@ -310,7 +310,7 @@ namespace FieldTakHub.Builder.Services
 
             try
             {
-                if (win.Content is FrameworkElement existingFe && existingFe.Tag?.ToString() == "FTH_MASTER_SHELL") return;
+                if (_fullScreenOverlay != null || (win.Content is FrameworkElement existingFe && (existingFe.Tag?.ToString() == "FTH_MASTER_SHELL" || existingFe.Tag?.ToString() == "FTH_ROOT_LAYOUT_GRID"))) return;
                 if (win.Content is UIElement currentContent)
                 {
                     var overlay = BuildFullScreenMapGeneratorUI(win);
