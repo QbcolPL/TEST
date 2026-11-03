@@ -26,6 +26,7 @@ namespace FieldTakHub.Builder.Services
         //    CAŁKOWICIE NIEZALEŻNY STAN WSZYSTKICH SEKCJI (0, I, II, III, IV, ZAŁ. 1 i 2)
         // =========================================================================
         public static Action RebuildActiveOpordViewAction;
+        internal static string ActiveOpordFactionName => _activeOpordFaction;
 
         public static Border CreateOrGetOpordOverlayView(Window win)
         {
@@ -61,7 +62,7 @@ namespace FieldTakHub.Builder.Services
             {
                 RebuildActiveOpordViewAction = RebuildOpordForm;
                 mainStack.Children.Clear();
-                win?.Dispatcher.BeginInvoke(new Action(() => V34CleanOpordUiTransformer.ApplyToOpordForm(win, mainStack, _activeOpordFaction, RebuildOpordForm)), System.Windows.Threading.DispatcherPriority.Loaded);
+                // [ETAP2_SYNC_PIPELINE] ApplyToOpordForm runs synchronously at the end of RebuildOpordForm
                 var configuredFactions = TacticalConfigPanel.GetConfiguredFactions();
                 if (configuredFactions.Count > 0 && !configuredFactions.Any(f => f.Name.Equals(_activeOpordFaction, StringComparison.OrdinalIgnoreCase)))
                 {

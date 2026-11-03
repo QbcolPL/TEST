@@ -102,7 +102,7 @@ namespace FieldTakHub.Builder.Services
                         ResetMainWindowTextBoxesToZeroState(win);
                     }
                 };
-                win.ContentRendered += (_, __) => EnsureRootDockSidebar(win);
+                // [ETAP2_CLEAN] ContentRendered duplicate sidebar pass removed
                 // win.LayoutUpdated += (_, __) => EnforceRootSidebarColumnBounds(win); // Eliminated jitter
             }
 

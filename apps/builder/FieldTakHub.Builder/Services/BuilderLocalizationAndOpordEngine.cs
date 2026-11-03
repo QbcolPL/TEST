@@ -2010,31 +2010,32 @@ namespace FieldTakHub.Builder.Services
             var w = win ?? Application.Current?.MainWindow;
             if (w == null || _isRefreshingOpord) return;
 
-            w.Dispatcher.BeginInvoke(new Action(() =>
+            try
             {
-                try
-                {
-                    _isRefreshingOpord = true;
-                    SyncFactionsAndMapToOpordModel(w);
-                    OpordBuilderManager.RebuildActiveOpordViewAction?.Invoke();
-                }
-                catch { }
-                finally
-                {
-                    _isRefreshingOpord = false;
-                }
-            }), System.Windows.Threading.DispatcherPriority.Loaded);
+                _isRefreshingOpord = true;
+                SyncFactionsAndMapToOpordModel(w);
+                OpordBuilderManager.RebuildActiveOpordViewAction?.Invoke();
+            }
+            catch { }
+            finally
+            {
+                _isRefreshingOpord = false;
+            }
         }
 
         internal static OpordParagraphModel GetLiveOpordModel()
         {
             try
             {
-                var factions = TacticalConfigPanel.GetInternalFactionsList();
-                string facName = (factions != null && factions.Count > 0 && !string.IsNullOrWhiteSpace(factions[0].Name))
-                    ? factions[0].Name
-                    : "BLUFOR";
-                return OpordBuilderManager.GetOrCreateModel(facName);
+                string activeFac = OpordBuilderManager.ActiveOpordFactionName;
+                if (string.IsNullOrWhiteSpace(activeFac) || IsGarbageFactionName(activeFac))
+                {
+                    var factions = TacticalConfigPanel.GetInternalFactionsList();
+                    activeFac = (factions != null && factions.Count > 0 && !string.IsNullOrWhiteSpace(factions[0].Name))
+                        ? factions[0].Name
+                        : "BLUFOR";
+                }
+                return OpordBuilderManager.GetOrCreateModel(activeFac);
             }
             catch
             {
