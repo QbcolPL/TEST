@@ -1,1 +1,1 @@
-Field TAK Hub Mobile App Etap 1 Scaffold UTC: 2026-11-08T18:32:33.7294599Z | RunId: 6f9bc050bdcd4365995170a7c59c7ef1
+Field TAK Hub Mobile App Etap 2 QR & APK Engine UTC: 2026-11-08T18:46:47.2861735Z | RunId: 251fb071f67646ed80ef6b077f01fb1d

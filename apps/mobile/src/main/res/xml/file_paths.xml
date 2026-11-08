@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <cache-path name="extracted_apks" path="." />
+    <files-path name="ftak_packages" path="." />
+    <external-path name="external_files" path="." />
+</paths>
