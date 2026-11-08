@@ -13,6 +13,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -29,12 +30,16 @@ import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
+import com.fieldtak.mobile.data.FtakPackageRepository
+import com.fieldtak.mobile.ui.components.TacticalIconBadge
+import com.fieldtak.mobile.ui.components.TacticalIconType
 import com.fieldtak.mobile.ui.theme.*
 
 data class TacticalPermissionState(
     val id: String,
     val title: String,
     val desc: String,
+    val iconType: TacticalIconType,
     val isGranted: Boolean
 )
 
@@ -57,11 +62,11 @@ fun evaluatePermissions(context: Context): List<TacticalPermissionState> {
     } else true
 
     return listOf(
-        TacticalPermissionState("GPS", "Lokalizacja GPS (MGRS)", "Wyliczanie kwadratu MGRS i pozycji do meldunku SOS.", hasGps),
-        TacticalPermissionState("CAM", "Dostęp do aparatu (QR)", "Błyskawiczny odczyt kodów QR paczek .ftak z chmury i LAN.", hasCamera),
-        TacticalPermissionState("BT", "Łączność Bluetooth & LoRa", "Wstrzykiwanie kanałów, PSK oraz ksywy do Meshtastic.", hasBt),
-        TacticalPermissionState("FILES", "Dostęp do plików (.ftak)", "Zapisywanie map .mbtiles/.kmz oraz paczek operacji.", hasStorage),
-        TacticalPermissionState("APK", "Instalacja pakietów (.apk)", "Automatyczna instalacja ATAK-CIV, Meshtastic i pluginów.", hasInstallApks)
+        TacticalPermissionState("GPS", "Lokalizacja GPS", "Wyliczanie kwadratu MGRS i pozycji do meldunku SOS.", TacticalIconType.GPS_SATELLITE, hasGps),
+        TacticalPermissionState("CAM", "Dostęp do aparatu (QR)", "Błyskawiczny odczyt kodów QR paczek .ftak z chmury i LAN.", TacticalIconType.CAMERA_QR, hasCamera),
+        TacticalPermissionState("BT", "Łączność Bluetooth & LoRa", "Wstrzykiwanie kanałów, PSK oraz ksywy do Meshtastic.", TacticalIconType.BLUETOOTH_LORA, hasBt),
+        TacticalPermissionState("FILES", "Dostęp do plików (.ftak)", "Zapisywanie map .mbtiles/.kmz oraz paczek operacji.", TacticalIconType.FILES_CRATE, hasStorage),
+        TacticalPermissionState("APK", "Instalacja pakietów (.apk)", "Automatyczna instalacja ATAK-CIV, Meshtastic i pluginów.", TacticalIconType.APK_SHIELD, hasInstallApks)
     )
 }
 
@@ -70,6 +75,11 @@ fun OnboardingScreen(onContinueToApp: () -> Unit) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     var permissions by remember { mutableStateOf(evaluatePermissions(context)) }
+
+    val activeFaction = remember {
+        val pkgs = FtakPackageRepository.listInstalledPackages(context)
+        pkgs.firstOrNull()?.factionName ?: "BLUFOR"
+    }
 
     val runtimeLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestMultiplePermissions()
@@ -134,20 +144,20 @@ fun OnboardingScreen(onContinueToApp: () -> Unit) {
             Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = "MODUŁ: UPRAWNIENIA & PACZKI",
-                    color = RadarCyan,
+                    color = TextMuted,
                     fontSize = 11.sp,
                     fontFamily = FontFamily.Monospace
                 )
                 Text(
-                    text = "Onboarding & Permissions ($grantedCount/${permissions.size})",
+                    text = "Onboarding & Permissions",
                     color = TextWhite,
                     fontSize = 18.sp,
                     fontWeight = FontWeight.Bold,
-                    modifier = Modifier.padding(top = 2.dp, bottom = 12.dp)
+                    modifier = Modifier.padding(top = 4.dp, bottom = 14.dp)
                 )
 
                 LazyColumn(
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     items(permissions.size) { index ->
@@ -157,35 +167,66 @@ fun OnboardingScreen(onContinueToApp: () -> Unit) {
                             shape = RoundedCornerShape(6.dp),
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .border(1.2.dp, if (perm.isGranted) MilSimGreen else MutedGrid, RoundedCornerShape(6.dp))
+                                .border(1.2.dp, if (perm.isGranted) MutedGrid else RadarCyan, RoundedCornerShape(6.dp))
+                                .clickable { requestSinglePermission(perm.id) }
                         ) {
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .padding(12.dp),
+                                    .padding(horizontal = 12.dp, vertical = 11.dp),
                                 horizontalArrangement = Arrangement.SpaceBetween,
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
-                                    Text(text = perm.title, color = TextWhite, fontSize = 13.sp, fontWeight = FontWeight.Bold)
-                                    Text(text = perm.desc, color = TextMuted, fontSize = 11.sp)
-                                }
-                                Button(
-                                    onClick = { requestSinglePermission(perm.id) },
-                                    colors = ButtonDefaults.buttonColors(
-                                        containerColor = if (perm.isGranted) InputTrench else RadarCyan
-                                    ),
-                                    border = BorderStroke(1.dp, if (perm.isGranted) MilSimGreen else RadarCyan),
-                                    shape = RoundedCornerShape(4.dp),
-                                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
-                                    modifier = Modifier.height(32.dp)
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.weight(1f).padding(end = 8.dp)
                                 ) {
-                                    Text(
-                                        text = if (perm.isGranted) "✓ OK" else "NADAJ",
-                                        color = if (perm.isGranted) MilSimGreen else AbyssalSlate,
-                                        fontSize = 11.sp,
-                                        fontWeight = FontWeight.Bold
+                                    TacticalIconBadge(
+                                        type = perm.iconType,
+                                        tint = RadarCyan,
+                                        boxSize = 36.dp,
+                                        iconSize = 20.dp
                                     )
+                                    Spacer(modifier = Modifier.width(12.dp))
+                                    Column {
+                                        Text(
+                                            text = perm.title,
+                                            color = TextWhite,
+                                            fontSize = 13.sp,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                        Text(
+                                            text = perm.desc,
+                                            color = TextMuted,
+                                            fontSize = 10.sp
+                                        )
+                                    }
+                                }
+
+                                if (perm.isGranted) {
+                                    Text(
+                                        text = "✓",
+                                        color = MilSimGreen,
+                                        fontSize = 18.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        modifier = Modifier.padding(horizontal = 8.dp)
+                                    )
+                                } else {
+                                    Surface(
+                                        color = InputTrench,
+                                        shape = RoundedCornerShape(4.dp),
+                                        border = BorderStroke(1.dp, RadarCyan),
+                                        modifier = Modifier.clickable { requestSinglePermission(perm.id) }
+                                    ) {
+                                        Text(
+                                            text = "NADAJ",
+                                            color = RadarCyan,
+                                            fontSize = 10.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            fontFamily = FontFamily.Monospace,
+                                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -193,7 +234,7 @@ fun OnboardingScreen(onContinueToApp: () -> Unit) {
                 }
             }
 
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 if (grantedCount < permissions.size) {
                     OutlinedButton(
                         onClick = {
@@ -202,29 +243,51 @@ fun OnboardingScreen(onContinueToApp: () -> Unit) {
                         },
                         border = BorderStroke(1.2.dp, RadarCyan),
                         shape = RoundedCornerShape(6.dp),
-                        modifier = Modifier.fillMaxWidth().height(44.dp)
+                        modifier = Modifier.fillMaxWidth().height(42.dp)
                     ) {
                         Text(
-                            text = "⚡ NADAJ KOLEJNE BRAKUJĄCE UPRAWNIENIE",
+                            text = "NADAJ BRAKUJĄCE UPRAWNIENIA ($grantedCount/${permissions.size})",
                             color = RadarCyan,
                             fontWeight = FontWeight.Bold,
-                            fontSize = 12.sp
+                            fontSize = 11.sp,
+                            fontFamily = FontFamily.Monospace
                         )
                     }
                 }
 
-                Button(
-                    onClick = onContinueToApp,
-                    colors = ButtonDefaults.buttonColors(containerColor = RadarCyan),
-                    shape = RoundedCornerShape(6.dp),
-                    modifier = Modifier.fillMaxWidth().height(48.dp)
+                // Neonowa karta AKTYWNY PROFIL / WEJSCIE DO GRY wzorowana na wizualizacji
+                Surface(
+                    color = TacticalCard,
+                    shape = RoundedCornerShape(8.dp),
+                    border = BorderStroke(1.8.dp, RadarCyan),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onContinueToApp() }
                 ) {
-                    Text(
-                        text = "PRZEJDŹ DO SKANERA QR I GRY ->",
-                        color = AbyssalSlate,
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 13.sp
-                    )
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        modifier = Modifier.padding(vertical = 12.dp, horizontal = 16.dp)
+                    ) {
+                        Text(
+                            text = "AKTYWNY PROFIL:",
+                            color = TextMuted,
+                            fontSize = 10.sp,
+                            fontFamily = FontFamily.Monospace
+                        )
+                        Text(
+                            text = activeFaction,
+                            color = RadarCyan,
+                            fontSize = 17.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            text = "Kliknij, aby przejść do Skanera QR i Gry ->",
+                            color = MilSimGreen,
+                            fontSize = 10.sp,
+                            fontFamily = FontFamily.Monospace,
+                            modifier = Modifier.padding(top = 2.dp)
+                        )
+                    }
                 }
             }
         }
