@@ -1,1 +1,1 @@
-Field TAK Hub Disconnect Logical Child Fix UTC: 2026-11-08T08:41:10.7548272Z | RunId: 934033ae6e1b4dd3933de38a5087ae82
+Field TAK Hub Mobile App Etap 1 Scaffold UTC: 2026-11-08T18:32:33.7294599Z | RunId: 6f9bc050bdcd4365995170a7c59c7ef1

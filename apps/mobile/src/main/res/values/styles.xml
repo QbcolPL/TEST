@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.FieldTakHub" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/abyssal_slate</item>
+    </style>
+    <color name="abyssal_slate">#060E12</color>
+</resources>
