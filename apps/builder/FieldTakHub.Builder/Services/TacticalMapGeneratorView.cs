@@ -2530,20 +2530,91 @@ namespace FieldTakHub.Builder.Services
             dlg.ShowDialog();
         }
 
+        private static ControlTemplate _transparentThumbTemplate;
+
+        private static ControlTemplate GetTransparentThumbTemplate()
+        {
+            if (_transparentThumbTemplate != null) return _transparentThumbTemplate;
+            var fef = new FrameworkElementFactory(typeof(Border));
+            fef.SetValue(Border.BackgroundProperty, new SolidColorBrush(Color.FromArgb(2, 0, 0, 0)));
+            var tpl = new ControlTemplate(typeof(Thumb)) { VisualTree = fef };
+            tpl.Freeze();
+            _transparentThumbTemplate = tpl;
+            return tpl;
+        }
+
         private static void PlaceDraggableHudElement(FrameworkElement el, string hudId, string cornerPreset, double? normX, double? normY, double viewW, double viewH, double elemW, double elemH)
         {
-            double x = normX.HasValue ? Math.Clamp(normX.Value * viewW, 4, Math.Max(8, viewW - elemW - 4)) : (cornerPreset.StartsWith("Lewy") ? 14 : Math.Max(14, viewW - elemW - 14));
-            double y = normY.HasValue ? Math.Clamp(normY.Value * viewH, 4, Math.Max(8, viewH - elemH - 4)) : (cornerPreset.Contains("górny") ? 14 : Math.Max(14, viewH - elemH - 14));
-            el.Cursor = Cursors.SizeAll;
-            el.ToolTip = "Przeciągnij myszą (Drag & Drop), aby ustawić w dowolnym miejscu na mapie";
-            el.MouseLeftButtonDown += (s, e) =>
+            bool validNormX = normX.HasValue && !double.IsNaN(normX.Value) && !double.IsInfinity(normX.Value) && normX.Value >= -0.2 && normX.Value <= 1.2;
+            bool validNormY = normY.HasValue && !double.IsNaN(normY.Value) && !double.IsInfinity(normY.Value) && normY.Value >= -0.2 && normY.Value <= 1.2;
+
+            double maxInitX = Math.Max(8.0, viewW - Math.Min(elemW, viewW - 40.0) - 4.0);
+            double maxInitY = Math.Max(8.0, viewH - Math.Min(elemH, viewH - 40.0) - 4.0);
+
+            double x = validNormX
+                ? Math.Clamp(normX.Value * viewW, 4.0, maxInitX)
+                : (cornerPreset.StartsWith("Lewy") ? 14.0 : Math.Max(14.0, viewW - elemW - 14.0));
+            double y = validNormY
+                ? Math.Clamp(normY.Value * viewH, 4.0, maxInitY)
+                : (cornerPreset.Contains("g\u00F3rny") ? 14.0 : Math.Max(14.0, viewH - elemH - 14.0));
+
+            Canvas.SetLeft(el, x);
+            Canvas.SetTop(el, y);
+
+            if (hudId != "LEGEND" && el is Border b && b.Child != null && !(b.Child is Grid && ((Grid)b.Child).Tag?.ToString() == "HUD_THUMB_HOST"))
             {
-                e.Handled = true; _draggedHudId = hudId; _draggedHudElement = el;
-                Point p = e.GetPosition(_interactiveCanvas);
-                _hudStartOffset = new Point(p.X - Canvas.GetLeft(el), p.Y - Canvas.GetTop(el));
-                _interactiveCanvas.CaptureMouse();
-            };
-            Canvas.SetLeft(el, x); Canvas.SetTop(el, y);
+                UIElement innerChild = b.Child;
+                innerChild.IsHitTestVisible = false;
+                var hostGrid = new Grid { Tag = "HUD_THUMB_HOST" };
+                hostGrid.Children.Add(innerChild);
+
+                var moveThumb = new Thumb
+                {
+                    Template = GetTransparentThumbTemplate(),
+                    Cursor = Cursors.SizeAll,
+                    ToolTip = "Przeci\u0105gnij mysz\u0105 (Drag & Drop), aby ustawi\u0107 w dowolnym miejscu na mapie"
+                };
+
+                Point startMousePt = new Point();
+                double startLeft = x, startTop = y;
+
+                moveThumb.DragStarted += (s, e) =>
+                {
+                    e.Handled = true;
+                    startMousePt = Mouse.GetPosition(_interactiveCanvas);
+                    startLeft = Canvas.GetLeft(el);
+                    startTop = Canvas.GetTop(el);
+                    if (double.IsNaN(startLeft)) startLeft = x;
+                    if (double.IsNaN(startTop)) startTop = y;
+                };
+
+                moveThumb.DragDelta += (s, e) =>
+                {
+                    e.Handled = true;
+                    var (cw, ch) = GetExactCanvasSize();
+                    Point curPt = Mouse.GetPosition(_interactiveCanvas);
+                    double actualW = el.ActualWidth > 10 ? el.ActualWidth : elemW;
+                    double actualH = el.ActualHeight > 10 ? el.ActualHeight : elemH;
+                    double limX = Math.Max(4.0, cw - Math.Min(actualW, cw - 30.0) - 4.0);
+                    double limY = Math.Max(4.0, ch - Math.Min(actualH, ch - 30.0) - 4.0);
+                    double nx = Math.Clamp(startLeft + (curPt.X - startMousePt.X), 4.0, limX);
+                    double ny = Math.Clamp(startTop + (curPt.Y - startMousePt.Y), 4.0, limY);
+                    Canvas.SetLeft(el, nx);
+                    Canvas.SetTop(el, ny);
+                    if (hudId == "NORTH") { _northNormX = nx / Math.Max(1.0, cw); _northNormY = ny / Math.Max(1.0, ch); }
+                    else if (hudId == "SCALE") { _scaleNormX = nx / Math.Max(1.0, cw); _scaleNormY = ny / Math.Max(1.0, ch); }
+                };
+
+                moveThumb.DragCompleted += (s, e) =>
+                {
+                    e.Handled = true;
+                    TacticalConfigPanel.MarkDirty();
+                };
+
+                hostGrid.Children.Add(moveThumb);
+                b.Child = hostGrid;
+            }
+
             _interactiveCanvas.Children.Add(el);
         }
 
@@ -2594,45 +2665,24 @@ namespace FieldTakHub.Builder.Services
             if (_showLegend)
             {
                 double defaultLw = isCompactWrist ? 220 : 288;
-                double lw = _legendCustomWidth.HasValue ? Math.Clamp(_legendCustomWidth.Value, 160, Math.Max(180, w - 16)) : defaultLw;
-                var ls = new StackPanel();
+                double lw = _legendCustomWidth.HasValue && !double.IsNaN(_legendCustomWidth.Value)
+                    ? Math.Clamp(_legendCustomWidth.Value, 160, Math.Max(180, w - 16))
+                    : defaultLw;
+
+                var ls = new StackPanel { IsHitTestVisible = false };
 
                 string autoTitle = $"MAPA TAKTYCZNA ({_selectedSheet.Name.Split('\u2014')[0].Trim()} | 1:{_targetScaleDenominator:N0})";
                 string displayTitle = string.IsNullOrWhiteSpace(_customLegendTitle) ? autoTitle : _customLegendTitle;
 
-                var titleDock = new DockPanel();
-                if (!_isExportingCleanMap)
-                {
-                    var btnEditLeg = new Border
-                    {
-                        Background = TacticalConfigPanel.BrushItemBg,
-                        BorderBrush = TacticalConfigPanel.BrushAccent,
-                        BorderThickness = new Thickness(1),
-                        CornerRadius = new CornerRadius(3),
-                        Padding = new Thickness(5, 1, 5, 1),
-                        Margin = new Thickness(6, 0, 0, 0),
-                        Cursor = Cursors.Hand,
-                        ToolTip = "Edytuj tre\u015B\u0107, opisy i wymiary Legendy",
-                        Child = new TextBlock { Text = "\u270F\uFE0F Edytuj", Foreground = TacticalConfigPanel.BrushAccent, FontSize = 8, FontWeight = FontWeights.Bold }
-                    };
-                    btnEditLeg.MouseLeftButtonDown += (s, e) =>
-                    {
-                        e.Handled = true;
-                        if (_hostWindow != null) ShowLegendContentEditorDialog(_hostWindow);
-                    };
-                    DockPanel.SetDock(btnEditLeg, Dock.Right);
-                    titleDock.Children.Add(btnEditLeg);
-                }
-
-                titleDock.Children.Add(new TextBlock
+                ls.Children.Add(new TextBlock
                 {
                     Text = displayTitle,
                     Foreground = TacticalConfigPanel.BrushAccent,
                     FontWeight = FontWeights.Bold,
                     FontSize = isCompactWrist ? 9 : 10,
+                    Margin = new Thickness(0, 0, _isExportingCleanMap ? 0 : 54, 0),
                     TextWrapping = TextWrapping.Wrap
                 });
-                ls.Children.Add(titleDock);
 
                 string secLegSuffix = (_enableSectorGridOverlay || _coordSystem.StartsWith("Sektorowa")) ? $" + Sektory A-Z/1-9 ({_sectorSizeMeters}m | {_sectorSubDivision.Split(' ')[0]})" : "";
                 string autoSub = (_coordSystem.StartsWith("MGRS") ? $"Siatka: MGRS ({_effectiveMgrsStepMeters} m) | {_subGridDivision}" : $"Siatka: {_coordSystem.Split(' ')[0]}") + secLegSuffix;
@@ -2663,12 +2713,13 @@ namespace FieldTakHub.Builder.Services
                     void AddVectorLegendRow(string symCode, string desc, string hex)
                     {
                         dynamicRows++;
-                        var r = new Grid { Margin = new Thickness(0, 0, 0, 3) };
+                        var r = new Grid { Margin = new Thickness(0, 0, 0, 3), IsHitTestVisible = false };
                         r.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(36) });
                         r.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
 
                         var iconEl = CreateMiniSymbolVectorBadge(symCode, hex);
                         iconEl.Margin = new Thickness(0, 0, 6, 0);
+                        iconEl.IsHitTestVisible = false;
                         Grid.SetColumn(iconEl, 0);
                         r.Children.Add(iconEl);
 
@@ -2678,7 +2729,8 @@ namespace FieldTakHub.Builder.Services
                             Foreground = Brushes.White,
                             FontSize = 8.4,
                             VerticalAlignment = VerticalAlignment.Center,
-                            TextWrapping = TextWrapping.Wrap
+                            TextWrapping = TextWrapping.Wrap,
+                            IsHitTestVisible = false
                         };
                         Grid.SetColumn(descTb, 1);
                         r.Children.Add(descTb);
@@ -2737,14 +2789,19 @@ namespace FieldTakHub.Builder.Services
                         Text = _customLegendExtraNotes,
                         Foreground = TacticalConfigPanel.BrushAccent,
                         FontSize = 8.4,
-                        TextWrapping = TextWrapping.Wrap
+                        TextWrapping = TextWrapping.Wrap,
+                        IsHitTestVisible = false
                     });
                 }
 
                 double autoLh = 72 + (_showNatoSymbolsInLegend ? (24 + dynamicRows * 25) : 0) + (string.IsNullOrWhiteSpace(_customLegendExtraNotes) ? 0 : 28);
-                double lh = _legendCustomHeight.HasValue ? Math.Clamp(_legendCustomHeight.Value, 75, Math.Max(90, h - 16)) : autoLh;
+                double lh = _legendCustomHeight.HasValue && !double.IsNaN(_legendCustomHeight.Value)
+                    ? Math.Clamp(_legendCustomHeight.Value, 75, Math.Max(90, h - 16))
+                    : autoLh;
 
                 var legContainer = new Grid { Width = lw, Height = lh };
+
+                // Warstwa 0: Wizualna ramka legendy (IsHitTestVisible = false, aby nie blokowala przeciagania)
                 var legBorder = new Border
                 {
                     Background = new SolidColorBrush(Color.FromArgb(230, 8, 19, 22)),
@@ -2752,20 +2809,90 @@ namespace FieldTakHub.Builder.Services
                     BorderThickness = new Thickness(1.3),
                     CornerRadius = new CornerRadius(6),
                     Padding = new Thickness(9, 7, 9, 7),
-                    Child = new ScrollViewer
-                    {
-                        VerticalScrollBarVisibility = _legendCustomHeight.HasValue ? ScrollBarVisibility.Auto : ScrollBarVisibility.Disabled,
-                        HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
-                        Content = ls
-                    }
+                    ClipToBounds = true,
+                    IsHitTestVisible = false,
+                    Child = ls
                 };
                 legContainer.Children.Add(legBorder);
 
                 PlaceDraggableHudElement(legContainer, "LEGEND", _legendPos, _legendNormX, _legendNormY, w, h, lw, lh);
-                legContainer.ToolTip = "Przeci\u0105gnij \u015Brodek = przesu\u0144 Legend\u0119  |  Przeci\u0105gnij dowoln\u0105 kraw\u0119d\u017A lub naro\u017Cnik = zmie\u0144 rozmiar  |  Kliknij '\u270F\uFE0F Edytuj' = edytuj tre\u015B\u0107";
 
                 if (!_isExportingCleanMap)
                 {
+                    // Warstwa 1: Natywny Thumb do swobodnego przesuwania calej Legendy po mapie
+                    var dragCenterThumb = new Thumb
+                    {
+                        Template = GetTransparentThumbTemplate(),
+                        HorizontalAlignment = HorizontalAlignment.Stretch,
+                        VerticalAlignment = VerticalAlignment.Stretch,
+                        Margin = new Thickness(7),
+                        Cursor = Cursors.SizeAll,
+                        ToolTip = "Przeci\u0105gnij LPM = przesu\u0144 Legend\u0119 w dowolne miejsce  |  Przeci\u0105gnij kraw\u0119d\u017A/naro\u017Cnik = zmie\u0144 rozmiar"
+                    };
+
+                    Point moveStartMousePt = new Point();
+                    double moveStartLeft = 0, moveStartTop = 0;
+
+                    dragCenterThumb.DragStarted += (s, e) =>
+                    {
+                        e.Handled = true;
+                        moveStartMousePt = Mouse.GetPosition(_interactiveCanvas);
+                        moveStartLeft = Canvas.GetLeft(legContainer);
+                        moveStartTop = Canvas.GetTop(legContainer);
+                        if (double.IsNaN(moveStartLeft)) moveStartLeft = 14.0;
+                        if (double.IsNaN(moveStartTop)) moveStartTop = 14.0;
+                    };
+
+                    dragCenterThumb.DragDelta += (s, e) =>
+                    {
+                        e.Handled = true;
+                        var (cw, ch) = GetExactCanvasSize();
+                        Point curMousePt = Mouse.GetPosition(_interactiveCanvas);
+                        double actualW = legContainer.ActualWidth > 20 ? legContainer.ActualWidth : legContainer.Width;
+                        double actualH = legContainer.ActualHeight > 20 ? legContainer.ActualHeight : legContainer.Height;
+                        double maxX = Math.Max(4.0, cw - Math.Min(actualW, cw - 40.0) - 4.0);
+                        double maxY = Math.Max(4.0, ch - Math.Min(actualH, ch - 40.0) - 4.0);
+                        double nx = Math.Clamp(moveStartLeft + (curMousePt.X - moveStartMousePt.X), 4.0, maxX);
+                        double ny = Math.Clamp(moveStartTop + (curMousePt.Y - moveStartMousePt.Y), 4.0, maxY);
+                        Canvas.SetLeft(legContainer, nx);
+                        Canvas.SetTop(legContainer, ny);
+                        _legendNormX = nx / Math.Max(1.0, cw);
+                        _legendNormY = ny / Math.Max(1.0, ch);
+                    };
+
+                    dragCenterThumb.DragCompleted += (s, e) =>
+                    {
+                        e.Handled = true;
+                        TacticalConfigPanel.MarkDirty();
+                    };
+
+                    legContainer.Children.Add(dragCenterThumb);
+
+                    // Warstwa 2: Przycisk 'Edytuj' na wierzchu w prawym gornym rogu Legendy
+                    var btnEditLeg = new Button
+                    {
+                        Content = "\u270F\uFE0F Edytuj",
+                        HorizontalAlignment = HorizontalAlignment.Right,
+                        VerticalAlignment = VerticalAlignment.Top,
+                        Margin = new Thickness(0, 7, 9, 0),
+                        Height = 18,
+                        Padding = new Thickness(6, 0, 6, 0),
+                        Background = TacticalConfigPanel.BrushItemBg,
+                        Foreground = TacticalConfigPanel.BrushAccent,
+                        BorderBrush = TacticalConfigPanel.BrushAccent,
+                        BorderThickness = new Thickness(1),
+                        FontSize = 8.2,
+                        FontWeight = FontWeights.Bold,
+                        Cursor = Cursors.Hand,
+                        ToolTip = "Edytuj tre\u015B\u0107, opisy i wymiary Legendy"
+                    };
+                    btnEditLeg.Click += (s, e) =>
+                    {
+                        if (_hostWindow != null) ShowLegendContentEditorDialog(_hostWindow);
+                    };
+                    legContainer.Children.Add(btnEditLeg);
+
+                    // Warstwa 3: 8 uchwytow zmiany rozmiaru (4 boki + 4 narozniki)
                     AttachFourSidedResizeThumbsToLegend(legContainer, w, h);
                 }
             }
@@ -2777,64 +2904,79 @@ namespace FieldTakHub.Builder.Services
             {
                 var thumb = new Thumb
                 {
+                    Template = GetTransparentThumbTemplate(),
                     HorizontalAlignment = ha,
                     VerticalAlignment = va,
                     Width = double.IsNaN(thW) ? double.NaN : thW,
                     Height = double.IsNaN(thH) ? double.NaN : thH,
                     Cursor = cur,
-                    Opacity = 0.01,
-                    Background = Brushes.Transparent,
                     ToolTip = "Przeci\u0105gnij kraw\u0119d\u017A / naro\u017Cnik, aby zmieni\u0107 rozmiar Legendy"
                 };
 
-                if (double.IsNaN(thW)) thumb.Margin = new Thickness(8, 0, 8, 0);
-                if (double.IsNaN(thH)) thumb.Margin = new Thickness(0, 8, 0, 8);
+                if (double.IsNaN(thW)) thumb.Margin = new Thickness(9, 0, 9, 0);
+                if (double.IsNaN(thH)) thumb.Margin = new Thickness(0, 9, 0, 9);
+
+                Point resizeStartMousePt = new Point();
+                double startLeft = 0, startTop = 0, startW = 0, startH = 0;
+
+                thumb.DragStarted += (s, e) =>
+                {
+                    e.Handled = true;
+                    resizeStartMousePt = Mouse.GetPosition(_interactiveCanvas);
+                    startLeft = Canvas.GetLeft(legContainer);
+                    startTop = Canvas.GetTop(legContainer);
+                    if (double.IsNaN(startLeft)) startLeft = 14.0;
+                    if (double.IsNaN(startTop)) startTop = 14.0;
+                    startW = legContainer.ActualWidth > 20 ? legContainer.ActualWidth : legContainer.Width;
+                    startH = legContainer.ActualHeight > 20 ? legContainer.ActualHeight : legContainer.Height;
+                };
 
                 thumb.DragDelta += (s, e) =>
                 {
-                    double curLeft = Canvas.GetLeft(legContainer);
-                    double curTop = Canvas.GetTop(legContainer);
-                    double curW = legContainer.Width;
-                    double curH = legContainer.Height;
+                    e.Handled = true;
+                    var (cw, ch) = GetExactCanvasSize();
+                    Point curPt = Mouse.GetPosition(_interactiveCanvas);
+                    double dx = curPt.X - resizeStartMousePt.X;
+                    double dy = curPt.Y - resizeStartMousePt.Y;
 
                     if (dirX == 1)
                     {
-                        double newW = Math.Clamp(curW + e.HorizontalChange, 160.0, Math.Max(160.0, viewW - curLeft - 4.0));
+                        double newW = Math.Clamp(startW + dx, 160.0, Math.Max(160.0, cw - startLeft - 4.0));
                         legContainer.Width = newW;
                         _legendCustomWidth = newW;
                     }
                     else if (dirX == -1)
                     {
-                        double rightEdge = curLeft + curW;
-                        double newLeft = Math.Clamp(curLeft + e.HorizontalChange, 4.0, Math.Max(4.0, rightEdge - 160.0));
+                        double rightEdge = startLeft + startW;
+                        double newLeft = Math.Clamp(startLeft + dx, 4.0, Math.Max(4.0, rightEdge - 160.0));
                         double newW = rightEdge - newLeft;
                         Canvas.SetLeft(legContainer, newLeft);
                         legContainer.Width = newW;
                         _legendCustomWidth = newW;
-                        _legendNormX = newLeft / viewW;
+                        _legendNormX = newLeft / Math.Max(1.0, cw);
                     }
 
                     if (dirY == 1)
                     {
-                        double newH = Math.Clamp(curH + e.VerticalChange, 75.0, Math.Max(75.0, viewH - curTop - 4.0));
+                        double newH = Math.Clamp(startH + dy, 75.0, Math.Max(75.0, ch - startTop - 4.0));
                         legContainer.Height = newH;
                         _legendCustomHeight = newH;
                     }
                     else if (dirY == -1)
                     {
-                        double bottomEdge = curTop + curH;
-                        double newTop = Math.Clamp(curTop + e.VerticalChange, 4.0, Math.Max(4.0, bottomEdge - 75.0));
+                        double bottomEdge = startTop + startH;
+                        double newTop = Math.Clamp(startTop + dy, 4.0, Math.Max(4.0, bottomEdge - 75.0));
                         double newH = bottomEdge - newTop;
                         Canvas.SetTop(legContainer, newTop);
                         legContainer.Height = newH;
                         _legendCustomHeight = newH;
-                        _legendNormY = newTop / viewH;
+                        _legendNormY = newTop / Math.Max(1.0, ch);
                     }
+                };
 
-                    if (legContainer.Children.Count > 0 && legContainer.Children[0] is Border b && b.Child is ScrollViewer sv)
-                    {
-                        sv.VerticalScrollBarVisibility = ScrollBarVisibility.Auto;
-                    }
+                thumb.DragCompleted += (s, e) =>
+                {
+                    e.Handled = true;
                     TacticalConfigPanel.MarkDirty();
                 };
 
@@ -2848,13 +2990,13 @@ namespace FieldTakHub.Builder.Services
             AddResizeThumb(HorizontalAlignment.Stretch, VerticalAlignment.Bottom, double.NaN, 7, Cursors.SizeNS, 0, 1);
 
             // 4 narozniki (Lewy-Gorny, Prawy-Gorny, Lewy-Dolny, Prawy-Dolny)
-            AddResizeThumb(HorizontalAlignment.Left, VerticalAlignment.Top, 11, 11, Cursors.SizeNWSE, -1, -1);
-            AddResizeThumb(HorizontalAlignment.Right, VerticalAlignment.Top, 11, 11, Cursors.SizeNESW, 1, -1);
-            AddResizeThumb(HorizontalAlignment.Left, VerticalAlignment.Bottom, 11, 11, Cursors.SizeNESW, -1, 1);
-            AddResizeThumb(HorizontalAlignment.Right, VerticalAlignment.Bottom, 11, 11, Cursors.SizeNWSE, 1, 1);
+            AddResizeThumb(HorizontalAlignment.Left, VerticalAlignment.Top, 12, 12, Cursors.SizeNWSE, -1, -1);
+            AddResizeThumb(HorizontalAlignment.Right, VerticalAlignment.Top, 12, 12, Cursors.SizeNESW, 1, -1);
+            AddResizeThumb(HorizontalAlignment.Left, VerticalAlignment.Bottom, 12, 12, Cursors.SizeNESW, -1, 1);
+            AddResizeThumb(HorizontalAlignment.Right, VerticalAlignment.Bottom, 12, 12, Cursors.SizeNWSE, 1, 1);
         }
 
-                public static byte[] CaptureCurrentMapSheetForOpordAnnex3Png(Window win = null)
+        public static byte[] CaptureCurrentMapSheetForOpordAnnex3Png(Window win = null)
         {
             try
             {

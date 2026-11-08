@@ -1,1 +1,1 @@
-Field TAK Hub Revert Stage 2 & Full Restore UTC: 2026-11-08T06:11:34.2058268Z | RunId: f6a3475a588b4bfabbfdc3e214e8f40b
+Field TAK Hub Native Thumb Legend Drag Fix UTC: 2026-11-08T07:49:52.0982234Z | RunId: 435ad960eb544dd399caf2a2925e7281
