@@ -1,5 +1,5 @@
 #pragma warning disable CS8619
-#pragma warning disable CS0414, CS8600, CS8601, CS8602, CS8603, CS8604, CS8618, CS8625
+#pragma warning disable CS0414, CS0649, CS8600, CS8601, CS8602, CS8603, CS8604, CS8618, CS8625
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
@@ -332,7 +332,7 @@ namespace FieldTakHub.Builder.Services
         private static double _aoOutMaskOpacity = 0.45;
         private static readonly List<TacticalMapObjectItem> _mapObjects = new List<TacticalMapObjectItem>();
         private static TacticalMapObjectItem _activeDraftPoly;
-        private static TextBox _objectNameInputBox, _scaleInputBox, _searchPlaceBox;
+        private static TextBox _objectNameInputBox = null, _scaleInputBox, _searchPlaceBox;
         private static ComboBox _fmtComboBox, _oriComboBox, _layerComboBox;
 
         private static TacticalMapObjectItem _inspectedObject;

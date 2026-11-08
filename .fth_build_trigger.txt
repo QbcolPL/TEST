@@ -1,1 +1,1 @@
-Field TAK Hub Native Thumb Legend Drag Fix UTC: 2026-11-08T07:49:52.0982234Z | RunId: 435ad960eb544dd399caf2a2925e7281
+Field TAK Hub ControlTemplate.Seal Fix UTC: 2026-11-08T08:03:54.1819859Z | RunId: 3b32fb5a54f247b387a908387b1c8c49

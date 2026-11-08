@@ -2538,7 +2538,7 @@ namespace FieldTakHub.Builder.Services
             var fef = new FrameworkElementFactory(typeof(Border));
             fef.SetValue(Border.BackgroundProperty, new SolidColorBrush(Color.FromArgb(2, 0, 0, 0)));
             var tpl = new ControlTemplate(typeof(Thumb)) { VisualTree = fef };
-            tpl.Freeze();
+            tpl.Seal();
             _transparentThumbTemplate = tpl;
             return tpl;
         }
@@ -2552,10 +2552,10 @@ namespace FieldTakHub.Builder.Services
             double maxInitY = Math.Max(8.0, viewH - Math.Min(elemH, viewH - 40.0) - 4.0);
 
             double x = validNormX
-                ? Math.Clamp(normX.Value * viewW, 4.0, maxInitX)
+                ? Math.Clamp(normX.GetValueOrDefault() * viewW, 4.0, maxInitX)
                 : (cornerPreset.StartsWith("Lewy") ? 14.0 : Math.Max(14.0, viewW - elemW - 14.0));
             double y = validNormY
-                ? Math.Clamp(normY.Value * viewH, 4.0, maxInitY)
+                ? Math.Clamp(normY.GetValueOrDefault() * viewH, 4.0, maxInitY)
                 : (cornerPreset.Contains("g\u00F3rny") ? 14.0 : Math.Max(14.0, viewH - elemH - 14.0));
 
             Canvas.SetLeft(el, x);
