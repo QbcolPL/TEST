@@ -1,1 +1,1 @@
-Field TAK Hub ControlTemplate.Seal Fix UTC: 2026-11-08T08:03:54.1819859Z | RunId: 3b32fb5a54f247b387a908387b1c8c49
+Field TAK Hub Disconnect Logical Child Fix UTC: 2026-11-08T08:41:10.7548272Z | RunId: 934033ae6e1b4dd3933de38a5087ae82

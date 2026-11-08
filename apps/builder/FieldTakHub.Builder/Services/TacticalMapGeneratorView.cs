@@ -2543,10 +2543,25 @@ namespace FieldTakHub.Builder.Services
             return tpl;
         }
 
+        private static void SafeDetachElement(UIElement el)
+        {
+            if (el == null) return;
+            try
+            {
+                var parent = LogicalTreeHelper.GetParent(el) ?? VisualTreeHelper.GetParent(el);
+                if (parent is Panel panel) panel.Children.Remove(el);
+                else if (parent is Decorator dec && dec.Child == el) dec.Child = null;
+                else if (parent is ContentControl cc && ReferenceEquals(cc.Content, el)) cc.Content = null;
+            }
+            catch { }
+        }
+
         private static void PlaceDraggableHudElement(FrameworkElement el, string hudId, string cornerPreset, double? normX, double? normY, double viewW, double viewH, double elemW, double elemH)
         {
-            bool validNormX = normX.HasValue && !double.IsNaN(normX.Value) && !double.IsInfinity(normX.Value) && normX.Value >= -0.2 && normX.Value <= 1.2;
-            bool validNormY = normY.HasValue && !double.IsNaN(normY.Value) && !double.IsInfinity(normY.Value) && normY.Value >= -0.2 && normY.Value <= 1.2;
+            SafeDetachElement(el);
+
+            bool validNormX = normX.HasValue && !double.IsNaN(normX.GetValueOrDefault()) && !double.IsInfinity(normX.GetValueOrDefault()) && normX.GetValueOrDefault() >= -0.2 && normX.GetValueOrDefault() <= 1.2;
+            bool validNormY = normY.HasValue && !double.IsNaN(normY.GetValueOrDefault()) && !double.IsInfinity(normY.GetValueOrDefault()) && normY.GetValueOrDefault() >= -0.2 && normY.GetValueOrDefault() <= 1.2;
 
             double maxInitX = Math.Max(8.0, viewW - Math.Min(elemW, viewW - 40.0) - 4.0);
             double maxInitY = Math.Max(8.0, viewH - Math.Min(elemH, viewH - 40.0) - 4.0);
@@ -2564,7 +2579,10 @@ namespace FieldTakHub.Builder.Services
             if (hudId != "LEGEND" && el is Border b && b.Child != null && !(b.Child is Grid && ((Grid)b.Child).Tag?.ToString() == "HUD_THUMB_HOST"))
             {
                 UIElement innerChild = b.Child;
+                b.Child = null;
+                SafeDetachElement(innerChild);
                 innerChild.IsHitTestVisible = false;
+
                 var hostGrid = new Grid { Tag = "HUD_THUMB_HOST" };
                 hostGrid.Children.Add(innerChild);
 
