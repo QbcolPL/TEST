@@ -4,15 +4,15 @@ plugins {
 }
 
 android {
-    namespace = "com.fieldtak.mobile"
+    namespace = "com.fieldtakhub.mobile"
     compileSdk = 34
 
     defaultConfig {
-        applicationId = "com.fieldtak.mobile"
+        applicationId = "com.fieldtakhub.mobile"
         minSdk = 26
         targetSdk = 34
-        versionCode = 2
-        versionName = "3.4.2"
+        versionCode = 341
+        versionName = "3.4.0-CLEAN"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
@@ -57,11 +57,14 @@ dependencies {
     implementation("androidx.compose.material3:material3")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
 
-    // CameraX & MLKit Barcode Scanning dla Skanera QR
+    // CameraX & MLKit Barcode Scanning (Skaner z kamery + odczyt QR z galerii)
     val cameraVersion = "1.3.1"
     implementation("androidx.camera:camera-core:$cameraVersion")
     implementation("androidx.camera:camera-camera2:$cameraVersion")
     implementation("androidx.camera:camera-lifecycle:$cameraVersion")
     implementation("androidx.camera:camera-view:$cameraVersion")
     implementation("com.google.mlkit:barcode-scanning:17.2.0")
+
+    // ZXing Core do generowania kodu QR na ekranie telefonu (Hotspot Wi-Fi dla zapominalskich)
+    implementation("com.google.zxing:core:3.5.2")
 }

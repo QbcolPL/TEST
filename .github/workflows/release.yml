@@ -69,18 +69,18 @@ jobs:
           KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
           test -n "$KEYSTORE_B64" || (echo "ANDROID_KEYSTORE_BASE64 is required for a release tag" && exit 1)
-          echo "$KEYSTORE_B64" | base64 -d > apps/android/release.jks
-          cat > apps/android/keystore.properties <<PROPS
+          echo "$KEYSTORE_B64" | base64 -d > apps/mobile/release.jks
+          cat > apps/mobile/keystore.properties <<PROPS
           storeFile=../release.jks
           storePassword=$STORE_PASSWORD
           keyAlias=$KEY_ALIAS
           keyPassword=$KEY_PASSWORD
           PROPS
-      - working-directory: apps/android
+      - working-directory: apps/mobile
         run: gradle testDebugUnitTest assembleRelease --stacktrace
       - run: |
           mkdir -p release/android
-          cp apps/android/app/build/outputs/apk/release/app-release.apk release/android/FieldTAKHub-2.3.0.apk
+          cp apps/mobile/app/build/outputs/apk/release/app-release.apk release/android/FieldTAKHub-2.3.0.apk
       - uses: actions/upload-artifact@v4
         with:
           name: android-release

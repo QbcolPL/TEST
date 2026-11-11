@@ -16,4 +16,4 @@ dependencyResolutionManagement {
         mavenCentral()
     }
 }
-rootProject.name = "FieldTakHubMobile"
+rootProject.name = "mobile"
