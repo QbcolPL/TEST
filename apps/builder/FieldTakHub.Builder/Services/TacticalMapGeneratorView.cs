@@ -2638,6 +2638,7 @@ namespace FieldTakHub.Builder.Services
 
         private static void DrawDraggableCornerElements(double w, double h)
         {
+            if (_coordSystem != null && _coordSystem.StartsWith("WGS84", StringComparison.OrdinalIgnoreCase)) { RenderCalibratedWgs84GridOnSheet(w, h); }
             var (wMm, _) = GetActiveSheetDimensionsMm();
             bool isCompactWrist = wMm <= 160;
 
@@ -2703,7 +2704,7 @@ namespace FieldTakHub.Builder.Services
                 });
 
                 string secLegSuffix = (_enableSectorGridOverlay || _coordSystem.StartsWith("Sektorowa")) ? $" + Sektory A-Z/1-9 ({_sectorSizeMeters}m | {_sectorSubDivision.Split(' ')[0]})" : "";
-                string autoSub = (_coordSystem.StartsWith("MGRS") ? $"Siatka: MGRS ({_effectiveMgrsStepMeters} m) | {_subGridDivision}" : $"Siatka: {_coordSystem.Split(' ')[0]}") + secLegSuffix;
+                string autoSub = (_coordSystem.StartsWith("MGRS") ? $"Siatka: MGRS ({_effectiveMgrsStepMeters} m) | {_subGridDivision}" : GetWgs84LegendSubtitleSummary()) + secLegSuffix;
                 string displaySub = string.IsNullOrWhiteSpace(_customLegendSubtitle) ? autoSub : _customLegendSubtitle;
                 ls.Children.Add(new TextBlock { Text = displaySub, Foreground = TacticalConfigPanel.BrushMutedText, FontSize = 8.5, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 1, 0, 4) });
 
@@ -2909,6 +2910,7 @@ namespace FieldTakHub.Builder.Services
                         if (_hostWindow != null) ShowLegendContentEditorDialog(_hostWindow);
                     };
                     legContainer.Children.Add(btnEditLeg);
+                    AttachWgs84QuickCalibrateButtonIfActive(legContainer);
 
                     // Warstwa 3: 8 uchwytow zmiany rozmiaru (4 boki + 4 narozniki)
                     AttachFourSidedResizeThumbsToLegend(legContainer, w, h);

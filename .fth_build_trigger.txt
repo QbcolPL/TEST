@@ -1,1 +1,1 @@
-Field TAK Hub Mobile Fix Color Import UTC: 2026-11-11T06:43:02.1939600Z | RunId: 0f03979d6662432cb6f65ce54dd377b7
+Field TAK Hub WGS84 Calibration & Sector Menu Cleanup UTC: 2026-11-14T05:38:24.7646865Z | RunId: 72af342752b741d7921080731cac5073

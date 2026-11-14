@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -6,7 +6,7 @@ namespace FieldTakHub.Builder.Services
 {
     public static class SourceFileFilter
     {
-        private static readonly HashSet<string> Ign = new(StringComparer.OrdinalIgnoreCase) { ".gitkeep", ".keep", ".placeholder", "placeholder.txt", "desktop.ini", "thumbs.db", ".ds_store" };
+        private static readonly HashSet<string> Ign = new(StringComparer.OrdinalIgnoreCase) { ".gitkeep", ".keep", "desktop.ini", "thumbs.db", ".ds_store" };
         public static bool IsValidDeploymentAsset(string filePath, string? categoryFolder = null)
         {
             if (string.IsNullOrWhiteSpace(filePath) || !File.Exists(filePath)) return false;
