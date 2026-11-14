@@ -2638,7 +2638,7 @@ namespace FieldTakHub.Builder.Services
 
         private static void DrawDraggableCornerElements(double w, double h)
         {
-            if (_coordSystem != null && _coordSystem.StartsWith("WGS84", StringComparison.OrdinalIgnoreCase)) { RenderCalibratedWgs84GridOnSheet(w, h); }
+            UpdateWgs84CustomizationPanelVisibility(); if (_coordSystem != null && _coordSystem.IndexOf("WGS84", StringComparison.OrdinalIgnoreCase) >= 0) { RenderCalibratedWgs84GridOnSheet(w, h); }
             var (wMm, _) = GetActiveSheetDimensionsMm();
             bool isCompactWrist = wMm <= 160;
 

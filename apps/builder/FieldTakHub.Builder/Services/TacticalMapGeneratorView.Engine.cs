@@ -316,7 +316,7 @@ namespace FieldTakHub.Builder.Services
         private static string _offlineDbFormat = "MBTiles (.mbtiles — ATAK 5.x)";
         private static bool _bakeLidarInOffline = true, _includeVectorsWithOffline = true;
 
-        private static string _coordSystem = "MGRS / UTM (Siatka wojskowa w metrach)"; UpdateWgs84CustomizationPanelVisibility();
+        private static string _coordSystem = "MGRS / UTM (Siatka wojskowa w metrach)";
         private static string _subGridDivision = "Co 33 m (Keypad 1-9)";
         private static string _gridLabelsMode = "MGRS + Ćwiartki/Keypad";
         private static string _labelBgStyle = "Kaseton (Kolor tła RGB)";
@@ -637,7 +637,7 @@ namespace FieldTakHub.Builder.Services
         private static StackPanel BuildSection2GridAndColorsUI(Window win)
         {
             var sec2 = CreateSectionCard("2. SIATKA MGRS / SEKTOROWA (A,B,C / 1,2,3), ROZJA\u015ANIANIE LASU & KOLORY RGB");
-            sec2.Children.Add(TacticalConfigPanel.FieldBox("G\u0142\u00F3wny system wsp\u00F3\u0142rz\u0119dnych na mapie:", TacticalConfigPanel.ComboCtrl(new[] { "MGRS / UTM (Siatka wojskowa w metrach)", "Siatka Sektorowa (A1, B2, C3...)", "WGS84 (Stopnie geograficzne Lat/Lon)", "Brak siatki" }, _coordSystem, win, v => { _coordSystem = v; UpdateWgs84CustomizationPanelVisibility(); RedrawVectorsOnly(); })));
+            sec2.Children.Add(TacticalConfigPanel.FieldBox("G\u0142\u00F3wny system wsp\u00F3\u0142rz\u0119dnych na mapie:", TacticalConfigPanel.ComboCtrl(new[] { "MGRS / UTM (Siatka wojskowa w metrach)", "Siatka Sektorowa (A1, B2, C3...)", "WGS84 (Stopnie geograficzne Lat/Lon)", "Brak siatki" }, _coordSystem, win, v => { _coordSystem = v; RedrawVectorsOnly(); })));
             var subGridRow = new UniformGrid { Columns = 2 };
             subGridRow.Children.Add(TacticalConfigPanel.FieldBox("Podzia\u0142 oczek MGRS:", TacticalConfigPanel.ComboCtrl(new[] { "Co 33 m (Keypad 1-9)", "Co 50 m (\u0106wiartki A,B,C,D)", "Brak podzia\u0142u (Tylko 100 m)", "Siatka co 250 m", "Siatka co 500 m" }, _subGridDivision, win, v => { _subGridDivision = v; RedrawVectorsOnly(); })));
             subGridRow.Children.Add(TacticalConfigPanel.FieldBox("Opisy kratek:", TacticalConfigPanel.ComboCtrl(new[] { "MGRS + \u0106wiartki/Keypad", "Tylko g\u0142\u00F3wne linie MGRS", "Brak opis\u00F3w wewn\u0105trz" }, _gridLabelsMode, win, v => { _gridLabelsMode = v; RedrawVectorsOnly(); })));
@@ -1750,7 +1750,7 @@ namespace FieldTakHub.Builder.Services
                 if (root["layerId"] != null) { var foundLayer = Layers.FirstOrDefault(l => l.Id.Equals(root["layerId"].ToString(), StringComparison.OrdinalIgnoreCase)); if (foundLayer != null) _activeLayer = foundLayer; }
                 if (bool.TryParse(root["showLidar"]?.ToString(), out bool sl)) _showLidarSingleWms = sl;
                 if (double.TryParse(root["lidarOpacity"]?.ToString(), NumberStyles.Any, CultureInfo.InvariantCulture, out double lop)) _lidarOpacity = lop;
-                if (root["coordSystem"] != null) _coordSystem = root["coordSystem"].ToString(); UpdateWgs84CustomizationPanelVisibility();
+                if (root["coordSystem"] != null) _coordSystem = root["coordSystem"].ToString();
                 if (root["subGridDivision"] != null) _subGridDivision = root["subGridDivision"].ToString();
                 if (root["gridLabelsMode"] != null) _gridLabelsMode = root["gridLabelsMode"].ToString();
                 if (root["labelBgStyle"] != null) _labelBgStyle = root["labelBgStyle"].ToString();

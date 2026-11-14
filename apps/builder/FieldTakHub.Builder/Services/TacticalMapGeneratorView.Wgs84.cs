@@ -60,7 +60,7 @@ namespace FieldTakHub.Builder.Services
         {
             if (_wgs84ConfigPanelBorder != null)
             {
-                bool isWgs = _coordSystem != null && _coordSystem.StartsWith("WGS84", StringComparison.OrdinalIgnoreCase);
+                bool isWgs = _coordSystem != null && (_coordSystem.IndexOf("WGS84", StringComparison.OrdinalIgnoreCase) >= 0);
                 _wgs84ConfigPanelBorder.Visibility = isWgs ? Visibility.Visible : Visibility.Collapsed;
                 if (isWgs)
                 {
@@ -77,7 +77,7 @@ namespace FieldTakHub.Builder.Services
             if (parentPanel == null) return;
             var panel = BuildWgs84CustomizationPanel(isModalDialog: false);
             _wgs84ConfigPanelBorder = panel;
-            bool isWgs = _coordSystem != null && _coordSystem.StartsWith("WGS84", StringComparison.OrdinalIgnoreCase);
+            bool isWgs = _coordSystem != null && (_coordSystem.IndexOf("WGS84", StringComparison.OrdinalIgnoreCase) >= 0);
             panel.Visibility = isWgs ? Visibility.Visible : Visibility.Collapsed;
             parentPanel.Children.Add(panel);
         }
@@ -85,7 +85,7 @@ namespace FieldTakHub.Builder.Services
         private static void AttachWgs84QuickCalibrateButtonIfActive(Grid legContainer)
         {
             if (legContainer == null) return;
-            if (_coordSystem == null || !_coordSystem.StartsWith("WGS84", StringComparison.OrdinalIgnoreCase))
+            if (_coordSystem == null || !(_coordSystem.IndexOf("WGS84", StringComparison.OrdinalIgnoreCase) >= 0))
                 return;
 
             var btnCal = new Button
