@@ -1,3 +1,4 @@
+#pragma warning disable CS0162
 #pragma warning disable CS0414, CS8600, CS8601, CS8602, CS8603, CS8604, CS8618, CS8625
 global using System.Text.RegularExpressions;
 using System;

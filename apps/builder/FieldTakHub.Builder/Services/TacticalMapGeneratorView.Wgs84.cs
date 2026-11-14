@@ -1141,6 +1141,18 @@ namespace FieldTakHub.Builder.Services
             }
 
             CollectSheetCanvasesRecursive(root, list, w, h);
+            try
+            {
+                foreach (var f in typeof(TacticalMapGeneratorView).GetFields(BindingFlags.Static | BindingFlags.NonPublic | BindingFlags.Public))
+                {
+                    if (typeof(DependencyObject).IsAssignableFrom(f.FieldType))
+                    {
+                        var val = f.GetValue(null) as DependencyObject;
+                        if (val != null) CollectSheetCanvasesRecursive(val, list, w, h);
+                    }
+                }
+            }
+            catch { }
             if (!list.Contains(_interactiveCanvas))
                 list.Add(_interactiveCanvas);
             return list;
@@ -1159,6 +1171,19 @@ namespace FieldTakHub.Builder.Services
                 }
             }
 
+            if (parent is Panel pnl)
+            {
+                foreach (UIElement ch in pnl.Children)
+                    CollectSheetCanvasesRecursive(ch, result, w, h);
+            }
+            else if (parent is Decorator dec && dec.Child != null)
+            {
+                CollectSheetCanvasesRecursive(dec.Child, result, w, h);
+            }
+            else if (parent is ContentControl cc && cc.Content is DependencyObject dObj)
+            {
+                CollectSheetCanvasesRecursive(dObj, result, w, h);
+            }
             int count = 0;
             try { count = VisualTreeHelper.GetChildrenCount(parent); } catch { }
             for (int i = 0; i < count; i++)
