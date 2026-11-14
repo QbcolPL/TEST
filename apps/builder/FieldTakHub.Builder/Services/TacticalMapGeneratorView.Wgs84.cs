@@ -441,7 +441,7 @@ namespace FieldTakHub.Builder.Services
         private static void ScheduleDeferredWgs84CleanAndRender(double w, double h)
         {
             if (_interactiveCanvas == null) return;
-            _interactiveCanvas.Dispatcher.BeginInvoke(DispatcherPriority.Loaded, new Action(() =>
+            _interactiveCanvas.Dispatcher.BeginInvoke(DispatcherPriority.ApplicationIdle, new Action(() =>
             {
                 if (IsWgs84ModeActive())
                 {
