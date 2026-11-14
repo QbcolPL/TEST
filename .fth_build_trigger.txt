@@ -1,1 +1,1 @@
-Field TAK Hub WGS84 Dark UI & Single Scale-Adaptive Grid UTC: 2026-11-14T06:10:27.9512830Z | RunId: 79e6c4c2b6a241c18cf6a1b5573efae3
+Field TAK Hub WGS84 MultiCanvas Purge & Live Auto-Refresh UTC: 2026-11-14T06:29:11.0805204Z | RunId: 74ff82a54a4c44e397f26b3a42ac046e

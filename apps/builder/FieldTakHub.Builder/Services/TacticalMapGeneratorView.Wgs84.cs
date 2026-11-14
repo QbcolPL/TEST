@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
 using System.Reflection;
+using System.Text;
 using System.Text.RegularExpressions;
 using System.Windows;
 using System.Windows.Controls;
@@ -11,12 +12,12 @@ using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Shapes;
+using System.Windows.Threading;
 
 namespace FieldTakHub.Builder.Services
 {
     public static partial class TacticalMapGeneratorView
     {
-        // Domyslne ustawienia siatki WGS84: Auto (dostosowane do skali) + rzeczywiste wspolrzedne
         private static string _wgs84StepPreset = "Auto (dostosuj do skali mapy)";
         private static string _wgs84FormatPreset = "DMS (49°50'58\"N) — Stopnie Minuty Sekundy";
         private static string _wgs84SubGridPreset = "Krzyżyki w środku (+)";
@@ -34,6 +35,7 @@ namespace FieldTakHub.Builder.Services
         private static TextBox _wgs84ScaleYBox;
         private static TextBox _wgs84CenterLatOverrideBox;
         private static TextBox _wgs84CenterLonOverrideBox;
+        private static bool _suppressWgs84LiveTextEvents = false;
 
         private static bool IsWgs84ModeActive()
         {
@@ -77,18 +79,76 @@ namespace FieldTakHub.Builder.Services
             return $"{secLat:0.#}\" (~{stepLat * metersPerDegLat:0}m)";
         }
 
+        private static void ScheduleDeferredWgs84CleanAndRender(double w, double h)
+        {
+            if (_interactiveCanvas == null) return;
+            _interactiveCanvas.Dispatcher.BeginInvoke(DispatcherPriority.Loaded, new Action(() =>
+            {
+                if (IsWgs84ModeActive())
+                {
+                    var (cw, ch) = GetExactCanvasSize();
+                    double effW = cw > 20 ? cw : w;
+                    double effH = ch > 20 ? ch : h;
+                    RenderCalibratedWgs84GridOnSheet(effW, effH);
+                    UpdateLegendSubtitleInPlace();
+                }
+            }));
+        }
+
+        // ====================================================================
+        // NATYCHMIASTOWE AUTO-ODSWIEZANIE SIATKI WGS84 NA ZYWO (LIVE REDRAW)
+        // ====================================================================
         private static void TriggerWgs84Redraw()
         {
             try
             {
-                UpdateSelectedMarkerInspectorUI();
+                RedrawVectorsOnly();
             }
             catch { }
+
+            try
+            {
+                var (cw, ch) = GetExactCanvasSize();
+                if (cw > 20 && ch > 20 && IsWgs84ModeActive())
+                {
+                    RenderCalibratedWgs84GridOnSheet(cw, ch);
+                    UpdateLegendSubtitleInPlace();
+                    ScheduleDeferredWgs84CleanAndRender(cw, ch);
+                }
+            }
+            catch { }
+
             try
             {
                 TacticalConfigPanel.MarkDirty();
             }
             catch { }
+        }
+
+        private static void UpdateLegendSubtitleInPlace()
+        {
+            if (_interactiveCanvas == null || !string.IsNullOrWhiteSpace(_customLegendSubtitle)) return;
+            string secLegSuffix = (_enableSectorGridOverlay || (_coordSystem != null && _coordSystem.StartsWith("Sektorowa")))
+                ? $" + Sektory A-Z/1-9 ({_sectorSizeMeters}m | {_sectorSubDivision.Split(' ')[0]})"
+                : "";
+            string expectedSub = GetWgs84LegendSubtitleSummary() + secLegSuffix;
+
+            foreach (UIElement el in _interactiveCanvas.Children)
+            {
+                if (el is Grid legGrid)
+                {
+                    foreach (UIElement child in legGrid.Children)
+                    {
+                        if (child is Border legBorder && legBorder.Child is StackPanel ls && ls.Children.Count > 1)
+                        {
+                            if (ls.Children[1] is TextBlock subTb)
+                            {
+                                subTb.Text = expectedSub;
+                            }
+                        }
+                    }
+                }
+            }
         }
 
         public static void UpdateWgs84CustomizationPanelVisibility()
@@ -99,10 +159,19 @@ namespace FieldTakHub.Builder.Services
                 _wgs84ConfigPanelBorder.Visibility = isWgs ? Visibility.Visible : Visibility.Collapsed;
                 if (isWgs)
                 {
-                    if (_wgs84CenterLatOverrideBox != null && !_wgs84CenterLatOverrideBox.IsKeyboardFocused)
-                        _wgs84CenterLatOverrideBox.Text = _centerLat.ToString("F6", CultureInfo.InvariantCulture);
-                    if (_wgs84CenterLonOverrideBox != null && !_wgs84CenterLonOverrideBox.IsKeyboardFocused)
-                        _wgs84CenterLonOverrideBox.Text = _centerLon.ToString("F6", CultureInfo.InvariantCulture);
+                    _suppressWgs84LiveTextEvents = true;
+                    try
+                    {
+                        if (_wgs84CenterLatOverrideBox != null && !_wgs84CenterLatOverrideBox.IsKeyboardFocused)
+                            _wgs84CenterLatOverrideBox.Text = _centerLat.ToString("F6", CultureInfo.InvariantCulture);
+                        if (_wgs84CenterLonOverrideBox != null && !_wgs84CenterLonOverrideBox.IsKeyboardFocused)
+                            _wgs84CenterLonOverrideBox.Text = _centerLon.ToString("F6", CultureInfo.InvariantCulture);
+                    }
+                    finally
+                    {
+                        _suppressWgs84LiveTextEvents = false;
+                    }
+
                     if (_wgs84ActiveStepStatusText != null)
                         _wgs84ActiveStepStatusText.Text = $"Skala 1:{_targetScaleDenominator:N0}  •  Krok siatki: {GetWgs84StepHumanSummary()}";
                 }
@@ -181,7 +250,7 @@ namespace FieldTakHub.Builder.Services
         }
 
         // ====================================================================
-        // CIEMNY TAKTYCZNY PANEL UI (100% SPOJNY Z BUILDEREM)
+        // CIEMNY TAKTYCZNY PANEL UI Z AUTO-ODSWIEZANIEM (LIVE TEXTCHANGED)
         // ====================================================================
         private static Border BuildWgs84CustomizationPanel(bool isModalDialog)
         {
@@ -304,7 +373,7 @@ namespace FieldTakHub.Builder.Services
 
             sp.Children.Add(new TextBlock
             {
-                Text = "Kalibracja położenia siatki względem mapy (N/S, E/W oraz Skala %):",
+                Text = "Kalibracja na żywo (Przesunięcie N/S, E/W oraz Skala %):",
                 Foreground = TacticalConfigPanel.BrushAccent,
                 FontSize = 9.8,
                 FontWeight = FontWeights.SemiBold,
@@ -320,6 +389,15 @@ namespace FieldTakHub.Builder.Services
             spN.Children.Add(CreateFieldLabel("Przesunięcie Północ/Południe (m):"));
             var tbN = CreateDarkTextBox(_wgs84OffsetNorthMeters.ToString("0.#", CultureInfo.InvariantCulture));
             if (!isModalDialog) _wgs84OffsetNBox = tbN;
+            tbN.TextChanged += (s, e) =>
+            {
+                if (_suppressWgs84LiveTextEvents) return;
+                if (double.TryParse(tbN.Text.Replace(',', '.'), NumberStyles.Float, CultureInfo.InvariantCulture, out double vN))
+                {
+                    _wgs84OffsetNorthMeters = Math.Clamp(vN, -50000.0, 50000.0);
+                    TriggerWgs84Redraw();
+                }
+            };
             spN.Children.Add(tbN);
 
             var nudgeN = new UniformGrid { Columns = 4, Margin = new Thickness(0, 3, 0, 0) };
@@ -328,9 +406,12 @@ namespace FieldTakHub.Builder.Services
                 double d = delta;
                 nudgeN.Children.Add(CreateMiniNudgeButton(d > 0 ? $"+{d:0}m" : $"{d:0}m", () =>
                 {
+                    _suppressWgs84LiveTextEvents = true;
                     _wgs84OffsetNorthMeters += d;
-                    tbN.Text = _wgs84OffsetNorthMeters.ToString("0.#", CultureInfo.InvariantCulture);
-                    if (_wgs84OffsetNBox != null) _wgs84OffsetNBox.Text = tbN.Text;
+                    string sVal = _wgs84OffsetNorthMeters.ToString("0.#", CultureInfo.InvariantCulture);
+                    tbN.Text = sVal;
+                    if (_wgs84OffsetNBox != null) _wgs84OffsetNBox.Text = sVal;
+                    _suppressWgs84LiveTextEvents = false;
                     TriggerWgs84Redraw();
                 }));
             }
@@ -342,6 +423,15 @@ namespace FieldTakHub.Builder.Services
             spE.Children.Add(CreateFieldLabel("Przesunięcie Wschód/Zachód (m):"));
             var tbE = CreateDarkTextBox(_wgs84OffsetEastMeters.ToString("0.#", CultureInfo.InvariantCulture));
             if (!isModalDialog) _wgs84OffsetEBox = tbE;
+            tbE.TextChanged += (s, e) =>
+            {
+                if (_suppressWgs84LiveTextEvents) return;
+                if (double.TryParse(tbE.Text.Replace(',', '.'), NumberStyles.Float, CultureInfo.InvariantCulture, out double vE))
+                {
+                    _wgs84OffsetEastMeters = Math.Clamp(vE, -50000.0, 50000.0);
+                    TriggerWgs84Redraw();
+                }
+            };
             spE.Children.Add(tbE);
 
             var nudgeE = new UniformGrid { Columns = 4, Margin = new Thickness(0, 3, 0, 0) };
@@ -350,9 +440,12 @@ namespace FieldTakHub.Builder.Services
                 double d = delta;
                 nudgeE.Children.Add(CreateMiniNudgeButton(d > 0 ? $"+{d:0}m" : $"{d:0}m", () =>
                 {
+                    _suppressWgs84LiveTextEvents = true;
                     _wgs84OffsetEastMeters += d;
-                    tbE.Text = _wgs84OffsetEastMeters.ToString("0.#", CultureInfo.InvariantCulture);
-                    if (_wgs84OffsetEBox != null) _wgs84OffsetEBox.Text = tbE.Text;
+                    string sVal = _wgs84OffsetEastMeters.ToString("0.#", CultureInfo.InvariantCulture);
+                    tbE.Text = sVal;
+                    if (_wgs84OffsetEBox != null) _wgs84OffsetEBox.Text = sVal;
+                    _suppressWgs84LiveTextEvents = false;
                     TriggerWgs84Redraw();
                 }));
             }
@@ -371,6 +464,15 @@ namespace FieldTakHub.Builder.Services
             spSx.Children.Add(CreateFieldLabel("Korekta szerokości X (%):"));
             var tbSx = CreateDarkTextBox(_wgs84ScaleXPercent.ToString("0.#", CultureInfo.InvariantCulture));
             if (!isModalDialog) _wgs84ScaleXBox = tbSx;
+            tbSx.TextChanged += (s, e) =>
+            {
+                if (_suppressWgs84LiveTextEvents) return;
+                if (double.TryParse(tbSx.Text.Replace(',', '.'), NumberStyles.Float, CultureInfo.InvariantCulture, out double vSx) && vSx >= 20.0 && vSx <= 500.0)
+                {
+                    _wgs84ScaleXPercent = vSx;
+                    TriggerWgs84Redraw();
+                }
+            };
             spSx.Children.Add(tbSx);
             Grid.SetColumn(spSx, 0);
             scaleGrid.Children.Add(spSx);
@@ -379,6 +481,15 @@ namespace FieldTakHub.Builder.Services
             spSy.Children.Add(CreateFieldLabel("Korekta wysokości Y (%):"));
             var tbSy = CreateDarkTextBox(_wgs84ScaleYPercent.ToString("0.#", CultureInfo.InvariantCulture));
             if (!isModalDialog) _wgs84ScaleYBox = tbSy;
+            tbSy.TextChanged += (s, e) =>
+            {
+                if (_suppressWgs84LiveTextEvents) return;
+                if (double.TryParse(tbSy.Text.Replace(',', '.'), NumberStyles.Float, CultureInfo.InvariantCulture, out double vSy) && vSy >= 20.0 && vSy <= 500.0)
+                {
+                    _wgs84ScaleYPercent = vSy;
+                    TriggerWgs84Redraw();
+                }
+            };
             spSy.Children.Add(tbSy);
             Grid.SetColumn(spSy, 2);
             scaleGrid.Children.Add(spSy);
@@ -410,26 +521,17 @@ namespace FieldTakHub.Builder.Services
 
             var btnApply = new Button
             {
-                Content = "✓ ZASTOSUJ KALIBRACJĘ",
+                Content = "✓ ZASTOSUJ WSPÓŁRZĘDNE ŚRODKA",
                 Height = 28,
                 Background = TacticalConfigPanel.BrushAccent,
                 Foreground = new SolidColorBrush(Color.FromRgb(6, 14, 18)),
                 BorderThickness = new Thickness(0),
                 FontWeight = FontWeights.Bold,
-                FontSize = 10,
+                FontSize = 9.5,
                 Cursor = Cursors.Hand
             };
             btnApply.Click += (s, e) =>
             {
-                if (double.TryParse(tbN.Text.Replace(',', '.'), NumberStyles.Float, CultureInfo.InvariantCulture, out double vN))
-                    _wgs84OffsetNorthMeters = Math.Clamp(vN, -50000.0, 50000.0);
-                if (double.TryParse(tbE.Text.Replace(',', '.'), NumberStyles.Float, CultureInfo.InvariantCulture, out double vE))
-                    _wgs84OffsetEastMeters = Math.Clamp(vE, -50000.0, 50000.0);
-                if (double.TryParse(tbSx.Text.Replace(',', '.'), NumberStyles.Float, CultureInfo.InvariantCulture, out double vSx))
-                    _wgs84ScaleXPercent = Math.Clamp(vSx, 20.0, 500.0);
-                if (double.TryParse(tbSy.Text.Replace(',', '.'), NumberStyles.Float, CultureInfo.InvariantCulture, out double vSy))
-                    _wgs84ScaleYPercent = Math.Clamp(vSy, 20.0, 500.0);
-
                 if (double.TryParse(tbLat.Text.Replace(',', '.'), NumberStyles.Float, CultureInfo.InvariantCulture, out double nLat) &&
                     nLat >= -85.0 && nLat <= 85.0)
                 {
@@ -440,7 +542,6 @@ namespace FieldTakHub.Builder.Services
                 {
                     _centerLon = nLon;
                 }
-
                 TriggerWgs84Redraw();
             };
             Grid.SetColumn(btnApply, 0);
@@ -459,6 +560,7 @@ namespace FieldTakHub.Builder.Services
             };
             btnReset.Click += (s, e) =>
             {
+                _suppressWgs84LiveTextEvents = true;
                 _wgs84OffsetNorthMeters = 0.0;
                 _wgs84OffsetEastMeters = 0.0;
                 _wgs84ScaleXPercent = 100.0;
@@ -467,6 +569,11 @@ namespace FieldTakHub.Builder.Services
                 tbE.Text = "0";
                 tbSx.Text = "100";
                 tbSy.Text = "100";
+                if (_wgs84OffsetNBox != null) _wgs84OffsetNBox.Text = "0";
+                if (_wgs84OffsetEBox != null) _wgs84OffsetEBox.Text = "0";
+                if (_wgs84ScaleXBox != null) _wgs84ScaleXBox.Text = "100";
+                if (_wgs84ScaleYBox != null) _wgs84ScaleYBox.Text = "100";
+                _suppressWgs84LiveTextEvents = false;
                 TriggerWgs84Redraw();
             };
             Grid.SetColumn(btnReset, 2);
@@ -666,79 +773,146 @@ namespace FieldTakHub.Builder.Services
         }
 
         // ====================================================================
-        // CZYSZCZENIE STAREJ / ZDUPLIKOWANEJ SIATKI WGS84 Z PLOTNA MAPY
+        // SKANOWANIE WSZYSTKICH WARSTW CANVAS ARKUSZA MAPY (USUWANIE DUPLIKATOW)
         // ====================================================================
-        private static void PurgeLegacyAndPreviousWgs84GridElements(Canvas canvas, double w, double h)
+        private static List<Canvas> GetAllMapSheetCanvases(double w, double h)
         {
-            if (canvas == null) return;
+            var list = new List<Canvas>();
+            if (_interactiveCanvas == null) return list;
 
-            var toRemove = new List<UIElement>();
-            foreach (UIElement el in canvas.Children)
+            DependencyObject root = _interactiveCanvas;
+            for (int up = 0; up < 3; up++)
             {
-                if (el is FrameworkElement fe)
-                {
-                    if (fe.Tag is string tagStr && tagStr == "FTH_WGS84_GRID_EL")
-                    {
-                        toRemove.Add(el);
-                        continue;
-                    }
+                var p = VisualTreeHelper.GetParent(root) ?? LogicalTreeHelper.GetParent(root);
+                if (p == null) break;
+                root = p;
+                if (root is Border || root is ScrollViewer || root is Viewbox)
+                    break;
+            }
 
-                    if (fe is Border b && b.Child is TextBlock tb && !string.IsNullOrEmpty(tb.Text))
+            CollectSheetCanvasesRecursive(root, list, w, h);
+            if (!list.Contains(_interactiveCanvas))
+                list.Add(_interactiveCanvas);
+            return list;
+        }
+
+        private static void CollectSheetCanvasesRecursive(DependencyObject parent, List<Canvas> result, double w, double h)
+        {
+            if (parent == null) return;
+            if (parent is Canvas c && !result.Contains(c))
+            {
+                bool isTinyHudCanvas = (c.Width > 0 && c.Width < 260 && c.Height > 0 && c.Height < 95) ||
+                                       (c.ActualWidth > 0 && c.ActualWidth < 260 && c.ActualHeight > 0 && c.ActualHeight < 95);
+                if (!isTinyHudCanvas)
+                {
+                    result.Add(c);
+                }
+            }
+
+            int count = 0;
+            try { count = VisualTreeHelper.GetChildrenCount(parent); } catch { }
+            for (int i = 0; i < count; i++)
+            {
+                CollectSheetCanvasesRecursive(VisualTreeHelper.GetChild(parent, i), result, w, h);
+            }
+        }
+
+        private static string ExtractAllTextFromVisual(DependencyObject obj)
+        {
+            if (obj == null) return "";
+            if (obj is TextBlock tb) return tb.Text ?? "";
+            if (obj is Border b && b.Child != null) return ExtractAllTextFromVisual(b.Child);
+            if (obj is Panel pnl)
+            {
+                var sb = new StringBuilder();
+                foreach (UIElement ch in pnl.Children)
+                {
+                    string s = ExtractAllTextFromVisual(ch);
+                    if (!string.IsNullOrEmpty(s)) sb.Append(s).Append(" ");
+                }
+                return sb.ToString().Trim();
+            }
+            return "";
+        }
+
+        private static Canvas PurgeAllLegacyAndPreviousWgs84Elements(double w, double h)
+        {
+            var allCanvases = GetAllMapSheetCanvases(w, h);
+            Canvas underlyingGridCanvas = null;
+
+            foreach (var canvas in allCanvases)
+            {
+                var toRemove = new List<UIElement>();
+
+                foreach (UIElement el in canvas.Children)
+                {
+                    if (el is FrameworkElement fe)
                     {
-                        string txt = tb.Text.Trim();
-                        if (txt.EndsWith("°N", StringComparison.Ordinal) ||
-                            txt.EndsWith("°S", StringComparison.Ordinal) ||
-                            txt.EndsWith("°E", StringComparison.Ordinal) ||
-                            txt.EndsWith("°W", StringComparison.Ordinal) ||
-                            (txt.Contains("°") && (txt.EndsWith("N") || txt.EndsWith("S") || txt.EndsWith("E") || txt.EndsWith("W"))))
+                        if (fe.Tag is string tagStr && tagStr == "FTH_WGS84_GRID_EL")
                         {
                             toRemove.Add(el);
                             continue;
                         }
-                    }
 
-                    if (fe is Line ln && fe.Tag == null)
-                    {
-                        bool spansFullHeight = Math.Abs(ln.X1 - ln.X2) < 0.5 && ln.Y1 <= 2.0 && Math.Abs(ln.Y2 - h) <= 4.0;
-                        bool spansFullWidth = Math.Abs(ln.Y1 - ln.Y2) < 0.5 && ln.X1 <= 2.0 && Math.Abs(ln.X2 - w) <= 4.0;
-                        bool isSmallCrosshair = (Math.Abs(ln.X2 - ln.X1) <= 16.0 && Math.Abs(ln.Y2 - ln.Y1) < 0.5) ||
-                                                (Math.Abs(ln.Y2 - ln.Y1) <= 16.0 && Math.Abs(ln.X2 - ln.X1) < 0.5);
-
-                        if (spansFullHeight || spansFullWidth || isSmallCrosshair)
+                        string txt = ExtractAllTextFromVisual(fe);
+                        if (!string.IsNullOrEmpty(txt) && txt.Length <= 28 && txt.Contains("°"))
                         {
-                            if (_enableSectorGridOverlay && ln.Stroke is SolidColorBrush scb)
+                            string t = txt.Trim();
+                            if (t.EndsWith("N", StringComparison.OrdinalIgnoreCase) ||
+                                t.EndsWith("S", StringComparison.OrdinalIgnoreCase) ||
+                                t.EndsWith("E", StringComparison.OrdinalIgnoreCase) ||
+                                t.EndsWith("W", StringComparison.OrdinalIgnoreCase))
                             {
-                                Color c = scb.Color;
-                                if (c.R < 50 && c.G > 180 && c.B > 170)
-                                    continue;
+                                toRemove.Add(el);
+                                if (!ReferenceEquals(canvas, _interactiveCanvas))
+                                    underlyingGridCanvas = canvas;
+                                continue;
                             }
-                            toRemove.Add(el);
+                        }
+
+                        if (fe is Line ln)
+                        {
+                            bool spansHeight = Math.Abs(ln.X1 - ln.X2) < 2.0 && Math.Abs(ln.Y2 - ln.Y1) >= h * 0.60;
+                            bool spansWidth = Math.Abs(ln.Y1 - ln.Y2) < 2.0 && Math.Abs(ln.X2 - ln.X1) >= w * 0.60;
+                            bool isCrosshair = (Math.Abs(ln.X2 - ln.X1) <= 22.0 && Math.Abs(ln.Y2 - ln.Y1) < 1.5) ||
+                                               (Math.Abs(ln.Y2 - ln.Y1) <= 22.0 && Math.Abs(ln.X2 - ln.X1) < 1.5);
+
+                            if (spansHeight || spansWidth || isCrosshair)
+                            {
+                                if (_enableSectorGridOverlay && ln.Stroke is SolidColorBrush scb)
+                                {
+                                    Color c = scb.Color;
+                                    if (c.R < 55 && c.G > 175 && c.B > 165)
+                                        continue;
+                                }
+
+                                toRemove.Add(el);
+                                if (!ReferenceEquals(canvas, _interactiveCanvas))
+                                    underlyingGridCanvas = canvas;
+                            }
                         }
                     }
                 }
+
+                foreach (var rem in toRemove)
+                {
+                    canvas.Children.Remove(rem);
+                }
             }
 
-            foreach (var rem in toRemove)
-            {
-                canvas.Children.Remove(rem);
-            }
+            return underlyingGridCanvas;
         }
 
         // ====================================================================
-        // RZECZYWISTA SIATKA WGS84 (PROJEKCJA WEB MERCATOR EPSG:3857 <-> EPSG:4326)
+        // RZECZYWISTA SIATKA WGS84 (WEB MERCATOR EPSG:3857 <-> EPSG:4326)
         // ====================================================================
         private static void RenderCalibratedWgs84GridOnSheet(double w, double h)
         {
-            if (w <= 20 || h <= 20) return;
+            if (w <= 20 || h <= 20 || !IsWgs84ModeActive()) return;
 
-            Canvas targetCanvas = _interactiveCanvas ?? _interactiveCanvas;
+            Canvas detectedUnderlyingCanvas = PurgeAllLegacyAndPreviousWgs84Elements(w, h);
+            Canvas targetCanvas = detectedUnderlyingCanvas ?? (_interactiveCanvas ?? _interactiveCanvas);
             if (targetCanvas == null) return;
-
-            PurgeLegacyAndPreviousWgs84GridElements(targetCanvas, w, h);
-            if (_interactiveCanvas != null && !ReferenceEquals(targetCanvas, _interactiveCanvas))
-            {
-                PurgeLegacyAndPreviousWgs84GridElements(_interactiveCanvas, w, h);
-            }
 
             double centerLat = _centerLat;
             double centerLon = _centerLon;
@@ -829,6 +1003,11 @@ namespace FieldTakHub.Builder.Services
             }
 
             int insertIdx = 0;
+            for (int i = 0; i < targetCanvas.Children.Count; i++)
+            {
+                if (targetCanvas.Children[i] is Image)
+                    insertIdx = i + 1;
+            }
 
             void AddGridVisualElement(UIElement el)
             {
@@ -982,7 +1161,7 @@ namespace FieldTakHub.Builder.Services
 
             foreach (var badge in edgeBadges)
             {
-                targetCanvas.Children.Add(badge);
+                AddGridVisualElement(badge);
             }
 
             UpdateWgs84CustomizationPanelVisibility();
