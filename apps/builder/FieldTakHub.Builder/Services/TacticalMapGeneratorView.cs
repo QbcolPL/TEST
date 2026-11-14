@@ -1843,6 +1843,8 @@ namespace FieldTakHub.Builder.Services
                 itemCard.Child = itemStack;
                 _objectsListStack.Children.Add(itemCard);
             }
+        
+            RestyleAndAlignMapObjectsTable(_objectsListStack);
         }
 
         private static StackPanel CreateSectionCard(string title)

@@ -871,41 +871,9 @@ namespace FieldTakHub.Builder.Services
 
         public static (string FullMgrs, string ShortGrid100m, string KeypadAndQuarter, string UtmText, string WgsText) FormatTacticalPointCoordinates(double lat, double lon)
         {
-            int zone = (int)Math.Floor((lon + 180.0) / 6.0) + 1;
-            UtmGrid2DProjector.LatLonToUtm(lat, lon, zone, out double easting, out double northing);
-
-            string bands = "CDEFGHJKLMNPQRSTUVWXX";
-            char latBand = bands[Math.Clamp((int)Math.Floor((lat + 80.0) / 8.0), 0, bands.Length - 1)];
-            int set = ((zone - 1) % 6) + 1;
-            string colLetters = (set % 3) switch { 1 => "ABCDEFGH", 2 => "JKLMNPQR", _ => "STUVWXYZ" };
-            string rowLetters = (set % 2 == 1) ? "ABCDEFGHJKLMNPQRSTUV" : "FGHJKLMNPQRSTUVABCDE";
-
-            int colIdx = Math.Clamp(((int)Math.Floor(easting / 100000.0)) - 1, 0, 7);
-            int rowIdx = (((int)Math.Floor(northing / 100000.0)) % 20 + 20) % 20;
-            string sq100k = $"{colLetters[colIdx]}{rowLetters[rowIdx]}";
-
-            int e5 = (((int)Math.Floor(easting)) % 100000 + 100000) % 100000;
-            int n5 = (((int)Math.Floor(northing)) % 100000 + 100000) % 100000;
-
-            int stepM = Math.Max(100, _effectiveMgrsStepMeters);
-            double remE = (easting % stepM + stepM) % stepM, remN = (northing % stepM + stepM) % stepM;
-            int kpCol = Math.Clamp((int)Math.Floor(remE / (stepM / 3.0)), 0, 2);
-            int kpRowFromBottom = Math.Clamp((int)Math.Floor(remN / (stepM / 3.0)), 0, 2);
-            int[,] kpMap = { { 1, 2, 3 }, { 4, 5, 6 }, { 7, 8, 9 } };
-            int keypadNum = kpMap[kpRowFromBottom, kpCol];
-
-            string[,] qMap = { { "A", "B" }, { "C", "D" } };
-            string quarterChar = qMap[remN >= (stepM / 2.0) ? 0 : 1, remE >= (stepM / 2.0) ? 1 : 0];
-            int e3 = (e5 / 100) % 1000, n3 = (n5 / 100) % 1000;
-
-            return (
-                $"{zone}{latBand} {sq100k} {e5:D5} {n5:D5}",
-                $"{e3:D3} / {n3:D3}",
-                $"Keypad: {keypadNum}  |  Ćwiartka: {quarterChar}  (Kratka {e3:D3}/{n3:D3})",
-                $"{zone}{latBand}  {easting:0}m E   {northing:0}m N",
-                string.Create(CultureInfo.InvariantCulture, $"{lat:0.000000}° N,  {lon:0.000000}° E")
-            );
-        }
+                var (__wgsW, __wgsH) = GetExactCanvasSize();
+                RenderCalibratedWgs84GridOnSheet(__wgsW, __wgsH);
+            }
 
         private static string GetEpsg3857BBox(int tx, int ty, int zoom)
         {
@@ -1582,18 +1550,14 @@ namespace FieldTakHub.Builder.Services
                         string mainCacheKey = $"WGS_{_mainGridColorHex}_{_mainGridOpacity:0.00}"; double mainFontSz = 9.5 * _fontScaleMultiplier;
                         for (double lon = Math.Floor(Math.Min(nwLon, seLon) / dDeg) * dDeg; lon <= Math.Max(nwLon, seLon) + dDeg; lon += dDeg)
                         {
-                            double sx = LatLonToScreen(_centerLat, lon, w, h).X; if (sx < 0 || sx > w) continue;
-                            if (useHalo) dc.DrawLine(mainHaloPen, new Point(sx, 0), new Point(sx, h));
-                            dc.DrawLine(mainPen, new Point(sx, 0), new Point(sx, h));
-                            DrawCartographicLineLabelOnContext(dc, $"{lon:0.0000}°E", sx, true, w, h, mainBrush, mainFontSz, _mainGridOpacity, mainCacheKey);
-                        }
+                var (__wgsW, __wgsH) = GetExactCanvasSize();
+                RenderCalibratedWgs84GridOnSheet(__wgsW, __wgsH);
+            }
                         for (double lat = Math.Floor(Math.Min(seLat, nwLat) / dDeg) * dDeg; lat <= Math.Max(seLat, nwLat) + dDeg; lat += dDeg)
                         {
-                            double sy = LatLonToScreen(lat, _centerLon, w, h).Y; if (sy < 0 || sy > h) continue;
-                            if (useHalo) dc.DrawLine(mainHaloPen, new Point(0, sy), new Point(w, sy));
-                            dc.DrawLine(mainPen, new Point(0, sy), new Point(w, sy));
-                            DrawCartographicLineLabelOnContext(dc, $"{lat:0.0000}°N", sy, false, w, h, mainBrush, mainFontSz, _mainGridOpacity, mainCacheKey);
-                        }
+                var (__wgsW, __wgsH) = GetExactCanvasSize();
+                RenderCalibratedWgs84GridOnSheet(__wgsW, __wgsH);
+            }
                     }
                 }
                 else

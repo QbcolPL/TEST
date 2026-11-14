@@ -5,10 +5,10 @@ cd /d "%~dp0"
 set "BAT_FILE=%~f0"
 
 echo ============================================================================
-echo [1/3] Usuwanie starej siatki WGS84 ze wszystkich warstw Canvas arkusza
-echo       oraz wdrazanie natychmiastowego auto-odswiezania (Live Redraw)...
+echo [1/3] Usuwanie starego bloku siatki WGS84 w kodzie zrodlowym C# (Screen 1)
+echo       oraz przebudowa estetyki tabeli obiektow na mapie (Screen 2)...
 echo ============================================================================
-powershell -NoProfile -ExecutionPolicy Bypass -Command "Add-Type -TypeDefinition ([System.Text.RegularExpressions.Regex]::Split([System.IO.File]::ReadAllText([System.Environment]::GetEnvironmentVariable('BAT_FILE'), [System.Text.Encoding]::UTF8), '//===' + 'FIX_WGS84_LIVE_MULTICANVAS_CS===')[1]); [FthFixWgs84LiveMultiCanvas]::Run()"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "Add-Type -TypeDefinition ([System.Text.RegularExpressions.Regex]::Split([System.IO.File]::ReadAllText([System.Environment]::GetEnvironmentVariable('BAT_FILE'), [System.Text.Encoding]::UTF8), '//===' + 'FIX_SCREEN1_AND_SCREEN2_CS===')[1]); [FthFixDuplicateWgsAndObjectTable]::Run()"
 
 if errorlevel 1 (
     echo.
@@ -19,13 +19,13 @@ if errorlevel 1 (
 
 echo.
 echo ============================================================================
-echo [SUKCES] Wielowarstwowe czyszczenie starej siatki WGS84 oraz auto-odswiezanie
-echo na zywo zostaly wyslane na GitHub (QbcolPL/TEST)!
+echo [SUKCES] Poprawki (pojedyncza siatka WGS84 + nowa tabela obiektow) zostaly
+echo wyslane na GitHub (QbcolPL/TEST)! Kompilacja na GitHub Actions uruchomiona.
 echo ============================================================================
 pause
 exit /b 0
 
-//===FIX_WGS84_LIVE_MULTICANVAS_CS===
+//===FIX_SCREEN1_AND_SCREEN2_CS===
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -34,7 +34,7 @@ using System.Linq;
 using System.Text;
 using System.Text.RegularExpressions;
 
-public static class FthFixWgs84LiveMultiCanvas
+public static class FthFixDuplicateWgsAndObjectTable
 {
     private const string RepoRemoteUrl = "https://github.com/QbcolPL/TEST.git";
     private const string RepoActionsUrl = "https://github.com/QbcolPL/TEST/actions";
@@ -57,40 +57,41 @@ public static class FthFixWgs84LiveMultiCanvas
         string tmg = File.ReadAllText(tmgPath, Encoding.UTF8);
         string eng = File.Exists(engPath) ? File.ReadAllText(engPath, Encoding.UTF8) : "";
 
-        // 1. Zaktualizuj hook w DrawDraggableCornerElements w TacticalMapGeneratorView.cs,
-        //    aby uruchamial RenderCalibratedWgs84GridOnSheet zarowno natychmiast, jak i po zakonczeniu biezacej klatki
-        string oldHook1 = "if (_coordSystem != null && _coordSystem.StartsWith(\"WGS84\", StringComparison.OrdinalIgnoreCase)) { RenderCalibratedWgs84GridOnSheet(w, h); }";
-        string oldHook2 = "UpdateWgs84CustomizationPanelVisibility(); if (_coordSystem != null && _coordSystem.IndexOf(\"WGS84\", StringComparison.OrdinalIgnoreCase) >= 0) { RenderCalibratedWgs84GridOnSheet(w, h); }";
-        string newHook = "UpdateWgs84CustomizationPanelVisibility(); if (IsWgs84ModeActive()) { RenderCalibratedWgs84GridOnSheet(w, h); ScheduleDeferredWgs84CleanAndRender(w, h); }";
+        // 1. Zastapienie starego kodu rysujacego podwojna siatke WGS84 (49,8550°N / 18,8100°E) bezposrednio w zrodle C#
+        tmg = NeutralizeLegacyWgs84GridInSource(tmg, "TacticalMapGeneratorView.cs");
+        if (!string.IsNullOrEmpty(eng))
+        {
+            eng = NeutralizeLegacyWgs84GridInSource(eng, "TacticalMapGeneratorView.Engine.cs");
+        }
 
-        if (tmg.Contains(oldHook2))
+        // 2. Podpiecie estetycznego formatowania tabeli obiektow (Screen 2) na koncu metody budujacej liste obiektow ("W legendzie:")
+        tmg = InjectObjectTableRestylerHook(tmg, "TacticalMapGeneratorView.cs");
+        if (!string.IsNullOrEmpty(eng))
         {
-            tmg = tmg.Replace(oldHook2, newHook);
+            eng = InjectObjectTableRestylerHook(eng, "TacticalMapGeneratorView.Engine.cs");
         }
-        else if (tmg.Contains(oldHook1))
-        {
-            tmg = tmg.Replace(oldHook1, newHook);
-        }
-        else if (!tmg.Contains("ScheduleDeferredWgs84CleanAndRender"))
-        {
-            string targetSig = "private static void DrawDraggableCornerElements(double w, double h)";
-            int sigIdx = tmg.IndexOf(targetSig, StringComparison.Ordinal);
-            if (sigIdx >= 0)
-            {
-                int openBrace = tmg.IndexOf('{', sigIdx);
-                if (openBrace >= 0)
-                {
-                    tmg = tmg.Substring(0, openBrace + 1) +
-                          "\r\n            " + newHook +
-                          tmg.Substring(openBrace + 1);
-                }
-            }
-        }
+
+        int openTmg = tmg.Count(c => c == '{');
+        int closeTmg = tmg.Count(c => c == '}');
+        Console.WriteLine("[WERYFIKACJA] Nawiasy w TacticalMapGeneratorView.cs: { = " + openTmg + ", } = " + closeTmg);
+        if (openTmg != closeTmg)
+            throw new Exception("Niezgodnosc nawiasow klamrowych w TacticalMapGeneratorView.cs!");
 
         File.WriteAllText(tmgPath, tmg, utf8NoBom);
 
-        string combined = tmg + "\n" + eng;
+        if (!string.IsNullOrEmpty(eng))
+        {
+            int openEng = eng.Count(c => c == '{');
+            int closeEng = eng.Count(c => c == '}');
+            Console.WriteLine("[WERYFIKACJA] Nawiasy w TacticalMapGeneratorView.Engine.cs: { = " + openEng + ", } = " + closeEng);
+            if (openEng != closeEng)
+                throw new Exception("Niezgodnosc nawiasow klamrowych w TacticalMapGeneratorView.Engine.cs!");
 
+            File.WriteAllText(engPath, eng, utf8NoBom);
+        }
+
+        // 3. Wygenerowanie zaktualizowanego pliku TacticalMapGeneratorView.Wgs84.cs
+        string combined = tmg + "\n" + eng;
         string latField = DetectLatFieldName(combined);
         string lonField = DetectLonFieldName(combined, latField);
         string gridCanvasField = DetectGridCanvasFieldName(combined);
@@ -98,16 +99,13 @@ public static class FthFixWgs84LiveMultiCanvas
         string gridColorField = DetectGridColorField(combined);
         string gridThicknessField = DetectGridThicknessField(combined);
 
-        Console.WriteLine("[INFO] Wykryte pola: Lat=" + latField + ", Lon=" + lonField +
-                          ", Canvas=" + gridCanvasField + ", MasterRedraw=" + redrawCallExpr);
-
         string batFile = Environment.GetEnvironmentVariable("BAT_FILE");
         string rawBat = File.ReadAllText(batFile, Encoding.UTF8);
 
-        string[] parts = Regex.Split(rawBat, "//===" + "PAYLOAD_WGS84_LIVE_CS===");
+        string[] parts = Regex.Split(rawBat, "//===" + "PAYLOAD_WGS84_AND_TABLE_CS===");
         if (parts.Length < 2)
-            throw new Exception("Brak bloku PAYLOAD_WGS84_LIVE_CS w pliku .bat!");
-        string[] endParts = Regex.Split(parts[1], "//===" + "END_WGS84_LIVE_CS===");
+            throw new Exception("Brak bloku PAYLOAD_WGS84_AND_TABLE_CS w pliku .bat!");
+        string[] endParts = Regex.Split(parts[1], "//===" + "END_WGS84_AND_TABLE_CS===");
         string wgsTemplate = endParts[0].Trim();
 
         wgsTemplate = wgsTemplate
@@ -125,17 +123,292 @@ public static class FthFixWgs84LiveMultiCanvas
             throw new Exception("Niezgodnosc nawiasow klamrowych w TacticalMapGeneratorView.Wgs84.cs!");
 
         File.WriteAllText(wgsPath, wgsTemplate + "\r\n", utf8NoBom);
-        Console.WriteLine("[OK] Zapisano TacticalMapGeneratorView.Wgs84.cs z wielowarstwowym czyszczeniem i Live Auto-Refresh.");
+        Console.WriteLine("[OK] Zapisano TacticalMapGeneratorView.Wgs84.cs.");
 
         string triggerPath = Path.Combine(targetDir, ".fth_build_trigger.txt");
-        File.WriteAllText(triggerPath, "Field TAK Hub WGS84 MultiCanvas Purge & Live Auto-Refresh UTC: " + DateTime.UtcNow.ToString("O") + " | RunId: " + Guid.NewGuid().ToString("N") + "\n", utf8NoBom);
+        File.WriteAllText(triggerPath, "Field TAK Hub Remove Legacy WGS84 Source & Restyle Object Table UTC: " + DateTime.UtcNow.ToString("O") + " | RunId: " + Guid.NewGuid().ToString("N") + "\n", utf8NoBom);
 
         PushAndTriggerGitHubActions(targetDir);
     }
 
+    private static string NeutralizeLegacyWgs84GridInSource(string code, string fileLabel)
+    {
+        string masked = MaskStringsAndComments(code);
+        int replacedCount = 0;
+
+        // A) Szukamy wszystkich miejsc w kodzie, gdzie formatowane sa stare etykiety WGS84 (np. :F4 lub 0.0000 obok znaku stopnia)
+        int searchStart = 0;
+        while (searchStart < code.Length)
+        {
+            Match m = Regex.Match(code.Substring(searchStart), @"(:F4|""F4""|0\.0000)[^;\r\n]{0,45}(°|\\u00B0|[""'][NSEW][""'])");
+            if (!m.Success) break;
+
+            int absPos = searchStart + m.Index;
+            searchStart = absPos + m.Length;
+
+            int targetOpen = -1;
+            int targetClose = -1;
+            int curPos = absPos;
+
+            for (int level = 0; level < 7; level++)
+            {
+                int openIdx, closeIdx;
+                if (!TryFindEnclosingBraceSpan(masked, curPos, out openIdx, out closeIdx))
+                    break;
+
+                string header = GetHeaderBeforeBrace(code, openIdx, 200);
+                string blockBody = code.Substring(openIdx, closeIdx - openIdx + 1);
+
+                if (Regex.IsMatch(header, @"\bvoid\s+[A-Za-z0-9_]+\s*\([^)]*\)\s*$"))
+                {
+                    if (!blockBody.Contains("MGRS") && !blockBody.Contains("_effectiveMgrsStepMeters"))
+                    {
+                        targetOpen = openIdx;
+                        targetClose = closeIdx;
+                    }
+                    break;
+                }
+
+                if (Regex.IsMatch(header, @"\belse\s*$") ||
+                    Regex.IsMatch(header, @"\belse\s+if\s*\([^)]*\)\s*$") ||
+                    Regex.IsMatch(header, @"\bif\s*\([^)]*(_coordSystem|WGS84)[^)]*\)\s*$"))
+                {
+                    if (!blockBody.Contains("_effectiveMgrsStepMeters"))
+                    {
+                        targetOpen = openIdx;
+                        targetClose = closeIdx;
+                        break;
+                    }
+                }
+
+                if (targetOpen == -1)
+                {
+                    targetOpen = openIdx;
+                    targetClose = closeIdx;
+                }
+
+                curPos = openIdx - 1;
+            }
+
+            if (targetOpen >= 0 && targetClose > targetOpen)
+            {
+                string replacement = "{\r\n                var (__wgsW, __wgsH) = GetExactCanvasSize();\r\n                RenderCalibratedWgs84GridOnSheet(__wgsW, __wgsH);\r\n            }";
+                code = code.Substring(0, targetOpen) + replacement + code.Substring(targetClose + 1);
+                masked = MaskStringsAndComments(code);
+                searchStart = targetOpen + replacement.Length;
+                replacedCount++;
+                Console.WriteLine("[OK] Usunieto ze zrodla stary blok rysowania siatki WGS84 w " + fileLabel + " (#" + replacedCount + ").");
+            }
+        }
+
+        // B) Dodatkowo sprawdz kazdy blok: if (_coordSystem.StartsWith("MGRS")) { ... } else { ... }
+        int mgrsSearch = 0;
+        while (mgrsSearch < code.Length)
+        {
+            Match mIf = Regex.Match(code.Substring(mgrsSearch), @"\bif\s*\(\s*_coordSystem\.(StartsWith|Contains)\(\s*""MGRS""[^)]*\)\s*\)");
+            if (!mIf.Success) break;
+
+            int ifStart = mgrsSearch + mIf.Index;
+            mgrsSearch = ifStart + mIf.Length;
+
+            int firstOpen = masked.IndexOf('{', ifStart + mIf.Length);
+            if (firstOpen < 0) continue;
+
+            if (!string.IsNullOrWhiteSpace(code.Substring(ifStart + mIf.Length, firstOpen - (ifStart + mIf.Length))))
+                continue;
+
+            int ifClose = FindMatchingCloseBrace(masked, firstOpen);
+            if (ifClose < 0) continue;
+
+            string afterIf = code.Substring(ifClose + 1, Math.Min(120, code.Length - (ifClose + 1)));
+            Match mElse = Regex.Match(afterIf, @"^\s*else(?:\s+if\s*\([^)]*\))?\s*\{");
+            if (mElse.Success)
+            {
+                int elseOpen = ifClose + 1 + mElse.Index + mElse.Length - 1;
+                int elseClose = FindMatchingCloseBrace(masked, elseOpen);
+                if (elseClose > elseOpen)
+                {
+                    string elseBody = code.Substring(elseOpen, elseClose - elseOpen + 1);
+                    if (!elseBody.Contains("RenderCalibratedWgs84GridOnSheet") &&
+                        (elseBody.Contains("Line") || elseBody.Contains("Children.Add") || elseBody.Contains("TextBlock")))
+                    {
+                        string replacement = "{\r\n                var (__wgsW, __wgsH) = GetExactCanvasSize();\r\n                RenderCalibratedWgs84GridOnSheet(__wgsW, __wgsH);\r\n            }";
+                        code = code.Substring(0, elseOpen) + replacement + code.Substring(elseClose + 1);
+                        masked = MaskStringsAndComments(code);
+                        mgrsSearch = elseOpen + replacement.Length;
+                        replacedCount++;
+                        Console.WriteLine("[OK] Zastapiono galaz 'else' po MGRS w " + fileLabel + " (#" + replacedCount + ").");
+                    }
+                }
+            }
+        }
+
+        return code;
+    }
+
+    private static string InjectObjectTableRestylerHook(string code, string fileLabel)
+    {
+        if (code.Contains("RestyleAndAlignMapObjectsTable("))
+            return code;
+
+        int legIdx = code.IndexOf("\"W legendzie:\"", StringComparison.Ordinal);
+        if (legIdx < 0)
+            legIdx = code.IndexOf("Edytuj opis tego punktu", StringComparison.Ordinal);
+        if (legIdx < 0)
+            return code;
+
+        string masked = MaskStringsAndComments(code);
+
+        int curPos = legIdx;
+        int methodOpen = -1;
+        int methodClose = -1;
+
+        for (int level = 0; level < 8; level++)
+        {
+            int oIdx, cIdx;
+            if (!TryFindEnclosingBraceSpan(masked, curPos, out oIdx, out cIdx))
+                break;
+
+            string hdr = GetHeaderBeforeBrace(code, oIdx, 220);
+            if (Regex.IsMatch(hdr, @"\bvoid\s+[A-Za-z0-9_]+\s*\([^)]*\)\s*$"))
+            {
+                methodOpen = oIdx;
+                methodClose = cIdx;
+                break;
+            }
+            curPos = oIdx - 1;
+        }
+
+        if (methodOpen >= 0 && methodClose > methodOpen)
+        {
+            string methodBody = code.Substring(methodOpen, methodClose - methodOpen + 1);
+            Match mPanel = Regex.Match(methodBody, @"(_[a-zA-Z0-9_]+)\.Children\.Clear\s*\(\s*\)");
+            if (!mPanel.Success)
+                mPanel = Regex.Match(methodBody, @"(_[a-zA-Z0-9_]*Object[a-zA-Z0-9_]*)\.Children\.Add\s*\(");
+
+            if (mPanel.Success)
+            {
+                string panelFieldName = mPanel.Groups[1].Value;
+                string hook = "\r\n            RestyleAndAlignMapObjectsTable(" + panelFieldName + ");\r\n        ";
+                code = code.Substring(0, methodClose) + hook + code.Substring(methodClose);
+                Console.WriteLine("[OK] Podpieto RestyleAndAlignMapObjectsTable(" + panelFieldName + ") w " + fileLabel + ".");
+            }
+        }
+
+        return code;
+    }
+
+    private static string MaskStringsAndComments(string code)
+    {
+        char[] chars = code.ToCharArray();
+        int n = chars.Length;
+        int i = 0;
+        while (i < n)
+        {
+            if (i + 1 < n && chars[i] == '/' && chars[i + 1] == '/')
+            {
+                while (i < n && chars[i] != '\n')
+                {
+                    if (chars[i] != '\r') chars[i] = ' ';
+                    i++;
+                }
+            }
+            else if (i + 1 < n && chars[i] == '/' && chars[i + 1] == '*')
+            {
+                chars[i] = ' '; chars[i + 1] = ' '; i += 2;
+                while (i + 1 < n && !(chars[i] == '*' && chars[i + 1] == '/'))
+                {
+                    if (chars[i] != '\n' && chars[i] != '\r') chars[i] = ' ';
+                    i++;
+                }
+                if (i + 1 < n) { chars[i] = ' '; chars[i + 1] = ' '; i += 2; }
+            }
+            else if (chars[i] == '"')
+            {
+                chars[i] = ' '; i++;
+                while (i < n && chars[i] != '"')
+                {
+                    if (chars[i] == '\\' && i + 1 < n)
+                    {
+                        chars[i] = ' '; chars[i + 1] = ' '; i += 2;
+                        continue;
+                    }
+                    if (chars[i] != '\n' && chars[i] != '\r') chars[i] = ' ';
+                    i++;
+                }
+                if (i < n) { chars[i] = ' '; i++; }
+            }
+            else if (chars[i] == '\'')
+            {
+                chars[i] = ' '; i++;
+                while (i < n && chars[i] != '\'')
+                {
+                    if (chars[i] == '\\' && i + 1 < n)
+                    {
+                        chars[i] = ' '; chars[i + 1] = ' '; i += 2;
+                        continue;
+                    }
+                    if (chars[i] != '\n' && chars[i] != '\r') chars[i] = ' ';
+                    i++;
+                }
+                if (i < n) { chars[i] = ' '; i++; }
+            }
+            else
+            {
+                i++;
+            }
+        }
+        return new string(chars);
+    }
+
+    private static bool TryFindEnclosingBraceSpan(string masked, int pos, out int openIdx, out int closeIdx)
+    {
+        openIdx = -1;
+        closeIdx = -1;
+        int depth = 0;
+        for (int i = pos; i >= 0; i--)
+        {
+            char ch = masked[i];
+            if (ch == '}') depth++;
+            else if (ch == '{')
+            {
+                if (depth == 0)
+                {
+                    openIdx = i;
+                    break;
+                }
+                depth--;
+            }
+        }
+        if (openIdx < 0) return false;
+        closeIdx = FindMatchingCloseBrace(masked, openIdx);
+        return closeIdx > openIdx;
+    }
+
+    private static int FindMatchingCloseBrace(string masked, int openIdx)
+    {
+        int depth = 0;
+        for (int i = openIdx; i < masked.Length; i++)
+        {
+            char ch = masked[i];
+            if (ch == '{') depth++;
+            else if (ch == '}')
+            {
+                depth--;
+                if (depth == 0) return i;
+            }
+        }
+        return -1;
+    }
+
+    private static string GetHeaderBeforeBrace(string code, int openBraceIdx, int maxLen)
+    {
+        int start = Math.Max(0, openBraceIdx - maxLen);
+        return code.Substring(start, openBraceIdx - start).Trim();
+    }
+
     private static string DetectCallerOfDrawDraggableCornerElements(string combined)
     {
-        // Szukamy bezparametrowej metody w klasie, ktora wywoluje DrawDraggableCornerElements(...)
         int searchPos = 0;
         while (true)
         {
@@ -144,7 +417,7 @@ public static class FthFixWgs84LiveMultiCanvas
             searchPos = callIdx + 28;
 
             string before = combined.Substring(Math.Max(0, callIdx - 45), Math.Min(45, callIdx));
-            if (before.Contains("void ")) continue; // to sama deklaracja metody
+            if (before.Contains("void ")) continue;
 
             string prefix = combined.Substring(0, callIdx);
             MatchCollection sigs = Regex.Matches(prefix, @"(?:private|public|internal)\s+static\s+void\s+([a-zA-Z0-9_]+)\s*\(\s*\)");
@@ -282,7 +555,7 @@ public static class FthFixWgs84LiveMultiCanvas
         RunProcess(gitExe, "remote set-url origin " + RepoRemoteUrl, targetDir, ignoreError: false);
 
         RunProcess(gitExe, "add -A", targetDir, ignoreError: false);
-        RunProcess(gitExe, "commit -m \"Purge legacy WGS84 grid across all sheet Canvas layers and enable instant live auto-refresh\" --allow-empty", targetDir, ignoreError: false);
+        RunProcess(gitExe, "commit -m \"Replace legacy WGS84 grid in C# source (Screen 1) and restyle Map Objects Table UI (Screen 2)\" --allow-empty", targetDir, ignoreError: false);
 
         int pushExitCode = RunProcess(gitExe, "push -u origin main --force", targetDir, ignoreError: false);
         if (pushExitCode != 0)
@@ -320,9 +593,9 @@ public static class FthFixWgs84LiveMultiCanvas
         }
     }
 }
-//===FIX_WGS84_LIVE_MULTICANVAS_CS===
+//===FIX_SCREEN1_AND_SCREEN2_CS===
 
-//===PAYLOAD_WGS84_LIVE_CS===
+//===PAYLOAD_WGS84_AND_TABLE_CS===
 #pragma warning disable CS0414, CS0649, CS8600, CS8601, CS8602, CS8603, CS8604, CS8618, CS8625, CS8629
 using System;
 using System.Collections.Generic;
@@ -367,6 +640,365 @@ namespace FieldTakHub.Builder.Services
             return _coordSystem != null && _coordSystem.IndexOf("WGS84", StringComparison.OrdinalIgnoreCase) >= 0;
         }
 
+        // ====================================================================
+        // ESTETYCZNA PRZEBUDOWA TABELI OBIEKTOW NA MAPIE (SCREEN 2 FIX)
+        // ====================================================================
+        public static void RestyleAndAlignMapObjectsTable(Panel listPanel)
+        {
+            if (listPanel == null) return;
+
+            var cards = listPanel.Children.OfType<Border>().ToList();
+            foreach (var card in cards)
+            {
+                if (card.Tag is string t && t == "FTH_RESTYLED_OBJ_CARD")
+                    continue;
+
+                try
+                {
+                    RestyleSingleMapObjectCard(card);
+                    card.Tag = "FTH_RESTYLED_OBJ_CARD";
+                }
+                catch { }
+            }
+        }
+
+        private static void RestyleSingleMapObjectCard(Border card)
+        {
+            var allControls = new List<DependencyObject>();
+            CollectLogicalAndVisualChildren(card, allControls);
+
+            var checkBox = allControls.OfType<CheckBox>().FirstOrDefault();
+            var textBoxes = allControls.OfType<TextBox>().ToList();
+            if (checkBox == null || textBoxes.Count < 1)
+                return;
+
+            TextBox nameBox = textBoxes[0];
+            TextBox legendBox = textBoxes.Count > 1 ? textBoxes[1] : null;
+            Slider sizeSlider = allControls.OfType<Slider>().FirstOrDefault();
+
+            var buttons = allControls.OfType<Button>().ToList();
+            if (buttons.Count < 2)
+                return;
+
+            Button colorBtn = buttons[0];
+            Button pinBtn = buttons.Count > 1 ? buttons[1] : null;
+            Button deleteBtn = buttons[buttons.Count - 1];
+
+            Button typeBtn = null;
+            Button simplifyBtn = null;
+            if (buttons.Count >= 4)
+            {
+                for (int i = 2; i < buttons.Count - 1; i++)
+                {
+                    var b = buttons[i];
+                    string bTxt = ExtractPlainButtonText(b);
+                    if (bTxt.IndexOf("Typ", StringComparison.OrdinalIgnoreCase) >= 0 || typeBtn == null)
+                        typeBtn = b;
+                    else
+                        simplifyBtn = b;
+                }
+            }
+
+            Border symbolBadge = null;
+            foreach (var brd in allControls.OfType<Border>())
+            {
+                if (ReferenceEquals(brd, card)) continue;
+                if (IsDescendantOfAny(brd, buttons.Cast<DependencyObject>().Concat(textBoxes.Cast<DependencyObject>())))
+                    continue;
+                symbolBadge = brd;
+                break;
+            }
+
+            TextBlock counterTb = null;
+            foreach (var tb in allControls.OfType<TextBlock>())
+            {
+                if (IsDescendantOfAny(tb, buttons.Cast<DependencyObject>())) continue;
+                string txt = (tb.Text ?? "").Trim();
+                if (txt.EndsWith("x", StringComparison.OrdinalIgnoreCase) ||
+                    txt.Contains("px") ||
+                    Regex.IsMatch(txt, @"^\d+\s*x$"))
+                {
+                    counterTb = tb;
+                }
+            }
+
+            SafeDetachElement(checkBox);
+            SafeDetachElement(colorBtn);
+            if (pinBtn != null) SafeDetachElement(pinBtn);
+            if (symbolBadge != null) SafeDetachElement(symbolBadge);
+            SafeDetachElement(nameBox);
+            SafeDetachElement(deleteBtn);
+            if (legendBox != null) SafeDetachElement(legendBox);
+            if (sizeSlider != null) SafeDetachElement(sizeSlider);
+            if (typeBtn != null) SafeDetachElement(typeBtn);
+            if (simplifyBtn != null) SafeDetachElement(simplifyBtn);
+            if (counterTb != null) SafeDetachElement(counterTb);
+
+            card.Background = new SolidColorBrush(Color.FromRgb(10, 24, 30));
+            card.BorderBrush = new SolidColorBrush(Color.FromRgb(24, 62, 74));
+            card.BorderThickness = new Thickness(1);
+            card.CornerRadius = new CornerRadius(6);
+            card.Padding = new Thickness(9, 7, 9, 7);
+            card.Margin = new Thickness(0, 0, 0, 6);
+
+            var mainStack = new StackPanel();
+
+            // WIERSZ 1: [Checkbox] [Kolor 22x22] [Pinezka 26x22] [Symbol] [Nazwa *] [Usun -]
+            var row1 = new Grid { Height = 26 };
+            row1.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            row1.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            row1.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            row1.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            row1.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            row1.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+            checkBox.VerticalAlignment = VerticalAlignment.Center;
+            checkBox.Margin = new Thickness(0, 0, 6, 0);
+            Grid.SetColumn(checkBox, 0);
+            row1.Children.Add(checkBox);
+
+            colorBtn.Width = 22;
+            colorBtn.Height = 22;
+            colorBtn.VerticalAlignment = VerticalAlignment.Center;
+            colorBtn.Margin = new Thickness(0, 0, 5, 0);
+            colorBtn.BorderBrush = new SolidColorBrush(Color.FromArgb(180, 255, 255, 255));
+            colorBtn.BorderThickness = new Thickness(1);
+            colorBtn.Cursor = Cursors.Hand;
+            Grid.SetColumn(colorBtn, 1);
+            row1.Children.Add(colorBtn);
+
+            if (pinBtn != null)
+            {
+                pinBtn.Width = 26;
+                pinBtn.Height = 22;
+                pinBtn.Padding = new Thickness(0);
+                pinBtn.Margin = new Thickness(0, 0, 5, 0);
+                pinBtn.VerticalAlignment = VerticalAlignment.Center;
+                pinBtn.HorizontalContentAlignment = HorizontalAlignment.Center;
+                pinBtn.VerticalContentAlignment = VerticalAlignment.Center;
+                pinBtn.Background = new SolidColorBrush(Color.FromRgb(7, 17, 21));
+                pinBtn.BorderBrush = TacticalConfigPanel.BrushAccent;
+                pinBtn.BorderThickness = new Thickness(1);
+                pinBtn.Foreground = TacticalConfigPanel.BrushAccent;
+                pinBtn.FontSize = 11;
+                if (string.IsNullOrWhiteSpace(ExtractPlainButtonText(pinBtn)))
+                    pinBtn.Content = "📍";
+                Grid.SetColumn(pinBtn, 2);
+                row1.Children.Add(pinBtn);
+            }
+
+            if (symbolBadge != null)
+            {
+                symbolBadge.Height = 22;
+                symbolBadge.MinWidth = 32;
+                symbolBadge.VerticalAlignment = VerticalAlignment.Center;
+                symbolBadge.Margin = new Thickness(0, 0, 6, 0);
+                Grid.SetColumn(symbolBadge, 3);
+                row1.Children.Add(symbolBadge);
+            }
+
+            nameBox.Height = 24;
+            nameBox.Width = double.NaN;
+            nameBox.MinWidth = 80;
+            nameBox.HorizontalAlignment = HorizontalAlignment.Stretch;
+            nameBox.VerticalAlignment = VerticalAlignment.Center;
+            nameBox.VerticalContentAlignment = VerticalAlignment.Center;
+            nameBox.Padding = new Thickness(6, 0, 6, 0);
+            nameBox.Margin = new Thickness(0, 0, 6, 0);
+            nameBox.Background = new SolidColorBrush(Color.FromRgb(7, 17, 21));
+            nameBox.Foreground = Brushes.White;
+            nameBox.CaretBrush = TacticalConfigPanel.BrushAccent;
+            nameBox.BorderBrush = TacticalConfigPanel.BrushAccent;
+            nameBox.BorderThickness = new Thickness(1);
+            nameBox.FontSize = 11;
+            nameBox.FontWeight = FontWeights.Bold;
+            Grid.SetColumn(nameBox, 4);
+            row1.Children.Add(nameBox);
+
+            deleteBtn.Width = 24;
+            deleteBtn.Height = 22;
+            deleteBtn.Padding = new Thickness(0);
+            deleteBtn.Margin = new Thickness(0);
+            deleteBtn.VerticalAlignment = VerticalAlignment.Center;
+            deleteBtn.HorizontalContentAlignment = HorizontalAlignment.Center;
+            deleteBtn.VerticalContentAlignment = VerticalAlignment.Center;
+            deleteBtn.Cursor = Cursors.Hand;
+            Grid.SetColumn(deleteBtn, 5);
+            row1.Children.Add(deleteBtn);
+
+            mainStack.Children.Add(row1);
+
+            // WIERSZ 2: W legendzie: [ Pole opisu w legendzie * ]
+            if (legendBox != null)
+            {
+                var row2 = new Grid { Margin = new Thickness(0, 5, 0, 0), Height = 24 };
+                row2.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(68) });
+                row2.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+
+                var lblLeg = new TextBlock
+                {
+                    Text = "W legendzie:",
+                    Foreground = TacticalConfigPanel.BrushMutedText,
+                    FontSize = 9.5,
+                    VerticalAlignment = VerticalAlignment.Center
+                };
+                Grid.SetColumn(lblLeg, 0);
+                row2.Children.Add(lblLeg);
+
+                legendBox.Height = 23;
+                legendBox.Width = double.NaN;
+                legendBox.HorizontalAlignment = HorizontalAlignment.Stretch;
+                legendBox.VerticalAlignment = VerticalAlignment.Center;
+                legendBox.VerticalContentAlignment = VerticalAlignment.Center;
+                legendBox.Padding = new Thickness(6, 0, 6, 0);
+                legendBox.Margin = new Thickness(0);
+                legendBox.Background = new SolidColorBrush(Color.FromRgb(7, 17, 21));
+                legendBox.Foreground = new SolidColorBrush(Color.FromRgb(215, 228, 232));
+                legendBox.CaretBrush = TacticalConfigPanel.BrushAccent;
+                legendBox.BorderBrush = new SolidColorBrush(Color.FromRgb(22, 56, 68));
+                legendBox.BorderThickness = new Thickness(1);
+                legendBox.FontSize = 10.5;
+                legendBox.ToolTip = null;
+                Grid.SetColumn(legendBox, 1);
+                row2.Children.Add(legendBox);
+
+                mainStack.Children.Add(row2);
+            }
+
+            // WIERSZ 3: Wielkosc (Slider) LUB Narzedzia Geometrii (Typ + Uprosc + 12x)
+            if (sizeSlider != null || typeBtn != null || simplifyBtn != null || counterTb != null)
+            {
+                var row3 = new Grid { Margin = new Thickness(0, 5, 0, 0), Height = 24 };
+                row3.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(68) });
+                row3.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+                row3.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+                var lblRow3 = new TextBlock
+                {
+                    Text = sizeSlider != null ? "Wielkość:" : "Geometria:",
+                    Foreground = TacticalConfigPanel.BrushMutedText,
+                    FontSize = 9.5,
+                    VerticalAlignment = VerticalAlignment.Center
+                };
+                Grid.SetColumn(lblRow3, 0);
+                row3.Children.Add(lblRow3);
+
+                if (sizeSlider != null)
+                {
+                    sizeSlider.VerticalAlignment = VerticalAlignment.Center;
+                    sizeSlider.Margin = new Thickness(0, 0, 8, 0);
+                    Grid.SetColumn(sizeSlider, 1);
+                    row3.Children.Add(sizeSlider);
+                }
+                else
+                {
+                    var actionsBar = new StackPanel
+                    {
+                        Orientation = Orientation.Horizontal,
+                        VerticalAlignment = VerticalAlignment.Center
+                    };
+
+                    if (typeBtn != null)
+                    {
+                        typeBtn.Width = double.NaN;
+                        typeBtn.Height = 22;
+                        typeBtn.Padding = new Thickness(8, 0, 8, 0);
+                        typeBtn.Margin = new Thickness(0, 0, 6, 0);
+                        typeBtn.Background = new SolidColorBrush(Color.FromRgb(7, 17, 21));
+                        typeBtn.Foreground = TacticalConfigPanel.BrushAccent;
+                        typeBtn.BorderBrush = TacticalConfigPanel.BrushAccent;
+                        typeBtn.BorderThickness = new Thickness(1);
+                        typeBtn.FontSize = 9.5;
+                        typeBtn.FontWeight = FontWeights.SemiBold;
+                        typeBtn.Content = "🔁 Zmień typ (AO/Sektor/Trasa)";
+                        typeBtn.Cursor = Cursors.Hand;
+                        actionsBar.Children.Add(typeBtn);
+                    }
+
+                    if (simplifyBtn != null)
+                    {
+                        simplifyBtn.Width = double.NaN;
+                        simplifyBtn.Height = 22;
+                        simplifyBtn.Padding = new Thickness(8, 0, 8, 0);
+                        simplifyBtn.Margin = new Thickness(0, 0, 6, 0);
+                        simplifyBtn.Background = new SolidColorBrush(Color.FromRgb(7, 17, 21));
+                        simplifyBtn.Foreground = Brushes.White;
+                        simplifyBtn.BorderBrush = new SolidColorBrush(Color.FromRgb(28, 74, 88));
+                        simplifyBtn.BorderThickness = new Thickness(1);
+                        simplifyBtn.FontSize = 9.5;
+                        simplifyBtn.Content = "✂️ Uprość kształt";
+                        simplifyBtn.Cursor = Cursors.Hand;
+                        actionsBar.Children.Add(simplifyBtn);
+                    }
+
+                    Grid.SetColumn(actionsBar, 1);
+                    row3.Children.Add(actionsBar);
+                }
+
+                if (counterTb != null)
+                {
+                    counterTb.VerticalAlignment = VerticalAlignment.Center;
+                    counterTb.Foreground = TacticalConfigPanel.BrushAccent;
+                    counterTb.FontSize = 10;
+                    counterTb.FontWeight = FontWeights.Bold;
+                    counterTb.FontFamily = new FontFamily("Consolas");
+                    counterTb.Margin = new Thickness(4, 0, 0, 0);
+                    Grid.SetColumn(counterTb, 2);
+                    row3.Children.Add(counterTb);
+                }
+
+                mainStack.Children.Add(row3);
+            }
+
+            card.Child = mainStack;
+        }
+
+        private static void CollectLogicalAndVisualChildren(DependencyObject parent, List<DependencyObject> list)
+        {
+            if (parent == null) return;
+            if (parent is Panel pnl)
+            {
+                foreach (UIElement ch in pnl.Children)
+                {
+                    list.Add(ch);
+                    CollectLogicalAndVisualChildren(ch, list);
+                }
+            }
+            else if (parent is Decorator dec && dec.Child != null)
+            {
+                list.Add(dec.Child);
+                CollectLogicalAndVisualChildren(dec.Child, list);
+            }
+            else if (parent is ContentControl cc && cc.Content is DependencyObject dObj)
+            {
+                list.Add(dObj);
+                CollectLogicalAndVisualChildren(dObj, list);
+            }
+        }
+
+        private static bool IsDescendantOfAny(DependencyObject node, IEnumerable<DependencyObject> ancestors)
+        {
+            var set = new HashSet<DependencyObject>(ancestors);
+            DependencyObject cur = node;
+            while (cur != null)
+            {
+                if (set.Contains(cur)) return true;
+                cur = LogicalTreeHelper.GetParent(cur) ?? VisualTreeHelper.GetParent(cur);
+            }
+            return false;
+        }
+
+        private static string ExtractPlainButtonText(Button b)
+        {
+            if (b == null || b.Content == null) return "";
+            if (b.Content is string s) return s;
+            if (b.Content is TextBlock tb) return tb.Text ?? "";
+            return b.Content.ToString() ?? "";
+        }
+
+        // ====================================================================
+        // SIATKA GEOGRAFICZNA WGS84 (POJEDYNCZA, SKALOWALNA + LIVE REDRAW)
+        // ====================================================================
         private static string GetWgs84LegendSubtitleSummary()
         {
             string fmtShort = _wgs84FormatPreset.Split(' ')[0];
@@ -420,9 +1052,6 @@ namespace FieldTakHub.Builder.Services
             }));
         }
 
-        // ====================================================================
-        // NATYCHMIASTOWE AUTO-ODSWIEZANIE SIATKI WGS84 NA ZYWO (LIVE REDRAW)
-        // ====================================================================
         private static void TriggerWgs84Redraw()
         {
             try
@@ -574,9 +1203,6 @@ namespace FieldTakHub.Builder.Services
             win.ShowDialog();
         }
 
-        // ====================================================================
-        // CIEMNY TAKTYCZNY PANEL UI Z AUTO-ODSWIEZANIEM (LIVE TEXTCHANGED)
-        // ====================================================================
         private static Border BuildWgs84CustomizationPanel(bool isModalDialog)
         {
             var card = new Border
@@ -1097,21 +1723,18 @@ namespace FieldTakHub.Builder.Services
             return b;
         }
 
-        // ====================================================================
-        // SKANOWANIE WSZYSTKICH WARSTW CANVAS ARKUSZA MAPY (USUWANIE DUPLIKATOW)
-        // ====================================================================
         private static List<Canvas> GetAllMapSheetCanvases(double w, double h)
         {
             var list = new List<Canvas>();
             if (_interactiveCanvas == null) return list;
 
             DependencyObject root = _interactiveCanvas;
-            for (int up = 0; up < 3; up++)
+            for (int up = 0; up < 5; up++)
             {
                 var p = VisualTreeHelper.GetParent(root) ?? LogicalTreeHelper.GetParent(root);
                 if (p == null) break;
                 root = p;
-                if (root is Border || root is ScrollViewer || root is Viewbox)
+                if (root is ScrollViewer || root is Window)
                     break;
             }
 
@@ -1197,8 +1820,8 @@ namespace FieldTakHub.Builder.Services
 
                         if (fe is Line ln)
                         {
-                            bool spansHeight = Math.Abs(ln.X1 - ln.X2) < 2.0 && Math.Abs(ln.Y2 - ln.Y1) >= h * 0.60;
-                            bool spansWidth = Math.Abs(ln.Y1 - ln.Y2) < 2.0 && Math.Abs(ln.X2 - ln.X1) >= w * 0.60;
+                            bool spansHeight = Math.Abs(ln.X1 - ln.X2) < 2.0 && Math.Abs(ln.Y2 - ln.Y1) >= h * 0.50;
+                            bool spansWidth = Math.Abs(ln.Y1 - ln.Y2) < 2.0 && Math.Abs(ln.X2 - ln.X1) >= w * 0.50;
                             bool isCrosshair = (Math.Abs(ln.X2 - ln.X1) <= 22.0 && Math.Abs(ln.Y2 - ln.Y1) < 1.5) ||
                                                (Math.Abs(ln.Y2 - ln.Y1) <= 22.0 && Math.Abs(ln.X2 - ln.X1) < 1.5);
 
@@ -1228,9 +1851,6 @@ namespace FieldTakHub.Builder.Services
             return underlyingGridCanvas;
         }
 
-        // ====================================================================
-        // RZECZYWISTA SIATKA WGS84 (WEB MERCATOR EPSG:3857 <-> EPSG:4326)
-        // ====================================================================
         private static void RenderCalibratedWgs84GridOnSheet(double w, double h)
         {
             if (w <= 20 || h <= 20 || !IsWgs84ModeActive()) return;
@@ -1634,4 +2254,4 @@ namespace FieldTakHub.Builder.Services
         }
     }
 }
-//===END_WGS84_LIVE_CS===
+//===END_WGS84_AND_TABLE_CS===

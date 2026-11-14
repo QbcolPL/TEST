@@ -1,1 +1,1 @@
-Field TAK Hub WGS84 MultiCanvas Purge & Live Auto-Refresh UTC: 2026-11-14T06:29:11.0805204Z | RunId: 74ff82a54a4c44e397f26b3a42ac046e
+Field TAK Hub Remove Legacy WGS84 Source & Restyle Object Table UTC: 2026-11-14T21:30:51.6299556Z | RunId: 0231652ec4614d68a3d10450f1eaa187
