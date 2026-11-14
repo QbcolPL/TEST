@@ -872,9 +872,9 @@ namespace FieldTakHub.Builder.Services
 
         public static (string FullMgrs, string ShortGrid100m, string KeypadAndQuarter, string UtmText, string WgsText) FormatTacticalPointCoordinates(double lat, double lon)
         {
-                var (__wgsW, __wgsH) = GetExactCanvasSize();
-                RenderCalibratedWgs84GridOnSheet(__wgsW, __wgsH);
-            }
+            return FormatWgs84Coordinate(lat, true, 0.0001) + " " + FormatWgs84Coordinate(lon, false, 0.0001);
+            return FormatWgs84Coordinate(lat, true, 0.0001) + " " + FormatWgs84Coordinate(lon, false, 0.0001);
+        }
 
         private static string GetEpsg3857BBox(int tx, int ty, int zoom)
         {
