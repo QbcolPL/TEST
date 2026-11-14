@@ -1,1 +1,1 @@
-Field TAK Hub Fix CS1520 Engine Line 319 UTC: 2026-11-14T05:44:09.8755849Z | RunId: 0f84a59a5af0420db67f418c6e3e582c
+Field TAK Hub WGS84 Dark UI & Single Scale-Adaptive Grid UTC: 2026-11-14T06:10:27.9512830Z | RunId: 79e6c4c2b6a241c18cf6a1b5573efae3
