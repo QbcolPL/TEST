@@ -1582,15 +1582,9 @@ namespace FieldTakHub.Builder.Services
                     {
                         string mainCacheKey = $"WGS_{_mainGridColorHex}_{_mainGridOpacity:0.00}"; double mainFontSz = 9.5 * _fontScaleMultiplier;
                         for (double lon = Math.Floor(Math.Min(nwLon, seLon) / dDeg) * dDeg; lon <= Math.Max(nwLon, seLon) + dDeg; lon += dDeg)
-                        {
-                var (__wgsW, __wgsH) = GetExactCanvasSize();
-                RenderCalibratedWgs84GridOnSheet(__wgsW, __wgsH);
-            }
+                        { }
                         for (double lat = Math.Floor(Math.Min(seLat, nwLat) / dDeg) * dDeg; lat <= Math.Max(seLat, nwLat) + dDeg; lat += dDeg)
-                        {
-                var (__wgsW, __wgsH) = GetExactCanvasSize();
-                RenderCalibratedWgs84GridOnSheet(__wgsW, __wgsH);
-            }
+                        { }
                     }
                 }
                 else

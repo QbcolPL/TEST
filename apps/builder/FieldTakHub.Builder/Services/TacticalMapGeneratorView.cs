@@ -1845,7 +1845,7 @@ namespace FieldTakHub.Builder.Services
                 _objectsListStack.Children.Add(itemCard);
             }
         
-            RestyleAndAlignMapObjectsTable(_objectsListStack);
+            
         }
 
         private static StackPanel CreateSectionCard(string title)
@@ -2641,7 +2641,7 @@ namespace FieldTakHub.Builder.Services
 
         private static void DrawDraggableCornerElements(double w, double h)
         {
-            UpdateWgs84CustomizationPanelVisibility(); if (IsWgs84ModeActive()) { RenderCalibratedWgs84GridOnSheet(w, h); ScheduleDeferredWgs84CleanAndRender(w, h); }
+            UpdateWgs84CustomizationPanelVisibility(); if (IsWgs84ModeActive()) { RenderCalibratedWgs84GridOnSheet(w, h);  }
             var (wMm, _) = GetActiveSheetDimensionsMm();
             bool isCompactWrist = wMm <= 160;
 
