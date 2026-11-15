@@ -2643,6 +2643,7 @@ namespace FieldTakHub.Builder.Services
 
         private static void DrawDraggableCornerElements(double w, double h)
         {
+            RenderAllWeaponRangeSectorsOnSheet(w, h);
             UpdateWgs84CustomizationPanelVisibility(); if (IsWgs84ModeActive()) { RenderCalibratedWgs84GridOnSheet(w, h);  }
             var (wMm, _) = GetActiveSheetDimensionsMm();
             bool isCompactWrist = wMm <= 160;
@@ -2915,6 +2916,7 @@ namespace FieldTakHub.Builder.Services
                         if (_hostWindow != null) ShowLegendContentEditorDialog(_hostWindow);
                     };
                     legContainer.Children.Add(btnEditLeg);
+                    AttachRangeSectorQuickButton(legContainer);
                     AttachWgs84QuickCalibrateButtonIfActive(legContainer);
 
                     // Warstwa 3: 8 uchwytow zmiany rozmiaru (4 boki + 4 narozniki)

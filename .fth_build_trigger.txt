@@ -1,1 +1,1 @@
-Field TAK Hub Stage 1 Hide MGRS Controls on WGS84 UTC: 2026-11-15T09:04:14.3848129Z | RunId: bc5797c0a6c846ffaaf765831b78f046
+Field TAK Hub Stage 2 Weapon Range & Fire Sectors (Pizza + Elevation Advantage) UTC: 2026-11-15T09:38:38.3800133Z | RunId: b78a4d03c2254046a2a87124cd8df460

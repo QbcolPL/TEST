@@ -644,6 +644,7 @@ namespace FieldTakHub.Builder.Services
             subGridRow.Children.Add(TacticalConfigPanel.FieldBox("Opisy kratek:", TacticalConfigPanel.ComboCtrl(new[] { "MGRS + \u0106wiartki/Keypad", "Tylko g\u0142\u00F3wne linie MGRS", "Brak opis\u00F3w wewn\u0105trz" }, _gridLabelsMode, win, v => { _gridLabelsMode = v; RedrawVectorsOnly(); })));
             sec2.Children.Add(subGridRow);
             AttachWgs84ConfigPanelToParent(sec2);
+            AttachWeaponRangeSectorsPanelToParent(sec2);
 
             // PANEL DODATKOWEJ PODZIALKI SEKTOROWEJ (POZIOMO: A, B, C... | PIONOWO: 1, 2, 3...)
             var sectorBox = new Border
