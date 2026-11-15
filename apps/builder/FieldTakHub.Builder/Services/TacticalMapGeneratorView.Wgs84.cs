@@ -436,7 +436,7 @@ namespace FieldTakHub.Builder.Services
                 }
                 else
                 {
-                    __REDRAW_CALL__;
+                    RedrawVectorsOnly();
                 }
             }
             catch { }

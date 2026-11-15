@@ -1,1 +1,1 @@
-Field TAK Hub Step 2 Dark ComboBox UI, Live WGS84 Calibration & 3-Row Object Table UTC: 2026-11-15T07:54:27.4611493Z | RunId: 393c77a51c16458d9261c00ece098333
+Field TAK Hub Fix __REDRAW_CALL__ Placeholder UTC: 2026-11-15T08:13:31.8299447Z | RunId: 068b7979c56f4bafb190949960a018f3
