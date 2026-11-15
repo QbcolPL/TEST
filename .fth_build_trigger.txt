@@ -1,1 +1,1 @@
-Field TAK Hub Interactive Range Sector Drag & Rotate Gizmo UTC: 2026-11-15T09:53:00.3148729Z | RunId: 81390e022ff04712a0ec32da33931027
+Field TAK Hub Range Sectors Legend & ATAK KMZ Polygon Export UTC: 2026-11-15T10:43:28.3265348Z | RunId: 3a04b5da642c48a6a2d5d6b3db9b1783

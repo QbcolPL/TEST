@@ -121,6 +121,7 @@ namespace FieldTakHub.Builder.Services
             };
             btnAddSector.Click += (s, e) => AddNewWeaponRangeSector();
             legContainer.Children.Add(btnAddSector);
+            UpdateRangeSectorsInLegendBox(legContainer);
         }
 
         private static void AttachWeaponRangeSectorsPanelToParent(Panel parentPanel)
@@ -152,7 +153,7 @@ namespace FieldTakHub.Builder.Services
 
             _weaponRangeSectors.Add(item);
             _selectedRangeSector = item;
-            RebuildRangeSectorsListUi();
+            RebuildRangeSectorsListUi(); if (_lastLegendContainerGrid != null) UpdateRangeSectorsInLegendBox(_lastLegendContainerGrid);
             PopulateRangeSectorEditorFromSelected();
             RefreshRangeSectorsNow(forceFullRebuild: true);
         }
@@ -169,6 +170,7 @@ namespace FieldTakHub.Builder.Services
                 RenderAllWeaponRangeSectorsOnSheet(cw, ch);
             }
             UpdateBallisticSummaryBanner();
+            if (_lastLegendContainerGrid != null) UpdateRangeSectorsInLegendBox(_lastLegendContainerGrid);
             try { TacticalConfigPanel.MarkDirty(); } catch { }
         }
 
@@ -217,6 +219,22 @@ namespace FieldTakHub.Builder.Services
             Grid.SetColumn(btnAdd, 1);
             hdrGrid.Children.Add(btnAdd);
             sp.Children.Add(hdrGrid);
+            var btnExportKmz = new Button
+            {
+                Content = "📦 Eksportuj Sektory Ognia do pliku .KMZ / .KML dla ATAK",
+                Height = 24,
+                Margin = new Thickness(0, 0, 0, 6),
+                Background = new SolidColorBrush(Color.FromRgb(7, 17, 21)),
+                Foreground = new SolidColorBrush(Color.FromRgb(46, 204, 113)),
+                BorderBrush = new SolidColorBrush(Color.FromRgb(46, 204, 113)),
+                BorderThickness = new Thickness(1),
+                FontWeight = FontWeights.Bold,
+                FontSize = 9.5,
+                Cursor = Cursors.Hand,
+                ToolTip = "Zapisz wyrysowane sektory ognia jako wielokąty KML/KMZ gotowe do zaimportowania w ATAK (sektory są też automatycznie dołączane do głównego eksportu mapy .KMZ)"
+            };
+            btnExportKmz.Click += (s, e) => ExportStandaloneRangeSectorsKmzDialog();
+            sp.Children.Add(btnExportKmz);
 
             sp.Children.Add(new TextBlock
             {
@@ -254,7 +272,7 @@ namespace FieldTakHub.Builder.Services
             {
                 if (_suppressRangeSectorUiEvents || _selectedRangeSector == null) return;
                 _selectedRangeSector.Name = _rsNameBox.Text;
-                RebuildRangeSectorsListUi();
+                RebuildRangeSectorsListUi(); if (_lastLegendContainerGrid != null) UpdateRangeSectorsInLegendBox(_lastLegendContainerGrid);
                 RefreshRangeSectorsNow();
             };
             Grid.SetColumn(_rsNameBox, 0);
@@ -280,7 +298,7 @@ namespace FieldTakHub.Builder.Services
                 {
                     if (_selectedRangeSector == null) return;
                     _selectedRangeSector.ColorHex = h;
-                    RebuildRangeSectorsListUi();
+                    RebuildRangeSectorsListUi(); if (_lastLegendContainerGrid != null) UpdateRangeSectorsInLegendBox(_lastLegendContainerGrid);
                     RefreshRangeSectorsNow();
                 };
                 colorPalette.Children.Add(swBtn);
@@ -326,7 +344,7 @@ namespace FieldTakHub.Builder.Services
                         _rsBaseRadiusBox.Text = presetMeters.Value.ToString("0", CultureInfo.InvariantCulture);
                     _suppressRangeSectorUiEvents = false;
                 }
-                RebuildRangeSectorsListUi();
+                RebuildRangeSectorsListUi(); if (_lastLegendContainerGrid != null) UpdateRangeSectorsInLegendBox(_lastLegendContainerGrid);
                 RefreshRangeSectorsNow();
             });
             spPreset.Children.Add(_rsWeaponPresetCombo);
@@ -342,7 +360,7 @@ namespace FieldTakHub.Builder.Services
                 if (double.TryParse(_rsBaseRadiusBox.Text.Replace(',', '.'), NumberStyles.Float, CultureInfo.InvariantCulture, out double rVal) && rVal >= 5 && rVal <= 500)
                 {
                     _selectedRangeSector.BaseRadiusMeters = rVal;
-                    RebuildRangeSectorsListUi();
+                    RebuildRangeSectorsListUi(); if (_lastLegendContainerGrid != null) UpdateRangeSectorsInLegendBox(_lastLegendContainerGrid);
                     RefreshRangeSectorsNow();
                 }
             };
@@ -453,7 +471,7 @@ namespace FieldTakHub.Builder.Services
                 if (_rsDeltaHBox != null)
                     _rsDeltaHBox.Text = _selectedRangeSector.ElevationDeltaMeters.ToString("+0.#;-0.#;0", CultureInfo.InvariantCulture);
                 _suppressRangeSectorUiEvents = false;
-                RebuildRangeSectorsListUi();
+                RebuildRangeSectorsListUi(); if (_lastLegendContainerGrid != null) UpdateRangeSectorsInLegendBox(_lastLegendContainerGrid);
                 RefreshRangeSectorsNow();
             };
             Grid.SetColumn(_rsDeltaHSlider, 0);
@@ -469,7 +487,7 @@ namespace FieldTakHub.Builder.Services
                     _suppressRangeSectorUiEvents = true;
                     _rsDeltaHSlider.Value = Math.Clamp(_selectedRangeSector.ElevationDeltaMeters, -40.0, 40.0);
                     _suppressRangeSectorUiEvents = false;
-                    RebuildRangeSectorsListUi();
+                    RebuildRangeSectorsListUi(); if (_lastLegendContainerGrid != null) UpdateRangeSectorsInLegendBox(_lastLegendContainerGrid);
                     RefreshRangeSectorsNow();
                 }
             };
@@ -549,7 +567,7 @@ namespace FieldTakHub.Builder.Services
                     if (_rsDeltaHBox != null) _rsDeltaHBox.Text = sec.ElevationDeltaMeters.ToString("+0.#;-0.#;0", CultureInfo.InvariantCulture);
                     _suppressRangeSectorUiEvents = false;
 
-                    RebuildRangeSectorsListUi();
+                    RebuildRangeSectorsListUi(); if (_lastLegendContainerGrid != null) UpdateRangeSectorsInLegendBox(_lastLegendContainerGrid);
                     RefreshRangeSectorsNow();
                 }
             }
@@ -657,7 +675,7 @@ namespace FieldTakHub.Builder.Services
                     _weaponRangeSectors.Remove(sec);
                     if (ReferenceEquals(_selectedRangeSector, sec))
                         _selectedRangeSector = _weaponRangeSectors.FirstOrDefault();
-                    RebuildRangeSectorsListUi();
+                    RebuildRangeSectorsListUi(); if (_lastLegendContainerGrid != null) UpdateRangeSectorsInLegendBox(_lastLegendContainerGrid);
                     PopulateRangeSectorEditorFromSelected();
                     RefreshRangeSectorsNow(forceFullRebuild: true);
                 };
@@ -667,7 +685,7 @@ namespace FieldTakHub.Builder.Services
                 rowBorder.MouseLeftButtonDown += (s, e) =>
                 {
                     _selectedRangeSector = sec;
-                    RebuildRangeSectorsListUi();
+                    RebuildRangeSectorsListUi(); if (_lastLegendContainerGrid != null) UpdateRangeSectorsInLegendBox(_lastLegendContainerGrid);
                     PopulateRangeSectorEditorFromSelected();
                     RefreshRangeSectorsNow();
                 };
@@ -696,6 +714,7 @@ namespace FieldTakHub.Builder.Services
                 if (_rsDeltaHBox != null) _rsDeltaHBox.Text = s.ElevationDeltaMeters.ToString("+0.#;-0.#;0", CultureInfo.InvariantCulture);
                 if (_rsOpacitySlider != null) _rsOpacitySlider.Value = s.FillOpacity;
                 UpdateBallisticSummaryBanner();
+            if (_lastLegendContainerGrid != null) UpdateRangeSectorsInLegendBox(_lastLegendContainerGrid);
             }
             finally
             {
@@ -1231,7 +1250,7 @@ namespace FieldTakHub.Builder.Services
                 isDraggingMove = false;
                 _isInteractingWithSectorOnMap = false;
                 el.ReleaseMouseCapture();
-                RebuildRangeSectorsListUi();
+                RebuildRangeSectorsListUi(); if (_lastLegendContainerGrid != null) UpdateRangeSectorsInLegendBox(_lastLegendContainerGrid);
                 try { TacticalConfigPanel.MarkDirty(); } catch { }
                 e.Handled = true;
             };
@@ -1242,7 +1261,7 @@ namespace FieldTakHub.Builder.Services
                 isRightRotating = false;
                 _isInteractingWithSectorOnMap = false;
                 el.ReleaseMouseCapture();
-                RebuildRangeSectorsListUi();
+                RebuildRangeSectorsListUi(); if (_lastLegendContainerGrid != null) UpdateRangeSectorsInLegendBox(_lastLegendContainerGrid);
                 try { TacticalConfigPanel.MarkDirty(); } catch { }
                 e.Handled = true;
             };
@@ -1267,7 +1286,7 @@ namespace FieldTakHub.Builder.Services
                 }
 
                 PopulateRangeSectorEditorFromSelected();
-                RebuildRangeSectorsListUi();
+                RebuildRangeSectorsListUi(); if (_lastLegendContainerGrid != null) UpdateRangeSectorsInLegendBox(_lastLegendContainerGrid);
                 var (cw, ch) = GetExactCanvasSize();
                 double mpp = GetExactMetersPerPixel();
                 if (mpp <= 0.0001 || double.IsNaN(mpp) || double.IsInfinity(mpp)) mpp = 1.0;
@@ -1329,7 +1348,7 @@ namespace FieldTakHub.Builder.Services
                 isRotating = false;
                 _isInteractingWithSectorOnMap = false;
                 handleEl.ReleaseMouseCapture();
-                RebuildRangeSectorsListUi();
+                RebuildRangeSectorsListUi(); if (_lastLegendContainerGrid != null) UpdateRangeSectorsInLegendBox(_lastLegendContainerGrid);
                 try { TacticalConfigPanel.MarkDirty(); } catch { }
                 e.Handled = true;
             };
@@ -1384,7 +1403,7 @@ namespace FieldTakHub.Builder.Services
                 isSpreading = false;
                 _isInteractingWithSectorOnMap = false;
                 wingEl.ReleaseMouseCapture();
-                RebuildRangeSectorsListUi();
+                RebuildRangeSectorsListUi(); if (_lastLegendContainerGrid != null) UpdateRangeSectorsInLegendBox(_lastLegendContainerGrid);
                 try { TacticalConfigPanel.MarkDirty(); } catch { }
                 e.Handled = true;
             };
@@ -1408,6 +1427,332 @@ namespace FieldTakHub.Builder.Services
             {
                 _suppressRangeSectorUiEvents = false;
             }
+        }
+    
+        private static Grid _lastLegendContainerGrid = null;
+
+        private static void UpdateRangeSectorsInLegendBox(Grid legContainer)
+        {
+            if (legContainer == null) return;
+            _lastLegendContainerGrid = legContainer;
+
+            StackPanel legStack = null;
+            foreach (UIElement child in legContainer.Children)
+            {
+                if (child is Border legBorder && legBorder.Child is StackPanel sp)
+                {
+                    legStack = sp;
+                    break;
+                }
+            }
+            if (legStack == null) return;
+
+            var oldPanels = new List<UIElement>();
+            foreach (UIElement el in legStack.Children)
+            {
+                if (el is FrameworkElement fe && fe.Tag is string t && t == "FTH_RANGE_SECTOR_LEGEND_PANEL")
+                    oldPanels.Add(el);
+            }
+            foreach (var rem in oldPanels)
+                legStack.Children.Remove(rem);
+
+            var visibleSectors = _weaponRangeSectors.Where(s => s.IsVisible).ToList();
+            if (visibleSectors.Count == 0) return;
+
+            var wrap = new WrapPanel
+            {
+                Orientation = Orientation.Horizontal,
+                Margin = new Thickness(0, 4, 0, 2),
+                Tag = "FTH_RANGE_SECTOR_LEGEND_PANEL"
+            };
+
+            foreach (var sec in visibleSectors)
+            {
+                Color mainColor = Colors.Cyan;
+                try { mainColor = (Color)ColorConverter.ConvertFromString(sec.ColorHex); } catch { }
+                Brush strokeBrush = new SolidColorBrush(mainColor);
+                Brush fillBrush = new SolidColorBrush(Color.FromArgb(145, mainColor.R, mainColor.G, mainColor.B));
+
+                var itemPanel = new StackPanel
+                {
+                    Orientation = Orientation.Horizontal,
+                    Margin = new Thickness(0, 2, 14, 2),
+                    VerticalAlignment = VerticalAlignment.Center
+                };
+
+                var iconCanvas = new Canvas
+                {
+                    Width = 16,
+                    Height = 16,
+                    Margin = new Thickness(0, 0, 5, 0),
+                    VerticalAlignment = VerticalAlignment.Center
+                };
+
+                var sliceIcon = new Path
+                {
+                    Fill = fillBrush,
+                    Stroke = strokeBrush,
+                    StrokeThickness = 1.2,
+                    Data = BuildSectorOrCircleGeometry(8.0, 8.0, 7.0, sec.AzimuthDeg, sec.SpreadAngleDeg, isClosedSlice: true)
+                };
+                iconCanvas.Children.Add(sliceIcon);
+                itemPanel.Children.Add(iconCanvas);
+
+                double effR = sec.GetEffectiveRadiusMeters();
+                string rangeInfo = Math.Abs(sec.ElevationDeltaMeters) >= 0.5
+                    ? $"{sec.BaseRadiusMeters:0}m ➔ {effR:0}m (ΔH:{sec.ElevationDeltaMeters:+0.#;-0.#}m)"
+                    : $"{sec.BaseRadiusMeters:0}m";
+                string shapeInfo = sec.SpreadAngleDeg >= 359.5
+                    ? "Okrąg 360°"
+                    : $"Sektor {sec.SpreadAngleDeg:0}° (Az:{sec.AzimuthDeg:0}°)";
+
+                var lbl = new TextBlock
+                {
+                    Text = $"{sec.Name}: {rangeInfo} [{shapeInfo}]",
+                    Foreground = Brushes.White,
+                    FontSize = 9.0,
+                    FontWeight = FontWeights.SemiBold,
+                    VerticalAlignment = VerticalAlignment.Center
+                };
+                itemPanel.Children.Add(lbl);
+                wrap.Children.Add(itemPanel);
+            }
+
+            legStack.Children.Add(wrap);
+        }
+
+        // ====================================================================
+        // EKSPORT SEKTOROW OGNIA ("PIZZA" + dH) DO .KMZ / .KML DLA ATAK
+        // ====================================================================
+        public static string InjectRangeSectorsIntoKmlDocument(string kmlContent)
+        {
+            if (string.IsNullOrEmpty(kmlContent)) return kmlContent;
+            if (kmlContent.Contains("<name>Sektory Ognia i Zasięg Replik</name>"))
+                return kmlContent;
+
+            string fragment = BuildWeaponRangeSectorsKmlFragment();
+            if (string.IsNullOrEmpty(fragment))
+                return kmlContent;
+
+            int docCloseIdx = kmlContent.LastIndexOf("</Document>", StringComparison.OrdinalIgnoreCase);
+            if (docCloseIdx >= 0)
+            {
+                return kmlContent.Substring(0, docCloseIdx) + fragment + kmlContent.Substring(docCloseIdx);
+            }
+            return kmlContent;
+        }
+
+        public static string BuildWeaponRangeSectorsKmlFragment()
+        {
+            var visibleSectors = _weaponRangeSectors.Where(s => s.IsVisible).ToList();
+            if (visibleSectors.Count == 0) return string.Empty;
+
+            double centerLat = _centerLat;
+            double centerLon = _centerLon;
+            double latRad = centerLat * Math.PI / 180.0;
+            double mPerDegLat = 111132.92 - 559.82 * Math.Cos(2.0 * latRad) + 1.175 * Math.Cos(4.0 * latRad);
+            double mPerDegLon = Math.Max(1000.0, 111412.84 * Math.Cos(latRad) - 93.5 * Math.Cos(3.0 * latRad));
+
+            var sb = new System.Text.StringBuilder();
+            sb.AppendLine("    <Folder>");
+            sb.AppendLine("      <name>Sektory Ognia i Zasięg Replik</name>");
+
+            foreach (var sec in visibleSectors)
+            {
+                Color c = Colors.Cyan;
+                try { c = (Color)ColorConverter.ConvertFromString(sec.ColorHex); } catch { }
+
+                byte fillAlpha = (byte)Math.Clamp((int)Math.Round(sec.FillOpacity * 255.0), 30, 210);
+                // Format KML to aabbggrr (Alpha, Blue, Green, Red)
+                string kmlLineColor = string.Format(CultureInfo.InvariantCulture, "ff{0:x2}{1:x2}{2:x2}", c.B, c.G, c.R);
+                string kmlFillColor = string.Format(CultureInfo.InvariantCulture, "{0:x2}{1:x2}{2:x2}{3:x2}", fillAlpha, c.B, c.G, c.R);
+                string styleId = "fth_sector_" + sec.Id;
+                string baseArcStyleId = "fth_sector_base_" + sec.Id;
+
+                sb.AppendLine($"      <Style id=\"{styleId}\">");
+                sb.AppendLine("        <LineStyle>");
+                sb.AppendLine($"          <color>{kmlLineColor}</color>");
+                sb.AppendLine("          <width>2.5</width>");
+                sb.AppendLine("        </LineStyle>");
+                sb.AppendLine("        <PolyStyle>");
+                sb.AppendLine($"          <color>{kmlFillColor}</color>");
+                sb.AppendLine("          <fill>1</fill>");
+                sb.AppendLine("          <outline>1</outline>");
+                sb.AppendLine("        </PolyStyle>");
+                sb.AppendLine("      </Style>");
+
+                double shooterLat = centerLat + (sec.OffsetNorthMeters / mPerDegLat);
+                double shooterLon = centerLon + (sec.OffsetEastMeters / mPerDegLon);
+                double effR = sec.GetEffectiveRadiusMeters();
+                bool isFullCircle = sec.SpreadAngleDeg >= 359.5;
+
+                // 1. Wielokat (Polygon) zasiegu efektywnego (pelne kolo lub wycinek "Kawalek Pizzy")
+                var coordsSb = new System.Text.StringBuilder();
+                if (isFullCircle)
+                {
+                    int steps = 64;
+                    for (int i = 0; i <= steps; i++)
+                    {
+                        double angRad = (i * 360.0 / steps) * Math.PI / 180.0;
+                        double pEastM = sec.OffsetEastMeters + effR * Math.Sin(angRad);
+                        double pNorthM = sec.OffsetNorthMeters + effR * Math.Cos(angRad);
+                        double pLon = centerLon + (pEastM / mPerDegLon);
+                        double pLat = centerLat + (pNorthM / mPerDegLat);
+                        coordsSb.AppendFormat(CultureInfo.InvariantCulture, "{0:F6},{1:F6},0 ", pLon, pLat);
+                    }
+                }
+                else
+                {
+                    coordsSb.AppendFormat(CultureInfo.InvariantCulture, "{0:F6},{1:F6},0 ", shooterLon, shooterLat);
+
+                    double halfSpread = sec.SpreadAngleDeg / 2.0;
+                    double startDeg = sec.AzimuthDeg - halfSpread;
+                    int steps = 36;
+                    for (int i = 0; i <= steps; i++)
+                    {
+                        double deg = startDeg + (sec.SpreadAngleDeg * i) / steps;
+                        double angRad = deg * Math.PI / 180.0;
+                        double pEastM = sec.OffsetEastMeters + effR * Math.Sin(angRad);
+                        double pNorthM = sec.OffsetNorthMeters + effR * Math.Cos(angRad);
+                        double pLon = centerLon + (pEastM / mPerDegLon);
+                        double pLat = centerLat + (pNorthM / mPerDegLat);
+                        coordsSb.AppendFormat(CultureInfo.InvariantCulture, "{0:F6},{1:F6},0 ", pLon, pLat);
+                    }
+
+                    coordsSb.AppendFormat(CultureInfo.InvariantCulture, "{0:F6},{1:F6},0", shooterLon, shooterLat);
+                }
+
+                string dhSuffix = Math.Abs(sec.ElevationDeltaMeters) >= 0.5
+                    ? $" -> {effR:0}m (dH:{sec.ElevationDeltaMeters:+0.#;-0.#}m)"
+                    : "";
+                string polyTitle = EscapeKmlXml($"{sec.Name} [{sec.BaseRadiusMeters:0}m{dhSuffix}]");
+                string polyDesc = EscapeKmlXml(
+                    $"Stanowisko: {sec.Name} | Klasa: {sec.WeaponPreset} | Zasięg płaski: {sec.BaseRadiusMeters:0} m | " +
+                    $"Zasięg efektywny: {effR:0.0} m | Przewaga wysokości dH: {sec.ElevationDeltaMeters:+0.#;-0.#;0} m | " +
+                    $"Azymut: {sec.AzimuthDeg:0} st. | Kąt sektora: {sec.SpreadAngleDeg:0} st.");
+
+                sb.AppendLine("      <Placemark>");
+                sb.AppendLine($"        <name>{polyTitle}</name>");
+                sb.AppendLine($"        <description>{polyDesc}</description>");
+                sb.AppendLine($"        <styleUrl>#{styleId}</styleUrl>");
+                sb.AppendLine("        <Polygon>");
+                sb.AppendLine("          <tessellate>1</tessellate>");
+                sb.AppendLine("          <altitudeMode>clampToGround</altitudeMode>");
+                sb.AppendLine("          <outerBoundaryIs>");
+                sb.AppendLine("            <LinearRing>");
+                sb.AppendLine($"              <coordinates>{coordsSb.ToString().Trim()}</coordinates>");
+                sb.AppendLine("            </LinearRing>");
+                sb.AppendLine("          </outerBoundaryIs>");
+                sb.AppendLine("        </Polygon>");
+                sb.AppendLine("      </Placemark>");
+
+                // 2. Luk zasiegu plaskiego (BaseRadiusMeters), jezeli wystepuje przewaga wysokosci (dH != 0)
+                if (Math.Abs(sec.ElevationDeltaMeters) >= 0.5)
+                {
+                    sb.AppendLine($"      <Style id=\"{baseArcStyleId}\">");
+                    sb.AppendLine("        <LineStyle>");
+                    sb.AppendLine("          <color>dcffffff</color>");
+                    sb.AppendLine("          <width>1.8</width>");
+                    sb.AppendLine("        </LineStyle>");
+                    sb.AppendLine("      </Style>");
+
+                    var baseArcSb = new System.Text.StringBuilder();
+                    double halfSpread = isFullCircle ? 180.0 : (sec.SpreadAngleDeg / 2.0);
+                    double startDeg = sec.AzimuthDeg - halfSpread;
+                    double totalSweep = isFullCircle ? 360.0 : sec.SpreadAngleDeg;
+                    int steps = 36;
+                    for (int i = 0; i <= steps; i++)
+                    {
+                        double deg = startDeg + (totalSweep * i) / steps;
+                        double angRad = deg * Math.PI / 180.0;
+                        double pEastM = sec.OffsetEastMeters + sec.BaseRadiusMeters * Math.Sin(angRad);
+                        double pNorthM = sec.OffsetNorthMeters + sec.BaseRadiusMeters * Math.Cos(angRad);
+                        double pLon = centerLon + (pEastM / mPerDegLon);
+                        double pLat = centerLat + (pNorthM / mPerDegLat);
+                        baseArcSb.AppendFormat(CultureInfo.InvariantCulture, "{0:F6},{1:F6},0 ", pLon, pLat);
+                    }
+
+                    sb.AppendLine("      <Placemark>");
+                    sb.AppendLine($"        <name>{EscapeKmlXml(sec.Name + " (Zasięg płaski " + sec.BaseRadiusMeters.ToString("0", CultureInfo.InvariantCulture) + "m)")}</name>");
+                    sb.AppendLine($"        <styleUrl>#{baseArcStyleId}</styleUrl>");
+                    sb.AppendLine("        <LineString>");
+                    sb.AppendLine("          <tessellate>1</tessellate>");
+                    sb.AppendLine($"          <coordinates>{baseArcSb.ToString().Trim()}</coordinates>");
+                    sb.AppendLine("        </LineString>");
+                    sb.AppendLine("      </Placemark>");
+                }
+
+                // 3. Punkt centralny stanowiska ogniowego dla ATAK
+                sb.AppendLine("      <Placemark>");
+                sb.AppendLine($"        <name>{EscapeKmlXml("Stanowisko: " + sec.Name)}</name>");
+                sb.AppendLine($"        <description>{polyDesc}</description>");
+                sb.AppendLine($"        <styleUrl>#{styleId}</styleUrl>");
+                sb.AppendLine("        <Point>");
+                sb.AppendLine($"          <coordinates>{shooterLon.ToString("F6", CultureInfo.InvariantCulture)},{shooterLat.ToString("F6", CultureInfo.InvariantCulture)},0</coordinates>");
+                sb.AppendLine("        </Point>");
+                sb.AppendLine("      </Placemark>");
+            }
+
+            sb.AppendLine("    </Folder>");
+            return sb.ToString();
+        }
+
+        private static void ExportStandaloneRangeSectorsKmzDialog()
+        {
+            var visibleSectors = _weaponRangeSectors.Where(s => s.IsVisible).ToList();
+            if (visibleSectors.Count == 0)
+            {
+                MessageBox.Show("Brak aktywnych sektorów ognia na mapie. Dodaj najpierw przynajmniej jeden sektor.", "Eksport KMZ dla ATAK", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
+            var dlg = new Microsoft.Win32.SaveFileDialog
+            {
+                Title = "Eksportuj Sektory Ognia do pliku .KMZ dla ATAK",
+                Filter = "Paczka mapowa ATAK KMZ (*.kmz)|*.kmz|Plik KML (*.kml)|*.kml",
+                FileName = "Sektory_Ognia_ATAK.kmz"
+            };
+
+            if (dlg.ShowDialog() != true) return;
+
+            var sb = new System.Text.StringBuilder();
+            sb.AppendLine("<?xml version=\"1.0\" encoding=\"UTF-8\"?>");
+            sb.AppendLine("<kml xmlns=\"http://www.opengis.net/kml/2.2\">");
+            sb.AppendLine("  <Document>");
+            sb.AppendLine("    <name>Sektory Ognia i Zasięg Replik (Field TAK Hub)</name>");
+            sb.Append(BuildWeaponRangeSectorsKmlFragment());
+            sb.AppendLine("  </Document>");
+            sb.AppendLine("</kml>");
+
+            string kmlText = sb.ToString();
+            byte[] kmlBytes = System.Text.Encoding.UTF8.GetBytes(kmlText);
+
+            if (dlg.FileName.EndsWith(".kml", StringComparison.OrdinalIgnoreCase))
+            {
+                System.IO.File.WriteAllText(dlg.FileName, kmlText, new System.Text.UTF8Encoding(false));
+            }
+            else
+            {
+                using (var fs = new System.IO.FileStream(dlg.FileName, System.IO.FileMode.Create, System.IO.FileAccess.Write))
+                using (var zos = new System.IO.Compression.ZipArchive(fs, System.IO.Compression.ZipArchiveMode.Create))
+                {
+                    var entry = zos.CreateEntry("doc.kml", System.IO.Compression.CompressionLevel.Optimal);
+                    using (var es = entry.Open())
+                    {
+                        es.Write(kmlBytes, 0, kmlBytes.Length);
+                    }
+                }
+            }
+        }
+
+        private static string EscapeKmlXml(string s)
+        {
+            if (string.IsNullOrEmpty(s)) return string.Empty;
+            return s.Replace("&", "&amp;")
+                    .Replace("<", "&lt;")
+                    .Replace(">", "&gt;")
+                    .Replace("\"", "&quot;")
+                    .Replace("'", "&apos;");
         }
     }
 }
