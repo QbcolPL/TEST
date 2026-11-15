@@ -46,7 +46,7 @@ namespace FieldTakHub.Builder.Services
         private static bool _isRestylingObjectsTable = false;
 
         // ====================================================================
-        // 3-WIERSZOWA TABELA OBIEKTOW NA MAPIE (SZYBKA O(N), ZERO ZAWIESZANIA)
+        // CZYSTY UKLAD TABELI OBIEKTOW NA MAPIE (3/4 WIERSZE, BEZ UTRATY KONTROLEK)
         // ====================================================================
         public static void RestyleAndAlignMapObjectsTable(Panel listPanel)
         {
@@ -57,13 +57,13 @@ namespace FieldTakHub.Builder.Services
                 var cards = listPanel.Children.OfType<Border>().ToList();
                 foreach (var card in cards)
                 {
-                    if (card.Tag is string t && t == "FTH_RESTYLED_OBJ_CARD")
+                    if (card.Tag is string t && t == "FTH_RESTYLED_OBJ_CARD_V2")
                         continue;
 
                     try
                     {
                         RestyleSingleMapObjectCard(card);
-                        card.Tag = "FTH_RESTYLED_OBJ_CARD";
+                        card.Tag = "FTH_RESTYLED_OBJ_CARD_V2";
                     }
                     catch { }
                 }
@@ -72,6 +72,73 @@ namespace FieldTakHub.Builder.Services
             {
                 _isRestylingObjectsTable = false;
             }
+        }
+
+        private static void DetachElementFromAnyParent(UIElement el)
+        {
+            if (el == null) return;
+
+            DependencyObject parent = null;
+            if (el is FrameworkElement fe && fe.Parent != null)
+                parent = fe.Parent;
+            if (parent == null)
+            {
+                try { parent = LogicalTreeHelper.GetParent(el); } catch { }
+            }
+            if (parent == null)
+            {
+                try { parent = VisualTreeHelper.GetParent(el); } catch { }
+            }
+
+            if (parent is Panel pnl)
+            {
+                pnl.Children.Remove(el);
+            }
+            else if (parent is Decorator dec && ReferenceEquals(dec.Child, el))
+            {
+                dec.Child = null;
+            }
+            else if (parent is ContentControl cc && ReferenceEquals(cc.Content, el))
+            {
+                cc.Content = null;
+            }
+
+            Grid.SetRow(el, 0);
+            Grid.SetColumn(el, 0);
+            Grid.SetRowSpan(el, 1);
+            Grid.SetColumnSpan(el, 1);
+        }
+
+        private static bool IsRedDeleteElement(DependencyObject obj)
+        {
+            if (obj is Border b)
+            {
+                if (b.Child is TextBlock tb)
+                {
+                    string t = (tb.Text ?? "").Trim();
+                    if (t == "−" || t == "-" || t == "✕" || t == "×" || t == "X")
+                        return true;
+                }
+                if (b.Background is SolidColorBrush scb)
+                {
+                    Color c = scb.Color;
+                    if (c.R > 180 && c.G < 95 && c.B < 95 && b.Child is TextBlock)
+                        return true;
+                }
+            }
+            else if (obj is Button btn)
+            {
+                string t = ExtractPlainButtonText(btn).Trim();
+                if (t == "−" || t == "-" || t == "✕" || t == "×")
+                    return true;
+                if (btn.Background is SolidColorBrush scb)
+                {
+                    Color c = scb.Color;
+                    if (c.R > 180 && c.G < 95 && c.B < 95)
+                        return true;
+                }
+            }
+            return false;
         }
 
         private static void RestyleSingleMapObjectCard(Border card)
@@ -88,60 +155,84 @@ namespace FieldTakHub.Builder.Services
             TextBox legendBox = textBoxes.Count > 1 ? textBoxes[1] : null;
             Slider sizeSlider = allControls.OfType<Slider>().FirstOrDefault();
 
-            var buttons = allControls.OfType<Button>().ToList();
-            if (buttons.Count < 2) return;
-
-            Button colorBtn = buttons[0];
-            Button pinBtn = buttons.Count > 1 ? buttons[1] : null;
-            Button deleteBtn = buttons[buttons.Count - 1];
-
-            Button typeBtn = null;
-            Button simplifyBtn = null;
-            if (buttons.Count >= 4)
+            // 1. Znajdz czerwony przycisk usuwania [-] (zarowno gdy jest Borderem, jak i gdy jest Buttonem)
+            FrameworkElement deleteElement = null;
+            foreach (var d in allControls)
             {
-                for (int i = 2; i < buttons.Count - 1; i++)
+                if (ReferenceEquals(d, card)) continue;
+                if (d is FrameworkElement fe && IsRedDeleteElement(fe))
                 {
-                    var b = buttons[i];
-                    string bTxt = ExtractPlainButtonText(b);
-                    if (bTxt.IndexOf("Typ", StringComparison.OrdinalIgnoreCase) >= 0 || typeBtn == null)
-                        typeBtn = b;
-                    else
-                        simplifyBtn = b;
+                    deleteElement = fe;
+                    break;
                 }
             }
 
-            var btnAndTbSet = new HashSet<DependencyObject>(buttons.Cast<DependencyObject>().Concat(textBoxes.Cast<DependencyObject>()));
+            // 2. Zbierz przyciski Button (z pominieciem deleteElement, jezeli byl Buttonem)
+            var buttons = allControls.OfType<Button>()
+                .Where(b => !ReferenceEquals(b, deleteElement))
+                .ToList();
+
+            if (buttons.Count < 1) return;
+
+            Button colorBtn = buttons[0];
+            Button pinBtn = buttons.Count > 1 ? buttons[1] : null;
+            Button typeBtn = null;
+            Button simplifyBtn = null;
+
+            for (int i = 2; i < buttons.Count; i++)
+            {
+                var b = buttons[i];
+                string bTxt = ExtractPlainButtonText(b);
+                if (bTxt.IndexOf("Typ", StringComparison.OrdinalIgnoreCase) >= 0 || typeBtn == null)
+                    typeBtn = b;
+                else if (simplifyBtn == null)
+                    simplifyBtn = b;
+            }
+
+            // 3. Znajdz plakietke symbolu [AO] / [●] (Border w wierszu naglowka, ktory nie jest karta, przyciskiem ani deleteElement)
+            var excludedRoots = new HashSet<DependencyObject>(
+                buttons.Cast<DependencyObject>()
+                .Concat(textBoxes.Cast<DependencyObject>()));
+            if (deleteElement != null) excludedRoots.Add(deleteElement);
+
             Border symbolBadge = null;
             foreach (var brd in allControls.OfType<Border>())
             {
-                if (ReferenceEquals(brd, card)) continue;
-                if (IsDescendantFast(brd, btnAndTbSet)) continue;
+                if (ReferenceEquals(brd, card) || ReferenceEquals(brd, deleteElement)) continue;
+                if (IsDescendantFast(brd, excludedRoots)) continue;
+                if (IsDescendantFast(checkBox, new HashSet<DependencyObject> { brd })) continue;
                 symbolBadge = brd;
                 break;
             }
 
-            var btnSet = new HashSet<DependencyObject>(buttons.Cast<DependencyObject>());
+            // 4. Znajdz etykiete licznika punktow / rozmiaru ("12x" lub "20 px (11x)")
+            var btnAndDelSet = new HashSet<DependencyObject>(buttons.Cast<DependencyObject>());
+            if (deleteElement != null) btnAndDelSet.Add(deleteElement);
+            if (symbolBadge != null) btnAndDelSet.Add(symbolBadge);
+
             TextBlock counterTb = null;
             foreach (var tb in allControls.OfType<TextBlock>())
             {
-                if (IsDescendantFast(tb, btnSet)) continue;
+                if (IsDescendantFast(tb, btnAndDelSet)) continue;
                 string txt = (tb.Text ?? "").Trim();
                 if (txt.EndsWith("x", StringComparison.OrdinalIgnoreCase) || txt.Contains("px") || Regex.IsMatch(txt, @"^\d+\s*x$"))
                     counterTb = tb;
             }
 
-            SafeDetachElement(checkBox);
-            SafeDetachElement(colorBtn);
-            if (pinBtn != null) SafeDetachElement(pinBtn);
-            if (symbolBadge != null) SafeDetachElement(symbolBadge);
-            SafeDetachElement(nameBox);
-            SafeDetachElement(deleteBtn);
-            if (legendBox != null) SafeDetachElement(legendBox);
-            if (sizeSlider != null) SafeDetachElement(sizeSlider);
-            if (typeBtn != null) SafeDetachElement(typeBtn);
-            if (simplifyBtn != null) SafeDetachElement(simplifyBtn);
-            if (counterTb != null) SafeDetachElement(counterTb);
+            // 5. Bezpieczne odlaczenie wszystkich wyodrebnionych kontrolek od dotychczasowych kontenerow
+            DetachElementFromAnyParent(checkBox);
+            DetachElementFromAnyParent(colorBtn);
+            if (pinBtn != null) DetachElementFromAnyParent(pinBtn);
+            if (symbolBadge != null) DetachElementFromAnyParent(symbolBadge);
+            DetachElementFromAnyParent(nameBox);
+            if (deleteElement != null) DetachElementFromAnyParent(deleteElement);
+            if (legendBox != null) DetachElementFromAnyParent(legendBox);
+            if (sizeSlider != null) DetachElementFromAnyParent(sizeSlider);
+            if (typeBtn != null) DetachElementFromAnyParent(typeBtn);
+            if (simplifyBtn != null) DetachElementFromAnyParent(simplifyBtn);
+            if (counterTb != null) DetachElementFromAnyParent(counterTb);
 
+            // Stylizacja karty zewnetrznej
             card.Background = new SolidColorBrush(Color.FromRgb(10, 24, 30));
             card.BorderBrush = new SolidColorBrush(Color.FromRgb(24, 62, 74));
             card.BorderThickness = new Thickness(1);
@@ -150,6 +241,7 @@ namespace FieldTakHub.Builder.Services
             card.Margin = new Thickness(0, 0, 0, 6);
 
             var mainStack = new StackPanel();
+            var usedElements = new HashSet<UIElement>();
 
             // WIERSZ 1: [Checkbox] [Kolor 22x22] [Pinezka 26x22] [Symbol] [Nazwa *] [Usun -]
             var row1 = new Grid { Height = 26 };
@@ -160,25 +252,40 @@ namespace FieldTakHub.Builder.Services
             row1.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
             row1.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
 
-            checkBox.VerticalAlignment = VerticalAlignment.Center;
-            checkBox.Margin = new Thickness(0, 0, 6, 0);
-            Grid.SetColumn(checkBox, 0);
-            row1.Children.Add(checkBox);
-
-            colorBtn.Width = 22;
-            colorBtn.Height = 22;
-            colorBtn.VerticalAlignment = VerticalAlignment.Center;
-            colorBtn.Margin = new Thickness(0, 0, 5, 0);
-            colorBtn.BorderBrush = new SolidColorBrush(Color.FromArgb(180, 255, 255, 255));
-            colorBtn.BorderThickness = new Thickness(1);
-            colorBtn.Cursor = Cursors.Hand;
-            Grid.SetColumn(colorBtn, 1);
-            row1.Children.Add(colorBtn);
-
-            if (pinBtn != null)
+            if (usedElements.Add(checkBox))
             {
+                checkBox.VerticalAlignment = VerticalAlignment.Center;
+                checkBox.Margin = new Thickness(0, 0, 6, 0);
+                Grid.SetColumn(checkBox, 0);
+                row1.Children.Add(checkBox);
+            }
+
+            if (usedElements.Add(colorBtn))
+            {
+                colorBtn.MinWidth = 22;
+                colorBtn.Width = 22;
+                colorBtn.MaxWidth = 22;
+                colorBtn.MinHeight = 22;
+                colorBtn.Height = 22;
+                colorBtn.MaxHeight = 22;
+                colorBtn.Padding = new Thickness(0);
+                colorBtn.VerticalAlignment = VerticalAlignment.Center;
+                colorBtn.Margin = new Thickness(0, 0, 5, 0);
+                colorBtn.BorderBrush = new SolidColorBrush(Color.FromArgb(180, 255, 255, 255));
+                colorBtn.BorderThickness = new Thickness(1);
+                colorBtn.Cursor = Cursors.Hand;
+                Grid.SetColumn(colorBtn, 1);
+                row1.Children.Add(colorBtn);
+            }
+
+            if (pinBtn != null && usedElements.Add(pinBtn))
+            {
+                pinBtn.MinWidth = 26;
                 pinBtn.Width = 26;
+                pinBtn.MaxWidth = 26;
+                pinBtn.MinHeight = 22;
                 pinBtn.Height = 22;
+                pinBtn.MaxHeight = 22;
                 pinBtn.Padding = new Thickness(0);
                 pinBtn.Margin = new Thickness(0, 0, 5, 0);
                 pinBtn.VerticalAlignment = VerticalAlignment.Center;
@@ -194,49 +301,60 @@ namespace FieldTakHub.Builder.Services
                 row1.Children.Add(pinBtn);
             }
 
-            if (symbolBadge != null)
+            if (symbolBadge != null && usedElements.Add(symbolBadge))
             {
+                symbolBadge.MinHeight = 22;
                 symbolBadge.Height = 22;
-                symbolBadge.MinWidth = 32;
+                symbolBadge.MaxHeight = 22;
+                symbolBadge.MinWidth = 30;
                 symbolBadge.VerticalAlignment = VerticalAlignment.Center;
                 symbolBadge.Margin = new Thickness(0, 0, 6, 0);
                 Grid.SetColumn(symbolBadge, 3);
                 row1.Children.Add(symbolBadge);
             }
 
-            nameBox.Height = 24;
-            nameBox.Width = double.NaN;
-            nameBox.MinWidth = 80;
-            nameBox.HorizontalAlignment = HorizontalAlignment.Stretch;
-            nameBox.VerticalAlignment = VerticalAlignment.Center;
-            nameBox.VerticalContentAlignment = VerticalAlignment.Center;
-            nameBox.Padding = new Thickness(6, 0, 6, 0);
-            nameBox.Margin = new Thickness(0, 0, 6, 0);
-            nameBox.Background = new SolidColorBrush(Color.FromRgb(7, 17, 21));
-            nameBox.Foreground = Brushes.White;
-            nameBox.CaretBrush = TacticalConfigPanel.BrushAccent;
-            nameBox.BorderBrush = TacticalConfigPanel.BrushAccent;
-            nameBox.BorderThickness = new Thickness(1);
-            nameBox.FontSize = 11;
-            nameBox.FontWeight = FontWeights.Bold;
-            Grid.SetColumn(nameBox, 4);
-            row1.Children.Add(nameBox);
+            if (usedElements.Add(nameBox))
+            {
+                nameBox.MinHeight = 24;
+                nameBox.Height = 24;
+                nameBox.MaxHeight = 24;
+                nameBox.Width = double.NaN;
+                nameBox.MinWidth = 80;
+                nameBox.HorizontalAlignment = HorizontalAlignment.Stretch;
+                nameBox.VerticalAlignment = VerticalAlignment.Center;
+                nameBox.VerticalContentAlignment = VerticalAlignment.Center;
+                nameBox.Padding = new Thickness(6, 0, 6, 0);
+                nameBox.Margin = new Thickness(0, 0, 6, 0);
+                nameBox.Background = new SolidColorBrush(Color.FromRgb(7, 17, 21));
+                nameBox.Foreground = Brushes.White;
+                nameBox.CaretBrush = TacticalConfigPanel.BrushAccent;
+                nameBox.BorderBrush = TacticalConfigPanel.BrushAccent;
+                nameBox.BorderThickness = new Thickness(1);
+                nameBox.FontSize = 11;
+                nameBox.FontWeight = FontWeights.Bold;
+                Grid.SetColumn(nameBox, 4);
+                row1.Children.Add(nameBox);
+            }
 
-            deleteBtn.Width = 24;
-            deleteBtn.Height = 22;
-            deleteBtn.Padding = new Thickness(0);
-            deleteBtn.Margin = new Thickness(0);
-            deleteBtn.VerticalAlignment = VerticalAlignment.Center;
-            deleteBtn.HorizontalContentAlignment = HorizontalAlignment.Center;
-            deleteBtn.VerticalContentAlignment = VerticalAlignment.Center;
-            deleteBtn.Cursor = Cursors.Hand;
-            Grid.SetColumn(deleteBtn, 5);
-            row1.Children.Add(deleteBtn);
+            if (deleteElement != null && usedElements.Add(deleteElement))
+            {
+                deleteElement.MinWidth = 24;
+                deleteElement.Width = 24;
+                deleteElement.MaxWidth = 24;
+                deleteElement.MinHeight = 22;
+                deleteElement.Height = 22;
+                deleteElement.MaxHeight = 22;
+                deleteElement.Margin = new Thickness(0);
+                deleteElement.VerticalAlignment = VerticalAlignment.Center;
+                deleteElement.Cursor = Cursors.Hand;
+                Grid.SetColumn(deleteElement, 5);
+                row1.Children.Add(deleteElement);
+            }
 
             mainStack.Children.Add(row1);
 
             // WIERSZ 2: W legendzie: [ Pole opisu w legendzie * ]
-            if (legendBox != null)
+            if (legendBox != null && usedElements.Add(legendBox))
             {
                 var row2 = new Grid { Margin = new Thickness(0, 5, 0, 0), Height = 24 };
                 row2.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(68) });
@@ -252,7 +370,9 @@ namespace FieldTakHub.Builder.Services
                 Grid.SetColumn(lblLeg, 0);
                 row2.Children.Add(lblLeg);
 
+                legendBox.MinHeight = 23;
                 legendBox.Height = 23;
+                legendBox.MaxHeight = 23;
                 legendBox.Width = double.NaN;
                 legendBox.HorizontalAlignment = HorizontalAlignment.Stretch;
                 legendBox.VerticalAlignment = VerticalAlignment.Center;
@@ -272,70 +392,30 @@ namespace FieldTakHub.Builder.Services
                 mainStack.Children.Add(row2);
             }
 
-            // WIERSZ 3: Wielkosc (Slider) LUB Narzedzia Geometrii (Typ + Uprosc + 12x)
-            if (sizeSlider != null || typeBtn != null || simplifyBtn != null || counterTb != null)
+            // WIERSZ 3: Wielkosc: [ Slider * ] [ 12x / 20 px (11x) ]
+            if (sizeSlider != null && usedElements.Add(sizeSlider))
             {
                 var row3 = new Grid { Margin = new Thickness(0, 5, 0, 0), Height = 24 };
                 row3.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(68) });
                 row3.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
                 row3.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
 
-                var lblRow3 = new TextBlock
+                var lblSize = new TextBlock
                 {
-                    Text = sizeSlider != null ? "Wielkość:" : "Geometria:",
+                    Text = "Wielkość:",
                     Foreground = TacticalConfigPanel.BrushMutedText,
                     FontSize = 9.5,
                     VerticalAlignment = VerticalAlignment.Center
                 };
-                Grid.SetColumn(lblRow3, 0);
-                row3.Children.Add(lblRow3);
+                Grid.SetColumn(lblSize, 0);
+                row3.Children.Add(lblSize);
 
-                if (sizeSlider != null)
-                {
-                    sizeSlider.VerticalAlignment = VerticalAlignment.Center;
-                    sizeSlider.Margin = new Thickness(0, 0, 8, 0);
-                    Grid.SetColumn(sizeSlider, 1);
-                    row3.Children.Add(sizeSlider);
-                }
-                else
-                {
-                    var actionsBar = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
-                    if (typeBtn != null)
-                    {
-                        typeBtn.Width = double.NaN;
-                        typeBtn.Height = 22;
-                        typeBtn.Padding = new Thickness(8, 0, 8, 0);
-                        typeBtn.Margin = new Thickness(0, 0, 6, 0);
-                        typeBtn.Background = new SolidColorBrush(Color.FromRgb(7, 17, 21));
-                        typeBtn.Foreground = TacticalConfigPanel.BrushAccent;
-                        typeBtn.BorderBrush = TacticalConfigPanel.BrushAccent;
-                        typeBtn.BorderThickness = new Thickness(1);
-                        typeBtn.FontSize = 9.5;
-                        typeBtn.FontWeight = FontWeights.SemiBold;
-                        typeBtn.Content = "🔁 Zmień typ (AO/Sektor/Trasa)";
-                        typeBtn.Cursor = Cursors.Hand;
-                        actionsBar.Children.Add(typeBtn);
-                    }
-                    if (simplifyBtn != null)
-                    {
-                        simplifyBtn.Width = double.NaN;
-                        simplifyBtn.Height = 22;
-                        simplifyBtn.Padding = new Thickness(8, 0, 8, 0);
-                        simplifyBtn.Margin = new Thickness(0, 0, 6, 0);
-                        simplifyBtn.Background = new SolidColorBrush(Color.FromRgb(7, 17, 21));
-                        simplifyBtn.Foreground = Brushes.White;
-                        simplifyBtn.BorderBrush = new SolidColorBrush(Color.FromRgb(28, 74, 88));
-                        simplifyBtn.BorderThickness = new Thickness(1);
-                        simplifyBtn.FontSize = 9.5;
-                        simplifyBtn.Content = "✂️ Uprość kształt";
-                        simplifyBtn.Cursor = Cursors.Hand;
-                        actionsBar.Children.Add(simplifyBtn);
-                    }
-                    Grid.SetColumn(actionsBar, 1);
-                    row3.Children.Add(actionsBar);
-                }
+                sizeSlider.VerticalAlignment = VerticalAlignment.Center;
+                sizeSlider.Margin = new Thickness(0, 0, 8, 0);
+                Grid.SetColumn(sizeSlider, 1);
+                row3.Children.Add(sizeSlider);
 
-                if (counterTb != null)
+                if (counterTb != null && usedElements.Add(counterTb))
                 {
                     counterTb.VerticalAlignment = VerticalAlignment.Center;
                     counterTb.Foreground = TacticalConfigPanel.BrushAccent;
@@ -350,12 +430,91 @@ namespace FieldTakHub.Builder.Services
                 mainStack.Children.Add(row3);
             }
 
+            // WIERSZ 4 (dla Poligonow / Tras): Geometria: [ 🔁 Zmień typ ] [ ✂️ Uprość kształt ]
+            if (typeBtn != null || simplifyBtn != null)
+            {
+                var row4 = new Grid { Margin = new Thickness(0, 5, 0, 0), Height = 24 };
+                row4.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(68) });
+                row4.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+                row4.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+                var lblGeo = new TextBlock
+                {
+                    Text = "Geometria:",
+                    Foreground = TacticalConfigPanel.BrushMutedText,
+                    FontSize = 9.5,
+                    VerticalAlignment = VerticalAlignment.Center
+                };
+                Grid.SetColumn(lblGeo, 0);
+                row4.Children.Add(lblGeo);
+
+                var actionsBar = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+
+                if (typeBtn != null && usedElements.Add(typeBtn))
+                {
+                    typeBtn.MinWidth = 0;
+                    typeBtn.Width = double.NaN;
+                    typeBtn.MaxWidth = double.PositiveInfinity;
+                    typeBtn.MinHeight = 22;
+                    typeBtn.Height = 22;
+                    typeBtn.MaxHeight = 22;
+                    typeBtn.Padding = new Thickness(8, 0, 8, 0);
+                    typeBtn.Margin = new Thickness(0, 0, 6, 0);
+                    typeBtn.Background = new SolidColorBrush(Color.FromRgb(7, 17, 21));
+                    typeBtn.Foreground = TacticalConfigPanel.BrushAccent;
+                    typeBtn.BorderBrush = TacticalConfigPanel.BrushAccent;
+                    typeBtn.BorderThickness = new Thickness(1);
+                    typeBtn.FontSize = 9.5;
+                    typeBtn.FontWeight = FontWeights.SemiBold;
+                    typeBtn.Content = "🔁 Zmień typ (AO/Sektor/Trasa)";
+                    typeBtn.Cursor = Cursors.Hand;
+                    actionsBar.Children.Add(typeBtn);
+                }
+
+                if (simplifyBtn != null && usedElements.Add(simplifyBtn))
+                {
+                    simplifyBtn.MinWidth = 0;
+                    simplifyBtn.Width = double.NaN;
+                    simplifyBtn.MaxWidth = double.PositiveInfinity;
+                    simplifyBtn.MinHeight = 22;
+                    simplifyBtn.Height = 22;
+                    simplifyBtn.MaxHeight = 22;
+                    simplifyBtn.Padding = new Thickness(8, 0, 8, 0);
+                    simplifyBtn.Margin = new Thickness(0, 0, 6, 0);
+                    simplifyBtn.Background = new SolidColorBrush(Color.FromRgb(7, 17, 21));
+                    simplifyBtn.Foreground = Brushes.White;
+                    simplifyBtn.BorderBrush = new SolidColorBrush(Color.FromRgb(28, 74, 88));
+                    simplifyBtn.BorderThickness = new Thickness(1);
+                    simplifyBtn.FontSize = 9.5;
+                    simplifyBtn.Content = "✂️ Uprość kształt";
+                    simplifyBtn.Cursor = Cursors.Hand;
+                    actionsBar.Children.Add(simplifyBtn);
+                }
+
+                Grid.SetColumn(actionsBar, 1);
+                row4.Children.Add(actionsBar);
+
+                if (counterTb != null && usedElements.Add(counterTb))
+                {
+                    counterTb.VerticalAlignment = VerticalAlignment.Center;
+                    counterTb.Foreground = TacticalConfigPanel.BrushAccent;
+                    counterTb.FontSize = 10;
+                    counterTb.FontWeight = FontWeights.Bold;
+                    counterTb.FontFamily = new FontFamily("Consolas");
+                    counterTb.Margin = new Thickness(4, 0, 0, 0);
+                    Grid.SetColumn(counterTb, 2);
+                    row4.Children.Add(counterTb);
+                }
+
+                mainStack.Children.Add(row4);
+            }
+
             card.Child = mainStack;
         }
 
         private static void CollectLogicalChildrenBounded(DependencyObject parent, List<DependencyObject> list, HashSet<DependencyObject> visited, int depth)
         {
-            if (parent == null || depth > 5 || !visited.Add(parent)) return;
+            if (parent == null || depth > 7 || !visited.Add(parent)) return;
             if (parent is Panel pnl)
             {
                 foreach (UIElement ch in pnl.Children)
@@ -371,6 +530,11 @@ namespace FieldTakHub.Builder.Services
             {
                 list.Add(dec.Child);
                 CollectLogicalChildrenBounded(dec.Child, list, visited, depth + 1);
+            }
+            else if (parent is ContentControl cc && cc.Content is DependencyObject dObj)
+            {
+                list.Add(dObj);
+                CollectLogicalChildrenBounded(dObj, list, visited, depth + 1);
             }
         }
 
