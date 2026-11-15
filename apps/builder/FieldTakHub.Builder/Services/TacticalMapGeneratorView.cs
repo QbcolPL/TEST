@@ -3145,7 +3145,7 @@ namespace FieldTakHub.Builder.Services
                 string ext = Path.GetExtension(dlg.FileName).ToLowerInvariant();
                 if (ext == ".json" || ext == ".fthproj")
                 {
-                    string txt = File.ReadAllText(dlg.FileName, Encoding.UTF8);
+                    string txt = ExtractAndImportRangeSectorsFromKml(File.ReadAllText(dlg.FileName, Encoding.UTF8));
                     if (JsonNode.Parse(txt) is JsonObject root)
                     {
                         if (root["mapState"] is JsonObject) TacticalConfigPanel.ApplyFullWorkspaceStateJson(win, root);

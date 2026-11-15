@@ -1,1 +1,1 @@
-Field TAK Hub Range Sectors Legend & ATAK KMZ Polygon Export UTC: 2026-11-15T10:43:28.3265348Z | RunId: 3a04b5da642c48a6a2d5d6b3db9b1783
+Field TAK Hub Import Weapon Range Sectors from KMZ/KML UTC: 2026-11-15T11:01:58.1427766Z | RunId: 81ddc7de8e4c4b7b99af6f96b9073d49

@@ -49,6 +49,9 @@ namespace FieldTakHub.Builder.Services
 
             public double OffsetEastMeters { get; set; } = 0.0;
             public double OffsetNorthMeters { get; set; } = 0.0;
+            public bool HasGeoAnchor { get; set; } = false;
+            public double ShooterLat { get; set; } = 0.0;
+            public double ShooterLon { get; set; } = 0.0;
 
             public TacticalRangeSectorVisuals Visuals { get; set; }
 
@@ -151,6 +154,7 @@ namespace FieldTakHub.Builder.Services
                 OffsetNorthMeters = ((idx - 1) % 2 == 0 ? 12.0 : -12.0)
             };
 
+            SyncSectorGeoAnchorFromOffsets(item);
             _weaponRangeSectors.Add(item);
             _selectedRangeSector = item;
             RebuildRangeSectorsListUi(); if (_lastLegendContainerGrid != null) UpdateRangeSectorsInLegendBox(_lastLegendContainerGrid);
@@ -219,22 +223,41 @@ namespace FieldTakHub.Builder.Services
             Grid.SetColumn(btnAdd, 1);
             hdrGrid.Children.Add(btnAdd);
             sp.Children.Add(hdrGrid);
+            var kmzActionGrid = new UniformGrid { Columns = 2, Margin = new Thickness(0, 0, 0, 6) };
+            var btnImportKmz = new Button
+            {
+                Content = "📂 Wczytaj z .KMZ / .KML",
+                Height = 24,
+                Margin = new Thickness(0, 0, 3, 0),
+                Background = new SolidColorBrush(Color.FromRgb(7, 17, 21)),
+                Foreground = TacticalConfigPanel.BrushAccent,
+                BorderBrush = TacticalConfigPanel.BrushAccent,
+                BorderThickness = new Thickness(1),
+                FontWeight = FontWeights.Bold,
+                FontSize = 9.2,
+                Cursor = Cursors.Hand,
+                ToolTip = "Wczytaj wyrysowane wcześniej sektory ognia z pliku .KMZ lub .KML (obsługiwany jest także główny przycisk importu KMZ Generatora Map)"
+            };
+            btnImportKmz.Click += (s, e) => ImportStandaloneRangeSectorsKmzDialog();
+            kmzActionGrid.Children.Add(btnImportKmz);
+
             var btnExportKmz = new Button
             {
-                Content = "📦 Eksportuj Sektory Ognia do pliku .KMZ / .KML dla ATAK",
+                Content = "📦 Eksportuj .KMZ (ATAK)",
                 Height = 24,
-                Margin = new Thickness(0, 0, 0, 6),
+                Margin = new Thickness(3, 0, 0, 0),
                 Background = new SolidColorBrush(Color.FromRgb(7, 17, 21)),
                 Foreground = new SolidColorBrush(Color.FromRgb(46, 204, 113)),
                 BorderBrush = new SolidColorBrush(Color.FromRgb(46, 204, 113)),
                 BorderThickness = new Thickness(1),
                 FontWeight = FontWeights.Bold,
-                FontSize = 9.5,
+                FontSize = 9.2,
                 Cursor = Cursors.Hand,
-                ToolTip = "Zapisz wyrysowane sektory ognia jako wielokąty KML/KMZ gotowe do zaimportowania w ATAK (sektory są też automatycznie dołączane do głównego eksportu mapy .KMZ)"
+                ToolTip = "Zapisz wyrysowane sektory ognia jako wielokąty KML/KMZ dla ATAK"
             };
             btnExportKmz.Click += (s, e) => ExportStandaloneRangeSectorsKmzDialog();
-            sp.Children.Add(btnExportKmz);
+            kmzActionGrid.Children.Add(btnExportKmz);
+            sp.Children.Add(kmzActionGrid);
 
             sp.Children.Add(new TextBlock
             {
@@ -773,6 +796,7 @@ namespace FieldTakHub.Builder.Services
                 double mpp = GetExactMetersPerPixel();
                 if (mpp <= 0.0001 || double.IsNaN(mpp) || double.IsInfinity(mpp)) mpp = 1.0;
 
+                if (!_isInteractingWithSectorOnMap) { foreach (var sec in _weaponRangeSectors) { if (sec.HasGeoAnchor) SyncSectorOffsetsFromGeoAnchor(sec); } }
                 if (_isInteractingWithSectorOnMap)
                 {
                     foreach (var sec in _weaponRangeSectors)
@@ -1214,6 +1238,7 @@ namespace FieldTakHub.Builder.Services
 
                     sec.OffsetEastMeters = startEastM + (cur.X - startMouse.X) * mpp;
                     sec.OffsetNorthMeters = startNorthM - (cur.Y - startMouse.Y) * mpp;
+                    SyncSectorGeoAnchorFromOffsets(sec);
 
                     var (cw, ch) = GetExactCanvasSize();
                     UpdateSingleSectorVisualsInPlace(sec, cw, ch, mpp);
@@ -1753,6 +1778,438 @@ namespace FieldTakHub.Builder.Services
                     .Replace(">", "&gt;")
                     .Replace("\"", "&quot;")
                     .Replace("'", "&apos;");
+        }
+    
+        // ====================================================================
+        // KOTWICZENIE GEOGRAFICZNE WGS84 (LAT/LON <-> OFFSET METERS)
+        // Zapewnia, ze wczytane z .KMZ/.KML sektory trafiaja dokladnie w swoje
+        // wspolrzedne GPS na mapie niezaleznie od przesuniecia srodka arkusza!
+        // ====================================================================
+        private static void SyncSectorGeoAnchorFromOffsets(TacticalRangeSectorItem sec)
+        {
+            if (sec == null) return;
+            double centerLat = _centerLat;
+            double centerLon = _centerLon;
+            double latRad = centerLat * Math.PI / 180.0;
+            double mPerDegLat = 111132.92 - 559.82 * Math.Cos(2.0 * latRad) + 1.175 * Math.Cos(4.0 * latRad);
+            double mPerDegLon = Math.Max(1000.0, 111412.84 * Math.Cos(latRad) - 93.5 * Math.Cos(3.0 * latRad));
+
+            sec.ShooterLat = centerLat + (sec.OffsetNorthMeters / mPerDegLat);
+            sec.ShooterLon = centerLon + (sec.OffsetEastMeters / mPerDegLon);
+            sec.HasGeoAnchor = true;
+        }
+
+        private static void SyncSectorOffsetsFromGeoAnchor(TacticalRangeSectorItem sec)
+        {
+            if (sec == null || !sec.HasGeoAnchor) return;
+            double centerLat = _centerLat;
+            double centerLon = _centerLon;
+            double latRad = centerLat * Math.PI / 180.0;
+            double mPerDegLat = 111132.92 - 559.82 * Math.Cos(2.0 * latRad) + 1.175 * Math.Cos(4.0 * latRad);
+            double mPerDegLon = Math.Max(1000.0, 111412.84 * Math.Cos(latRad) - 93.5 * Math.Cos(3.0 * latRad));
+
+            sec.OffsetNorthMeters = (sec.ShooterLat - centerLat) * mPerDegLat;
+            sec.OffsetEastMeters = (sec.ShooterLon - centerLon) * mPerDegLon;
+        }
+
+        // ====================================================================
+        // ODCZYTYWANIE WYRYSOWANYCH SEKTOROW OGNIA PRZY IMPORCIE .KMZ / .KML
+        // ====================================================================
+        public static string ExtractAndImportRangeSectorsFromKml(string kmlContent)
+        {
+            if (string.IsNullOrEmpty(kmlContent)) return kmlContent;
+
+            if (kmlContent.IndexOf("Sektory Ognia i Zasięg Replik", StringComparison.OrdinalIgnoreCase) < 0 &&
+                kmlContent.IndexOf("fth_sector_", StringComparison.OrdinalIgnoreCase) < 0 &&
+                kmlContent.IndexOf("Zasięg płaski:", StringComparison.OrdinalIgnoreCase) < 0)
+            {
+                return kmlContent;
+            }
+
+            try
+            {
+                int importedCount = ParseAndRegisterRangeSectorsFromKmlText(kmlContent, centerMapIfStandalone: false);
+                if (importedCount > 0)
+                {
+                    string cleanedKml = Regex.Replace(
+                        kmlContent,
+                        @"<Folder>\s*<name>\s*Sektory Ognia i Zasięg Replik\s*</name>[\s\S]*?</Folder>",
+                        string.Empty,
+                        RegexOptions.IgnoreCase);
+
+                    bool hasOtherPlacemarks = cleanedKml.IndexOf("<Placemark", StringComparison.OrdinalIgnoreCase) >= 0;
+                    if (!hasOtherPlacemarks)
+                    {
+                        CenterMapOnImportedSectorsIfNeeded();
+                    }
+
+                    SchedulePostImportRangeSectorRefresh();
+                    return hasOtherPlacemarks ? cleanedKml : kmlContent;
+                }
+            }
+            catch { }
+
+            return kmlContent;
+        }
+
+        private static void SchedulePostImportRangeSectorRefresh()
+        {
+            if (_interactiveCanvas == null) return;
+            _interactiveCanvas.Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Loaded, new Action(() =>
+            {
+                foreach (var sec in _weaponRangeSectors)
+                {
+                    if (sec.HasGeoAnchor)
+                        SyncSectorOffsetsFromGeoAnchor(sec);
+                }
+                RebuildRangeSectorsListUi();
+                PopulateRangeSectorEditorFromSelected();
+                RefreshRangeSectorsNow(forceFullRebuild: true);
+            }));
+        }
+
+        private static void CenterMapOnImportedSectorsIfNeeded()
+        {
+            var anchored = _weaponRangeSectors.Where(s => s.HasGeoAnchor).ToList();
+            if (anchored.Count == 0) return;
+
+            double avgLat = anchored.Average(s => s.ShooterLat);
+            double avgLon = anchored.Average(s => s.ShooterLon);
+
+            if (Math.Abs(_centerLat - avgLat) > 0.018 || Math.Abs(_centerLon - avgLon) > 0.025)
+            {
+                _centerLat = avgLat;
+                _centerLon = avgLon;
+            }
+
+            foreach (var sec in anchored)
+            {
+                SyncSectorOffsetsFromGeoAnchor(sec);
+            }
+        }
+
+        private static int ParseAndRegisterRangeSectorsFromKmlText(string kmlContent, bool centerMapIfStandalone)
+        {
+            if (string.IsNullOrEmpty(kmlContent)) return 0;
+
+            string scopeText = kmlContent;
+            Match mFolder = Regex.Match(
+                kmlContent,
+                @"<Folder>\s*<name>\s*Sektory Ognia i Zasięg Replik\s*</name>([\s\S]*?)</Folder>",
+                RegexOptions.IgnoreCase);
+            if (mFolder.Success)
+            {
+                scopeText = mFolder.Groups[1].Value;
+            }
+
+            var styleColors = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            var styleOpacities = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (Match sm in Regex.Matches(scopeText, @"<Style\s+id=""([^""]+)""\s*>([\s\S]*?)</Style>", RegexOptions.IgnoreCase))
+            {
+                string styleId = sm.Groups[1].Value.Trim();
+                string styleBody = sm.Groups[2].Value;
+
+                Match polyColorMatch = Regex.Match(styleBody, @"<PolyStyle>[\s\S]*?<color>\s*([0-9a-fA-F]{8})\s*</color>", RegexOptions.IgnoreCase);
+                if (polyColorMatch.Success)
+                {
+                    string aabbggrr = polyColorMatch.Groups[1].Value;
+                    int alphaInt = Convert.ToInt32(aabbggrr.Substring(0, 2), 16);
+                    string bb = aabbggrr.Substring(2, 2);
+                    string gg = aabbggrr.Substring(4, 2);
+                    string rr = aabbggrr.Substring(6, 2);
+
+                    styleColors[styleId] = "#" + rr.ToUpperInvariant() + gg.ToUpperInvariant() + bb.ToUpperInvariant();
+                    styleOpacities[styleId] = Math.Clamp(Math.Round(alphaInt / 255.0, 2), 0.05, 0.65);
+                }
+                else
+                {
+                    Match lineColorMatch = Regex.Match(styleBody, @"<LineStyle>[\s\S]*?<color>\s*([0-9a-fA-F]{8})\s*</color>", RegexOptions.IgnoreCase);
+                    if (lineColorMatch.Success)
+                    {
+                        string aabbggrr = lineColorMatch.Groups[1].Value;
+                        string bb = aabbggrr.Substring(2, 2);
+                        string gg = aabbggrr.Substring(4, 2);
+                        string rr = aabbggrr.Substring(6, 2);
+                        styleColors[styleId] = "#" + rr.ToUpperInvariant() + gg.ToUpperInvariant() + bb.ToUpperInvariant();
+                    }
+                }
+            }
+
+            var pointCoordsByStyle = new Dictionary<string, (double lat, double lon)>(StringComparer.OrdinalIgnoreCase);
+            var pointCoordsByName = new Dictionary<string, (double lat, double lon)>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (Match pm in Regex.Matches(scopeText, @"<Placemark>([\s\S]*?)</Placemark>", RegexOptions.IgnoreCase))
+            {
+                string pBody = pm.Groups[1].Value;
+                if (pBody.IndexOf("<Point>", StringComparison.OrdinalIgnoreCase) < 0) continue;
+
+                Match coordMatch = Regex.Match(pBody, @"<Point>[\s\S]*?<coordinates>\s*([-\d.]+)\s*,\s*([-\d.]+)", RegexOptions.IgnoreCase);
+                if (!coordMatch.Success) continue;
+
+                if (double.TryParse(coordMatch.Groups[1].Value, NumberStyles.Float, CultureInfo.InvariantCulture, out double ptLon) &&
+                    double.TryParse(coordMatch.Groups[2].Value, NumberStyles.Float, CultureInfo.InvariantCulture, out double ptLat))
+                {
+                    Match stMatch = Regex.Match(pBody, @"<styleUrl>\s*#?([^<\s]+)\s*</styleUrl>", RegexOptions.IgnoreCase);
+                    if (stMatch.Success)
+                    {
+                        pointCoordsByStyle[stMatch.Groups[1].Value.Trim()] = (ptLat, ptLon);
+                    }
+
+                    Match nmMatch = Regex.Match(pBody, @"<name>\s*Stanowisko:\s*(.*?)\s*</name>", RegexOptions.IgnoreCase);
+                    if (nmMatch.Success)
+                    {
+                        pointCoordsByName[UnescapeKmlXml(nmMatch.Groups[1].Value.Trim())] = (ptLat, ptLon);
+                    }
+                }
+            }
+
+            int addedOrUpdated = 0;
+
+            foreach (Match pm in Regex.Matches(scopeText, @"<Placemark>([\s\S]*?)</Placemark>", RegexOptions.IgnoreCase))
+            {
+                string pBody = pm.Groups[1].Value;
+                if (pBody.IndexOf("<Polygon>", StringComparison.OrdinalIgnoreCase) < 0) continue;
+
+                string desc = "";
+                Match descMatch = Regex.Match(pBody, @"<description>([\s\S]*?)</description>", RegexOptions.IgnoreCase);
+                if (descMatch.Success) desc = UnescapeKmlXml(descMatch.Groups[1].Value.Trim());
+
+                string styleId = "";
+                Match stMatch = Regex.Match(pBody, @"<styleUrl>\s*#?([^<\s]+)\s*</styleUrl>", RegexOptions.IgnoreCase);
+                if (stMatch.Success) styleId = stMatch.Groups[1].Value.Trim();
+
+                bool isRangeSector = styleId.StartsWith("fth_sector_", StringComparison.OrdinalIgnoreCase) ||
+                                     desc.IndexOf("Zasięg płaski:", StringComparison.OrdinalIgnoreCase) >= 0;
+                if (!isRangeSector) continue;
+
+                string secId = styleId.StartsWith("fth_sector_", StringComparison.OrdinalIgnoreCase)
+                    ? styleId.Substring("fth_sector_".Length)
+                    : Guid.NewGuid().ToString("N");
+
+                string rawName = "Stanowisko";
+                Match nameTagMatch = Regex.Match(pBody, @"<name>([\s\S]*?)</name>", RegexOptions.IgnoreCase);
+                if (nameTagMatch.Success)
+                {
+                    rawName = UnescapeKmlXml(nameTagMatch.Groups[1].Value.Trim());
+                    int bracketIdx = rawName.IndexOf(" [", StringComparison.Ordinal);
+                    if (bracketIdx > 0) rawName = rawName.Substring(0, bracketIdx).Trim();
+                }
+
+                string weaponPreset = "Karabinek Szturmowy (60 m)";
+                double baseRadiusM = 60.0;
+                double deltaHM = 0.0;
+                double azimuthDeg = 45.0;
+                double spreadDeg = 75.0;
+
+                if (!string.IsNullOrEmpty(desc))
+                {
+                    string[] parts = desc.Split('|');
+                    foreach (string rawPart in parts)
+                    {
+                        string part = rawPart.Trim();
+                        if (part.StartsWith("Stanowisko:", StringComparison.OrdinalIgnoreCase))
+                        {
+                            string v = part.Substring("Stanowisko:".Length).Trim();
+                            if (!string.IsNullOrEmpty(v)) rawName = v;
+                        }
+                        else if (part.StartsWith("Klasa:", StringComparison.OrdinalIgnoreCase))
+                        {
+                            string v = part.Substring("Klasa:".Length).Trim();
+                            if (!string.IsNullOrEmpty(v)) weaponPreset = v;
+                        }
+                        else if (part.StartsWith("Zasięg płaski:", StringComparison.OrdinalIgnoreCase))
+                        {
+                            Match mNum = Regex.Match(part, @"([-\d.,]+)");
+                            if (mNum.Success && double.TryParse(mNum.Groups[1].Value.Replace(',', '.'), NumberStyles.Float, CultureInfo.InvariantCulture, out double rVal))
+                                baseRadiusM = Math.Clamp(rVal, 5.0, 500.0);
+                        }
+                        else if (part.IndexOf("dH:", StringComparison.OrdinalIgnoreCase) >= 0)
+                        {
+                            int dhIdx = part.IndexOf("dH:", StringComparison.OrdinalIgnoreCase);
+                            string afterDh = part.Substring(dhIdx + 3);
+                            Match mNum = Regex.Match(afterDh, @"([+-]?\d+(?:[.,]\d+)?)");
+                            if (mNum.Success && double.TryParse(mNum.Groups[1].Value.Replace("+", "").Replace(',', '.'), NumberStyles.Float, CultureInfo.InvariantCulture, out double dhVal))
+                                deltaHM = Math.Clamp(dhVal, -150.0, 150.0);
+                        }
+                        else if (part.StartsWith("Azymut:", StringComparison.OrdinalIgnoreCase))
+                        {
+                            Match mNum = Regex.Match(part, @"([-\d.,]+)");
+                            if (mNum.Success && double.TryParse(mNum.Groups[1].Value.Replace(',', '.'), NumberStyles.Float, CultureInfo.InvariantCulture, out double azVal))
+                                azimuthDeg = ((azVal % 360.0) + 360.0) % 360.0;
+                        }
+                        else if (part.StartsWith("Kąt sektora:", StringComparison.OrdinalIgnoreCase))
+                        {
+                            Match mNum = Regex.Match(part, @"([-\d.,]+)");
+                            if (mNum.Success && double.TryParse(mNum.Groups[1].Value.Replace(',', '.'), NumberStyles.Float, CultureInfo.InvariantCulture, out double spVal))
+                                spreadDeg = Math.Clamp(spVal, 5.0, 360.0);
+                        }
+                    }
+                }
+
+                double shooterLat = _centerLat;
+                double shooterLon = _centerLon;
+                bool foundCoords = false;
+
+                if (!string.IsNullOrEmpty(styleId) && pointCoordsByStyle.TryGetValue(styleId, out var ptByStyle))
+                {
+                    shooterLat = ptByStyle.lat;
+                    shooterLon = ptByStyle.lon;
+                    foundCoords = true;
+                }
+                else if (pointCoordsByName.TryGetValue(rawName, out var ptByName))
+                {
+                    shooterLat = ptByName.lat;
+                    shooterLon = ptByName.lon;
+                    foundCoords = true;
+                }
+                else
+                {
+                    Match polyCoordsMatch = Regex.Match(pBody, @"<coordinates>([\s\S]*?)</coordinates>", RegexOptions.IgnoreCase);
+                    if (polyCoordsMatch.Success)
+                    {
+                        var coordPairs = new List<(double lon, double lat)>();
+                        foreach (Match cm in Regex.Matches(polyCoordsMatch.Groups[1].Value, @"([-\d.]+)\s*,\s*([-\d.]+)"))
+                        {
+                            if (double.TryParse(cm.Groups[1].Value, NumberStyles.Float, CultureInfo.InvariantCulture, out double cLon) &&
+                                double.TryParse(cm.Groups[2].Value, NumberStyles.Float, CultureInfo.InvariantCulture, out double cLat))
+                            {
+                                coordPairs.Add((cLon, cLat));
+                            }
+                        }
+
+                        if (coordPairs.Count > 0)
+                        {
+                            if (spreadDeg < 359.5)
+                            {
+                                shooterLon = coordPairs[0].lon;
+                                shooterLat = coordPairs[0].lat;
+                            }
+                            else
+                            {
+                                shooterLon = coordPairs.Average(p => p.lon);
+                                shooterLat = coordPairs.Average(p => p.lat);
+                            }
+                            foundCoords = true;
+                        }
+                    }
+                }
+
+                string colorHex = (!string.IsNullOrEmpty(styleId) && styleColors.TryGetValue(styleId, out string sc)) ? sc : "#1FE0C5";
+                double fillOpacity = (!string.IsNullOrEmpty(styleId) && styleOpacities.TryGetValue(styleId, out double so)) ? so : 0.24;
+
+                var existing = _weaponRangeSectors.FirstOrDefault(x => x.Id == secId);
+                if (existing == null)
+                {
+                    existing = new TacticalRangeSectorItem { Id = secId };
+                    _weaponRangeSectors.Add(existing);
+                }
+
+                existing.Name = rawName;
+                existing.WeaponPreset = weaponPreset;
+                existing.BaseRadiusMeters = baseRadiusM;
+                existing.ElevationDeltaMeters = deltaHM;
+                existing.AzimuthDeg = azimuthDeg;
+                existing.SpreadAngleDeg = spreadDeg;
+                existing.ColorHex = colorHex;
+                existing.FillOpacity = fillOpacity;
+                existing.IsVisible = true;
+
+                if (foundCoords)
+                {
+                    existing.ShooterLat = shooterLat;
+                    existing.ShooterLon = shooterLon;
+                    existing.HasGeoAnchor = true;
+                    SyncSectorOffsetsFromGeoAnchor(existing);
+                }
+
+                _selectedRangeSector = existing;
+                addedOrUpdated++;
+            }
+
+            if (addedOrUpdated > 0)
+            {
+                if (centerMapIfStandalone)
+                {
+                    CenterMapOnImportedSectorsIfNeeded();
+                }
+                RebuildRangeSectorsListUi();
+                PopulateRangeSectorEditorFromSelected();
+                RefreshRangeSectorsNow(forceFullRebuild: true);
+            }
+
+            return addedOrUpdated;
+        }
+
+        private static void ImportStandaloneRangeSectorsKmzDialog()
+        {
+            var dlg = new Microsoft.Win32.OpenFileDialog
+            {
+                Title = "Wczytaj Sektory Ognia z pliku .KMZ lub .KML",
+                Filter = "Paczki i pliki mapowe ATAK (*.kmz;*.kml)|*.kmz;*.kml|Pliki KMZ (*.kmz)|*.kmz|Pliki KML (*.kml)|*.kml"
+            };
+
+            if (dlg.ShowDialog() != true) return;
+
+            try
+            {
+                string kmlContent = ReadKmlTextFromKmzOrKmlFile(dlg.FileName);
+                int count = ParseAndRegisterRangeSectorsFromKmlText(kmlContent, centerMapIfStandalone: true);
+                if (count > 0)
+                {
+                    MessageBox.Show(
+                        $"Pomyślnie wczytano i odtworzono na mapie {count} sektor(ów) ognia wraz z parametrami zasięgu, kąta oraz przewagi wysokości ΔH.",
+                        "Import Sektorów Ognia z .KMZ / .KML",
+                        MessageBoxButton.OK,
+                        MessageBoxImage.Information);
+                }
+                else
+                {
+                    MessageBox.Show(
+                        "W wybranym pliku nie znaleziono zapisanych sektorów ognia (szukano folderu 'Sektory Ognia i Zasięg Replik').",
+                        "Import Sektorów Ognia",
+                        MessageBoxButton.OK,
+                        MessageBoxImage.Warning);
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show("Błąd podczas wczytywania pliku .KMZ / .KML:\n" + ex.Message, "Błąd importu", MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+        }
+
+        private static string ReadKmlTextFromKmzOrKmlFile(string filePath)
+        {
+            if (string.IsNullOrEmpty(filePath) || !System.IO.File.Exists(filePath))
+                return string.Empty;
+
+            if (filePath.EndsWith(".kmz", StringComparison.OrdinalIgnoreCase))
+            {
+                using (var fs = new System.IO.FileStream(filePath, System.IO.FileMode.Open, System.IO.FileAccess.Read, System.IO.FileShare.ReadWrite))
+                using (var za = new System.IO.Compression.ZipArchive(fs, System.IO.Compression.ZipArchiveMode.Read))
+                {
+                    var kmlEntry = za.Entries.FirstOrDefault(e => e.FullName.EndsWith(".kml", StringComparison.OrdinalIgnoreCase));
+                    if (kmlEntry != null)
+                    {
+                        using (var sr = new System.IO.StreamReader(kmlEntry.Open(), System.Text.Encoding.UTF8))
+                        {
+                            return sr.ReadToEnd();
+                        }
+                    }
+                }
+            }
+
+            return System.IO.File.ReadAllText(filePath, System.Text.Encoding.UTF8);
+        }
+
+        private static string UnescapeKmlXml(string s)
+        {
+            if (string.IsNullOrEmpty(s)) return string.Empty;
+            return s.Replace("&lt;", "<")
+                    .Replace("&gt;", ">")
+                    .Replace("&quot;", "\"")
+                    .Replace("&apos;", "'")
+                    .Replace("&amp;", "&");
         }
     }
 }
