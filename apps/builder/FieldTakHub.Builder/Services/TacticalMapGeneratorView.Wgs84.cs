@@ -630,9 +630,76 @@ namespace FieldTakHub.Builder.Services
             }
         }
 
+        private static readonly List<UIElement> _mgrsSpecificUiElements = new List<UIElement>();
+
+        private static void DiscoverAndToggleMgrsSpecificControls(bool hideMgrsControls)
+        {
+            if (_wgs84ConfigPanelBorder == null) return;
+
+            if (_mgrsSpecificUiElements.Count == 0)
+            {
+                DependencyObject sectionRoot = LogicalTreeHelper.GetParent(_wgs84ConfigPanelBorder)
+                                               ?? VisualTreeHelper.GetParent(_wgs84ConfigPanelBorder);
+                if (sectionRoot != null)
+                {
+                    var allNodes = new List<DependencyObject>();
+                    var visited = new HashSet<DependencyObject>();
+                    CollectLogicalChildrenBounded(sectionRoot, allNodes, visited, 0);
+
+                    foreach (var tb in allNodes.OfType<TextBlock>())
+                    {
+                        string txt = (tb.Text ?? "").Trim();
+                        if (txt.IndexOf("Podział oczek MGRS", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                            txt.IndexOf("Opisy kratek", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                            txt.IndexOf("Rozmiar oczka MGRS", StringComparison.OrdinalIgnoreCase) >= 0)
+                        {
+                            DependencyObject tbParent = LogicalTreeHelper.GetParent(tb) ?? VisualTreeHelper.GetParent(tb);
+                            if (tbParent is Panel parentPnl && !ReferenceEquals(parentPnl, sectionRoot))
+                            {
+                                if (!_mgrsSpecificUiElements.Contains(parentPnl))
+                                    _mgrsSpecificUiElements.Add(parentPnl);
+
+                                DependencyObject grandParent = LogicalTreeHelper.GetParent(parentPnl) ?? VisualTreeHelper.GetParent(parentPnl);
+                                if (grandParent is Grid parentGrid && !ReferenceEquals(grandParent, sectionRoot))
+                                {
+                                    if (!_mgrsSpecificUiElements.Contains(parentGrid))
+                                        _mgrsSpecificUiElements.Add(parentGrid);
+                                }
+                            }
+                            else if (tbParent is Panel mainPnl)
+                            {
+                                if (!_mgrsSpecificUiElements.Contains(tb))
+                                    _mgrsSpecificUiElements.Add(tb);
+
+                                int idx = mainPnl.Children.IndexOf(tb);
+                                if (idx >= 0 && idx + 1 < mainPnl.Children.Count)
+                                {
+                                    UIElement nextEl = mainPnl.Children[idx + 1];
+                                    if ((nextEl is ComboBox || nextEl is Grid || nextEl is StackPanel) &&
+                                        !ReferenceEquals(nextEl, _wgs84ConfigPanelBorder) &&
+                                        !_mgrsSpecificUiElements.Contains(nextEl))
+                                    {
+                                        _mgrsSpecificUiElements.Add(nextEl);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            Visibility targetVis = hideMgrsControls ? Visibility.Collapsed : Visibility.Visible;
+            foreach (var el in _mgrsSpecificUiElements)
+            {
+                if (el != null)
+                    el.Visibility = targetVis;
+            }
+        }
+
         public static void UpdateWgs84CustomizationPanelVisibility()
         {
             bool isWgs = IsWgs84ModeActive();
+            DiscoverAndToggleMgrsSpecificControls(isWgs);
             if (_wgs84ConfigPanelBorder != null)
             {
                 _wgs84ConfigPanelBorder.Visibility = isWgs ? Visibility.Visible : Visibility.Collapsed;
@@ -661,6 +728,7 @@ namespace FieldTakHub.Builder.Services
             _wgs84ConfigPanelBorder = panel;
             panel.Visibility = IsWgs84ModeActive() ? Visibility.Visible : Visibility.Collapsed;
             parentPanel.Children.Add(panel);
+            panel.Loaded += (s, e) => UpdateWgs84CustomizationPanelVisibility();
         }
 
         private static void AttachWgs84QuickCalibrateButtonIfActive(Grid legContainer)

@@ -1,1 +1,1 @@
-Field TAK Hub Fix Map Objects Table Cards V2 UTC: 2026-11-15T08:29:00.6342869Z | RunId: d979342fac694bf491e38b9d66859a1c
+Field TAK Hub Stage 1 Hide MGRS Controls on WGS84 UTC: 2026-11-15T09:04:14.3848129Z | RunId: bc5797c0a6c846ffaaf765831b78f046
