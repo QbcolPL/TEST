@@ -5,27 +5,27 @@ cd /d "%~dp0"
 set "BAT_FILE=%~f0"
 
 echo ============================================================================
-echo [ETAP 2/2] Wdrazanie narzedzia Zasiegu Replik i Sektorow Ognia ('Kawalek
-echo            Pizzy' 5-360 st., Drag and Drop na mapie + Przewaga Wysokosci dH)...
+echo [1/3] Wdrazanie plynnego przesuwania (LPM) i obracania myszka na mapie
+echo       (uchwyt obrotu, PPM, uchwyty boczne kata pizzy i Scroll)...
 echo ============================================================================
-powershell -NoProfile -ExecutionPolicy Bypass -Command "Add-Type -TypeDefinition ([System.Text.RegularExpressions.Regex]::Split([System.IO.File]::ReadAllText([System.Environment]::GetEnvironmentVariable('BAT_FILE'), [System.Text.Encoding]::UTF8), '//===' + 'STAGE2_WEAPON_RANGE_SECTORS_CS===')[1]); [FthStage2WeaponRangeSectors]::Run()"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "Add-Type -TypeDefinition ([System.Text.RegularExpressions.Regex]::Split([System.IO.File]::ReadAllText([System.Environment]::GetEnvironmentVariable('BAT_FILE'), [System.Text.Encoding]::UTF8), '//===' + 'FIX_INTERACTIVE_SECTOR_GIZMO_CS===')[1]); [FthFixInteractiveSectorGizmo]::Run()"
 
 if errorlevel 1 (
     echo.
-    echo [BLAD] Wystapil blad podczas wykonywania Etapu 2 lub wysylki na GitHub!
+    echo [BLAD] Wystapil blad podczas aktualizacji plikow lub wysylki na GitHub!
     pause
     exit /b 1
 )
 
 echo.
 echo ============================================================================
-echo [SUKCES - ETAP 2/2] Modul Zasiegu Replik i Sektorow Ognia (Pizza + dH)
-echo zostal wdrożony i wyslany na GitHub (QbcolPL/TEST)!
+echo [SUKCES] Plynne przesuwanie i obracanie znacznikow zasiegu myszka na mapie
+echo zostalo wyslane na GitHub (QbcolPL/TEST)!
 echo ============================================================================
 pause
 exit /b 0
 
-//===STAGE2_WEAPON_RANGE_SECTORS_CS===
+//===FIX_INTERACTIVE_SECTOR_GIZMO_CS===
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -34,7 +34,7 @@ using System.Linq;
 using System.Text;
 using System.Text.RegularExpressions;
 
-public static class FthStage2WeaponRangeSectors
+public static class FthFixInteractiveSectorGizmo
 {
     private const string RepoRemoteUrl = "https://github.com/QbcolPL/TEST.git";
     private const string RepoActionsUrl = "https://github.com/QbcolPL/TEST/actions";
@@ -50,7 +50,6 @@ public static class FthStage2WeaponRangeSectors
 
         string tmgPath = Path.Combine(servicesDir, "TacticalMapGeneratorView.cs");
         string engPath = Path.Combine(servicesDir, "TacticalMapGeneratorView.Engine.cs");
-        string wgsPath = Path.Combine(servicesDir, "TacticalMapGeneratorView.Wgs84.cs");
         string rngPath = Path.Combine(servicesDir, "TacticalMapGeneratorView.RangeSectors.cs");
 
         if (!File.Exists(tmgPath))
@@ -58,80 +57,18 @@ public static class FthStage2WeaponRangeSectors
 
         string tmg = File.ReadAllText(tmgPath, Encoding.UTF8);
         string eng = File.Exists(engPath) ? File.ReadAllText(engPath, Encoding.UTF8) : "";
-
-        // 1. Podpiecie wywolania RenderAllWeaponRangeSectorsOnSheet(w, h) w DrawDraggableCornerElements
-        if (!tmg.Contains("RenderAllWeaponRangeSectorsOnSheet(w, h)"))
-        {
-            string targetSig = "private static void DrawDraggableCornerElements(double w, double h)";
-            int sigIdx = tmg.IndexOf(targetSig, StringComparison.Ordinal);
-            if (sigIdx >= 0)
-            {
-                int openBrace = tmg.IndexOf('{', sigIdx);
-                if (openBrace >= 0)
-                {
-                    tmg = tmg.Substring(0, openBrace + 1) +
-                          "\r\n            RenderAllWeaponRangeSectorsOnSheet(w, h);" +
-                          tmg.Substring(openBrace + 1);
-                    Console.WriteLine("[OK] Podpieto RenderAllWeaponRangeSectorsOnSheet(w, h) w DrawDraggableCornerElements.");
-                }
-            }
-        }
-
-        // 2. Podpiecie panelu UI Sektorow Ognia i Zasiegu Replik w lewym panelu konfiguracji
-        if (!tmg.Contains("AttachWeaponRangeSectorsPanelToParent") && !eng.Contains("AttachWeaponRangeSectorsPanelToParent"))
-        {
-            if (tmg.Contains("AttachWgs84ConfigPanelToParent("))
-            {
-                tmg = Regex.Replace(
-                    tmg,
-                    @"AttachWgs84ConfigPanelToParent\(([a-zA-Z0-9_]+)\)\s*;",
-                    "AttachWgs84ConfigPanelToParent($1);\r\n            AttachWeaponRangeSectorsPanelToParent($1);");
-                Console.WriteLine("[OK] Podpieto panel Sektorow Ognia w TacticalMapGeneratorView.cs.");
-            }
-            else if (eng.Contains("AttachWgs84ConfigPanelToParent("))
-            {
-                eng = Regex.Replace(
-                    eng,
-                    @"AttachWgs84ConfigPanelToParent\(([a-zA-Z0-9_]+)\)\s*;",
-                    "AttachWgs84ConfigPanelToParent($1);\r\n            AttachWeaponRangeSectorsPanelToParent($1);");
-                Console.WriteLine("[OK] Podpieto panel Sektorow Ognia w TacticalMapGeneratorView.Engine.cs.");
-            }
-        }
-
-        // 3. Dodanie przycisku '🎯 + Sektor Ognia' na pasku Legendy (obok Edytuj) dla szybkiego dostepu z mapy
-        string legAnchor = "legContainer.Children.Add(btnEditLeg);";
-        if (tmg.Contains(legAnchor) && !tmg.Contains("AttachRangeSectorQuickButton"))
-        {
-            tmg = tmg.Replace(legAnchor, legAnchor + "\r\n                    AttachRangeSectorQuickButton(legContainer);");
-        }
-
-        int openTmg = tmg.Count(c => c == '{');
-        int closeTmg = tmg.Count(c => c == '}');
-        if (openTmg != closeTmg)
-            throw new Exception("Niezgodnosc nawiasow klamrowych w TacticalMapGeneratorView.cs!");
-        File.WriteAllText(tmgPath, tmg, utf8NoBom);
-
-        if (!string.IsNullOrEmpty(eng))
-        {
-            int openEng = eng.Count(c => c == '{');
-            int closeEng = eng.Count(c => c == '}');
-            if (openEng != closeEng)
-                throw new Exception("Niezgodnosc nawiasow klamrowych w TacticalMapGeneratorView.Engine.cs!");
-            File.WriteAllText(engPath, eng, utf8NoBom);
-        }
-
-        // 4. Wygenerowanie pliku TacticalMapGeneratorView.RangeSectors.cs
         string combined = tmg + "\n" + eng;
+
         string latField = DetectLatFieldName(combined);
         string lonField = DetectLonFieldName(combined, latField);
 
         string batFile = Environment.GetEnvironmentVariable("BAT_FILE");
         string rawBat = File.ReadAllText(batFile, Encoding.UTF8);
 
-        string[] parts = Regex.Split(rawBat, "//===" + "PAYLOAD_STAGE2_RANGE_SECTORS_CS===");
+        string[] parts = Regex.Split(rawBat, "//===" + "PAYLOAD_INTERACTIVE_GIZMO_CS===");
         if (parts.Length < 2)
-            throw new Exception("Brak bloku PAYLOAD_STAGE2_RANGE_SECTORS_CS w pliku .bat!");
-        string[] endParts = Regex.Split(parts[1], "//===" + "END_STAGE2_RANGE_SECTORS_CS===");
+            throw new Exception("Brak bloku PAYLOAD_INTERACTIVE_GIZMO_CS w pliku .bat!");
+        string[] endParts = Regex.Split(parts[1], "//===" + "END_INTERACTIVE_GIZMO_CS===");
         string rngCode = endParts[0].Trim()
             .Replace("__LAT_FIELD__", latField)
             .Replace("__LON_FIELD__", lonField);
@@ -143,10 +80,10 @@ public static class FthStage2WeaponRangeSectors
             throw new Exception("Niezgodnosc nawiasow klamrowych w TacticalMapGeneratorView.RangeSectors.cs!");
 
         File.WriteAllText(rngPath, rngCode + "\r\n", utf8NoBom);
-        Console.WriteLine("[OK] Utworzono modul zasiegu replik i sektorow ognia: TacticalMapGeneratorView.RangeSectors.cs");
+        Console.WriteLine("[OK] Zaktualizowano TacticalMapGeneratorView.RangeSectors.cs (In-Place Drag & Rotate Gizmo).");
 
         string triggerPath = Path.Combine(targetDir, ".fth_build_trigger.txt");
-        File.WriteAllText(triggerPath, "Field TAK Hub Stage 2 Weapon Range & Fire Sectors (Pizza + Elevation Advantage) UTC: " + DateTime.UtcNow.ToString("O") + " | RunId: " + Guid.NewGuid().ToString("N") + "\n", utf8NoBom);
+        File.WriteAllText(triggerPath, "Field TAK Hub Interactive Range Sector Drag & Rotate Gizmo UTC: " + DateTime.UtcNow.ToString("O") + " | RunId: " + Guid.NewGuid().ToString("N") + "\n", utf8NoBom);
 
         PushAndTriggerGitHubActions(targetDir);
     }
@@ -213,7 +150,7 @@ public static class FthStage2WeaponRangeSectors
         RunProcess(gitExe, "remote set-url origin " + RepoRemoteUrl, targetDir);
 
         RunProcess(gitExe, "add -A", targetDir);
-        RunProcess(gitExe, "commit -m \"Stage 2/2: Add Weapon Range & Fire Sector (Pizza Slice + Elevation Advantage) Tool\" --allow-empty", targetDir);
+        RunProcess(gitExe, "commit -m \"Fix range sector marker dragging and add interactive mouse rotation gizmo on map\" --allow-empty", targetDir);
 
         int pushExitCode = RunProcess(gitExe, "push -u origin main --force", targetDir);
         if (pushExitCode != 0)
@@ -239,9 +176,9 @@ public static class FthStage2WeaponRangeSectors
         }
     }
 }
-//===STAGE2_WEAPON_RANGE_SECTORS_CS===
+//===FIX_INTERACTIVE_SECTOR_GIZMO_CS===
 
-//===PAYLOAD_STAGE2_RANGE_SECTORS_CS===
+//===PAYLOAD_INTERACTIVE_GIZMO_CS===
 #pragma warning disable CS0414, CS0649, CS8600, CS8601, CS8602, CS8603, CS8604, CS8618, CS8625, CS8629
 using System;
 using System.Collections.Generic;
@@ -261,6 +198,21 @@ namespace FieldTakHub.Builder.Services
 {
     public static partial class TacticalMapGeneratorView
     {
+        public sealed class TacticalRangeSectorVisuals
+        {
+            public Path SectorPath;
+            public Path BaseArcPath;
+            public Path EffArcHighlight;
+            public readonly List<Path> RingPaths = new List<Path>();
+            public Line AimLine;
+            public Border OriginMarkerPin;
+            public Border LabelBadge;
+            public TextBlock LabelTextBlock;
+            public Border RotateHandle;
+            public Border LeftWingHandle;
+            public Border RightWingHandle;
+        }
+
         public sealed class TacticalRangeSectorItem
         {
             public string Id { get; set; } = Guid.NewGuid().ToString("N");
@@ -278,6 +230,8 @@ namespace FieldTakHub.Builder.Services
 
             public double OffsetEastMeters { get; set; } = 0.0;
             public double OffsetNorthMeters { get; set; } = 0.0;
+
+            public TacticalRangeSectorVisuals Visuals { get; set; }
 
             public double GetEffectiveRadiusMeters()
             {
@@ -308,6 +262,7 @@ namespace FieldTakHub.Builder.Services
         private static readonly List<TacticalRangeSectorItem> _weaponRangeSectors = new List<TacticalRangeSectorItem>();
         private static TacticalRangeSectorItem _selectedRangeSector = null;
         private static bool _isRenderingRangeSectors = false;
+        private static bool _isInteractingWithSectorOnMap = false;
         private static bool _suppressRangeSectorUiEvents = false;
         private static readonly HttpClient _demHttpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(8) };
 
@@ -343,7 +298,7 @@ namespace FieldTakHub.Builder.Services
                 FontSize = 8.0,
                 FontWeight = FontWeights.Bold,
                 Cursor = Cursors.Hand,
-                ToolTip = "Dodaj na środek mapy interaktywny zasięg repliki / sektor ostrzału ('kawałek pizzy') z przeliczaniem przewagi wysokości ΔH"
+                ToolTip = "Dodaj na środek mapy interaktywny znacznik zasięgu repliki / sektora ognia (przesuwany i obracany myszką)"
             };
             btnAddSector.Click += (s, e) => AddNewWeaponRangeSector();
             legContainer.Children.Add(btnAddSector);
@@ -380,14 +335,18 @@ namespace FieldTakHub.Builder.Services
             _selectedRangeSector = item;
             RebuildRangeSectorsListUi();
             PopulateRangeSectorEditorFromSelected();
-            RefreshRangeSectorsNow();
+            RefreshRangeSectorsNow(forceFullRebuild: true);
         }
 
-        private static void RefreshRangeSectorsNow()
+        private static void RefreshRangeSectorsNow(bool forceFullRebuild = false)
         {
             var (cw, ch) = GetExactCanvasSize();
             if (cw > 20 && ch > 20)
             {
+                if (forceFullRebuild)
+                {
+                    foreach (var s in _weaponRangeSectors) s.Visuals = null;
+                }
                 RenderAllWeaponRangeSectorsOnSheet(cw, ch);
             }
             UpdateBallisticSummaryBanner();
@@ -442,9 +401,10 @@ namespace FieldTakHub.Builder.Services
 
             sp.Children.Add(new TextBlock
             {
-                Text = "Przesuwaj środek sektora myszą po mapie, a uchwytem na łuku obracaj kierunek ostrzału.",
+                Text = "• Lewy przycisk myszy (na znaczniku 🎯 lub wycinku) = przesuwanie po mapie\n• Uchwyt ↻ (lub Prawy przycisk myszy / Scroll) = obracanie kierunku na mapie\n• Boczne uchwyty ◆ na krawędziach = zwężanie/rozszerzanie 'pizzy' myszką",
                 Foreground = TacticalConfigPanel.BrushMutedText,
-                FontSize = 9.0,
+                FontSize = 8.8,
+                LineHeight = 13.0,
                 TextWrapping = TextWrapping.Wrap,
                 Margin = new Thickness(0, 0, 0, 6)
             });
@@ -826,8 +786,8 @@ namespace FieldTakHub.Builder.Services
                     VerticalAlignment = VerticalAlignment.Center,
                     Margin = new Thickness(0, 0, 6, 0)
                 };
-                chk.Checked += (s, e) => { sec.IsVisible = true; RefreshRangeSectorsNow(); };
-                chk.Unchecked += (s, e) => { sec.IsVisible = false; RefreshRangeSectorsNow(); };
+                chk.Checked += (s, e) => { sec.IsVisible = true; RefreshRangeSectorsNow(forceFullRebuild: true); };
+                chk.Unchecked += (s, e) => { sec.IsVisible = false; RefreshRangeSectorsNow(forceFullRebuild: true); };
                 Grid.SetColumn(chk, 0);
                 g.Children.Add(chk);
 
@@ -880,7 +840,7 @@ namespace FieldTakHub.Builder.Services
                         _selectedRangeSector = _weaponRangeSectors.FirstOrDefault();
                     RebuildRangeSectorsListUi();
                     PopulateRangeSectorEditorFromSelected();
-                    RefreshRangeSectorsNow();
+                    RefreshRangeSectorsNow(forceFullRebuild: true);
                 };
                 Grid.SetColumn(btnDel, 3);
                 g.Children.Add(btnDel);
@@ -962,7 +922,8 @@ namespace FieldTakHub.Builder.Services
         }
 
         // ====================================================================
-        // RENDERER STREF RAZENIA I SEKTOROW OGNIA ("PIZZA") NA ARKUSZU MAPY
+        // RENDERER TRWALYCH ELEMENTOW WIZUALNYCH (IN-PLACE UPDATE 60 FPS)
+        // Eliminuje utrate MouseCapture podczas przesuwania i obracania myszka!
         // ====================================================================
         public static void RenderAllWeaponRangeSectorsOnSheet(double w, double h)
         {
@@ -971,182 +932,338 @@ namespace FieldTakHub.Builder.Services
             _isRenderingRangeSectors = true;
             try
             {
-                var toRemove = new List<UIElement>();
-                foreach (UIElement el in _interactiveCanvas.Children)
-                {
-                    if (el is FrameworkElement fe && fe.Tag is string t && t == "FTH_RANGE_SECTOR_EL")
-                        toRemove.Add(el);
-                }
-                foreach (var rem in toRemove)
-                    _interactiveCanvas.Children.Remove(rem);
-
-                if (_weaponRangeSectors.Count == 0) return;
-
                 double mpp = GetExactMetersPerPixel();
                 if (mpp <= 0.0001 || double.IsNaN(mpp) || double.IsInfinity(mpp)) mpp = 1.0;
 
-                double halfW = w / 2.0;
-                double halfH = h / 2.0;
+                if (_isInteractingWithSectorOnMap)
+                {
+                    foreach (var sec in _weaponRangeSectors)
+                    {
+                        if (sec.IsVisible && sec.Visuals != null)
+                        {
+                            UpdateSingleSectorVisualsInPlace(sec, w, h, mpp);
+                        }
+                    }
+                    return;
+                }
 
+                bool allPresent = true;
                 foreach (var sec in _weaponRangeSectors)
                 {
                     if (!sec.IsVisible) continue;
-
-                    double cx = halfW + (sec.OffsetEastMeters / mpp);
-                    double cy = halfH - (sec.OffsetNorthMeters / mpp);
-
-                    double baseRadiusPx = Math.Max(6.0, sec.BaseRadiusMeters / mpp);
-                    double effRadiusPx = Math.Max(6.0, sec.GetEffectiveRadiusMeters() / mpp);
-
-                    Color mainColor = Colors.Cyan;
-                    try { mainColor = (Color)ColorConverter.ConvertFromString(sec.ColorHex); } catch { }
-
-                    byte fillAlpha = (byte)Math.Clamp((int)Math.Round(sec.FillOpacity * 255.0), 15, 200);
-                    Brush fillBrush = new SolidColorBrush(Color.FromArgb(fillAlpha, mainColor.R, mainColor.G, mainColor.B));
-                    Brush strokeBrush = new SolidColorBrush(mainColor);
-                    Brush baseRefBrush = new SolidColorBrush(Color.FromArgb(190, 255, 255, 255));
-
-                    bool isFullCircle = sec.SpreadAngleDeg >= 359.5;
-                    double azRad = sec.AzimuthDeg * Math.PI / 180.0;
-
-                    Path sectorPath = new Path
+                    if (sec.Visuals == null || sec.Visuals.OriginMarkerPin == null || !_interactiveCanvas.Children.Contains(sec.Visuals.OriginMarkerPin))
                     {
-                        Fill = fillBrush,
-                        Stroke = strokeBrush,
-                        StrokeThickness = ReferenceEquals(sec, _selectedRangeSector) ? 2.2 : 1.6,
-                        Data = BuildSectorOrCircleGeometry(cx, cy, effRadiusPx, sec.AzimuthDeg, sec.SpreadAngleDeg, isClosedSlice: true),
-                        Tag = "FTH_RANGE_SECTOR_EL",
-                        Cursor = Cursors.SizeAll,
-                        ToolTip = $"{sec.Name} — Przeciągnij myszą, aby przesunąć stanowisko"
-                    };
-                    AttachDragMoveSectorBehavior(sectorPath, sec, mpp);
-                    _interactiveCanvas.Children.Add(sectorPath);
-
-                    if (Math.Abs(sec.ElevationDeltaMeters) >= 0.5)
-                    {
-                        Brush deltaArcBrush = sec.ElevationDeltaMeters > 0
-                            ? new SolidColorBrush(Color.FromArgb(220, 46, 204, 113))
-                            : new SolidColorBrush(Color.FromArgb(220, 250, 208, 44));
-
-                        Path baseArcPath = new Path
-                        {
-                            Stroke = baseRefBrush,
-                            StrokeThickness = 1.2,
-                            StrokeDashArray = new DoubleCollection { 4, 3 },
-                            Data = BuildSectorOrCircleGeometry(cx, cy, baseRadiusPx, sec.AzimuthDeg, sec.SpreadAngleDeg, isClosedSlice: false),
-                            IsHitTestVisible = false,
-                            Tag = "FTH_RANGE_SECTOR_EL"
-                        };
-                        _interactiveCanvas.Children.Add(baseArcPath);
-
-                        Path effArcHighlight = new Path
-                        {
-                            Stroke = deltaArcBrush,
-                            StrokeThickness = 2.6,
-                            Data = BuildSectorOrCircleGeometry(cx, cy, effRadiusPx, sec.AzimuthDeg, sec.SpreadAngleDeg, isClosedSlice: false),
-                            IsHitTestVisible = false,
-                            Tag = "FTH_RANGE_SECTOR_EL"
-                        };
-                        _interactiveCanvas.Children.Add(effArcHighlight);
+                        allPresent = false;
+                        break;
                     }
+                }
 
-                    for (double ringM = 25.0; ringM < sec.GetEffectiveRadiusMeters() - 5.0; ringM += 25.0)
+                if (!allPresent || _weaponRangeSectors.Any(s => !s.IsVisible && s.Visuals != null))
+                {
+                    var toRemove = new List<UIElement>();
+                    foreach (UIElement el in _interactiveCanvas.Children)
                     {
-                        double ringPx = ringM / mpp;
-                        var ringArc = new Path
-                        {
-                            Stroke = new SolidColorBrush(Color.FromArgb(85, mainColor.R, mainColor.G, mainColor.B)),
-                            StrokeThickness = 0.8,
-                            StrokeDashArray = new DoubleCollection { 2, 3 },
-                            Data = BuildSectorOrCircleGeometry(cx, cy, ringPx, sec.AzimuthDeg, sec.SpreadAngleDeg, isClosedSlice: false),
-                            IsHitTestVisible = false,
-                            Tag = "FTH_RANGE_SECTOR_EL"
-                        };
-                        _interactiveCanvas.Children.Add(ringArc);
+                        if (el is FrameworkElement fe && fe.Tag is string t && t == "FTH_RANGE_SECTOR_EL")
+                            toRemove.Add(el);
                     }
+                    foreach (var rem in toRemove)
+                        _interactiveCanvas.Children.Remove(rem);
 
-                    double tipX = cx + effRadiusPx * Math.Sin(azRad);
-                    double tipY = cy - effRadiusPx * Math.Cos(azRad);
-
-                    var aimLine = new Line
+                    foreach (var sec in _weaponRangeSectors)
                     {
-                        X1 = cx, Y1 = cy, X2 = tipX, Y2 = tipY,
-                        Stroke = strokeBrush,
-                        StrokeThickness = 1.2,
-                        StrokeDashArray = new DoubleCollection { 3, 2 },
-                        IsHitTestVisible = false,
-                        Tag = "FTH_RANGE_SECTOR_EL"
-                    };
-                    _interactiveCanvas.Children.Add(aimLine);
-
-                    var aimHandle = new Border
+                        sec.Visuals = null;
+                        if (!sec.IsVisible) continue;
+                        CreateSectorVisualsOnCanvas(sec, w, h, mpp);
+                    }
+                }
+                else
+                {
+                    foreach (var sec in _weaponRangeSectors)
                     {
-                        Width = 12,
-                        Height = 12,
-                        CornerRadius = new CornerRadius(6),
-                        Background = new SolidColorBrush(Color.FromRgb(6, 14, 18)),
-                        BorderBrush = strokeBrush,
-                        BorderThickness = new Thickness(2),
-                        Cursor = Cursors.Hand,
-                        Tag = "FTH_RANGE_SECTOR_EL",
-                        ToolTip = "Przeciągnij ten punkt, aby obrócić kierunek ostrzału (azymut) bezpośrednio na mapie"
-                    };
-                    Canvas.SetLeft(aimHandle, tipX - 6);
-                    Canvas.SetTop(aimHandle, tipY - 6);
-                    AttachDragRotateAzimuthBehavior(aimHandle, sec, cx, cy);
-                    _interactiveCanvas.Children.Add(aimHandle);
-
-                    var originPin = new Border
-                    {
-                        Width = 14,
-                        Height = 14,
-                        CornerRadius = new CornerRadius(7),
-                        Background = strokeBrush,
-                        BorderBrush = new SolidColorBrush(Color.FromRgb(6, 14, 18)),
-                        BorderThickness = new Thickness(2),
-                        Cursor = Cursors.SizeAll,
-                        Tag = "FTH_RANGE_SECTOR_EL",
-                        ToolTip = $"{sec.Name} — Przeciągnij, aby zmienić pozycję stanowiska"
-                    };
-                    Canvas.SetLeft(originPin, cx - 7);
-                    Canvas.SetTop(originPin, cy - 7);
-                    AttachDragMoveSectorBehavior(originPin, sec, mpp);
-                    _interactiveCanvas.Children.Add(originPin);
-
-                    double effR = sec.GetEffectiveRadiusMeters();
-                    string dhBadgeText = Math.Abs(sec.ElevationDeltaMeters) >= 0.5
-                        ? $" ➔ {effR:0}m (ΔH:{sec.ElevationDeltaMeters:+0.#;-0.#}m / {sec.GetRangeBonusPercent():+0;-0}%)"
-                        : "";
-                    string angleBadgeText = isFullCircle ? "360°" : $"{sec.SpreadAngleDeg:0}°";
-
-                    var labelBadge = new Border
-                    {
-                        Background = new SolidColorBrush(Color.FromArgb(225, 6, 14, 18)),
-                        BorderBrush = strokeBrush,
-                        BorderThickness = new Thickness(1),
-                        CornerRadius = new CornerRadius(3),
-                        Padding = new Thickness(5, 1.5, 5, 1.5),
-                        Cursor = Cursors.SizeAll,
-                        Tag = "FTH_RANGE_SECTOR_EL",
-                        Child = new TextBlock
+                        if (sec.IsVisible && sec.Visuals != null)
                         {
-                            Text = $"🎯 {sec.Name}: {sec.BaseRadiusMeters:0}m{dhBadgeText} [{angleBadgeText}]",
-                            Foreground = Brushes.White,
-                            FontSize = 8.5,
-                            FontWeight = FontWeights.Bold,
-                            FontFamily = new FontFamily("Consolas")
+                            UpdateSingleSectorVisualsInPlace(sec, w, h, mpp);
                         }
-                    };
-                    Canvas.SetLeft(labelBadge, cx + 10);
-                    Canvas.SetTop(labelBadge, cy - 10);
-                    AttachDragMoveSectorBehavior(labelBadge, sec, mpp);
-                    _interactiveCanvas.Children.Add(labelBadge);
+                    }
                 }
             }
             finally
             {
                 _isRenderingRangeSectors = false;
             }
+        }
+
+        private static void CreateSectorVisualsOnCanvas(TacticalRangeSectorItem sec, double w, double h, double mpp)
+        {
+            var vis = new TacticalRangeSectorVisuals();
+            sec.Visuals = vis;
+
+            vis.SectorPath = new Path
+            {
+                Tag = "FTH_RANGE_SECTOR_EL",
+                Cursor = Cursors.SizeAll,
+                ToolTip = $"{sec.Name} — LPM: przesuwaj po mapie | PPM + ruch: obracaj kierunek | Scroll: obrót co 5°"
+            };
+            Panel.SetZIndex(vis.SectorPath, 910);
+            AttachInteractiveMarkerMouseBehaviors(vis.SectorPath, sec);
+            _interactiveCanvas.Children.Add(vis.SectorPath);
+
+            vis.BaseArcPath = new Path
+            {
+                StrokeThickness = 1.2,
+                StrokeDashArray = new DoubleCollection { 4, 3 },
+                IsHitTestVisible = false,
+                Tag = "FTH_RANGE_SECTOR_EL"
+            };
+            Panel.SetZIndex(vis.BaseArcPath, 912);
+            _interactiveCanvas.Children.Add(vis.BaseArcPath);
+
+            vis.EffArcHighlight = new Path
+            {
+                StrokeThickness = 2.6,
+                IsHitTestVisible = false,
+                Tag = "FTH_RANGE_SECTOR_EL"
+            };
+            Panel.SetZIndex(vis.EffArcHighlight, 913);
+            _interactiveCanvas.Children.Add(vis.EffArcHighlight);
+
+            for (int i = 0; i < 16; i++)
+            {
+                var ringArc = new Path
+                {
+                    StrokeThickness = 0.8,
+                    StrokeDashArray = new DoubleCollection { 2, 3 },
+                    IsHitTestVisible = false,
+                    Visibility = Visibility.Collapsed,
+                    Tag = "FTH_RANGE_SECTOR_EL"
+                };
+                Panel.SetZIndex(ringArc, 911);
+                vis.RingPaths.Add(ringArc);
+                _interactiveCanvas.Children.Add(ringArc);
+            }
+
+            vis.AimLine = new Line
+            {
+                StrokeThickness = 1.4,
+                StrokeDashArray = new DoubleCollection { 3, 2 },
+                IsHitTestVisible = false,
+                Tag = "FTH_RANGE_SECTOR_EL"
+            };
+            Panel.SetZIndex(vis.AimLine, 915);
+            _interactiveCanvas.Children.Add(vis.AimLine);
+
+            // Boczne uchwyty zmiany kata rozwarcia "Kawalka Pizzy" (Left / Right Wing Handles)
+            vis.LeftWingHandle = CreateWingAngleHandle(sec);
+            Panel.SetZIndex(vis.LeftWingHandle, 945);
+            _interactiveCanvas.Children.Add(vis.LeftWingHandle);
+
+            vis.RightWingHandle = CreateWingAngleHandle(sec);
+            Panel.SetZIndex(vis.RightWingHandle, 945);
+            _interactiveCanvas.Children.Add(vis.RightWingHandle);
+
+            // Uchwyt obrotu kierunku (i zmiany zasiegu z Ctrl) na czole osi strzalu — jak znacznik obrotu na mapie
+            vis.RotateHandle = new Border
+            {
+                Width = 22,
+                Height = 22,
+                CornerRadius = new CornerRadius(11),
+                Background = new SolidColorBrush(Color.FromRgb(6, 14, 18)),
+                BorderThickness = new Thickness(2),
+                Cursor = Cursors.Hand,
+                Tag = "FTH_RANGE_SECTOR_EL",
+                ToolTip = "Chwyć myszką (LPM) i obracaj kierunek ostrzału wokół stanowiska (przytrzymaj Ctrl, aby jednocześnie zmieniać zasięg w metrach)",
+                Child = new TextBlock
+                {
+                    Text = "↻",
+                    Foreground = Brushes.White,
+                    FontSize = 12,
+                    FontWeight = FontWeights.Bold,
+                    HorizontalAlignment = HorizontalAlignment.Center,
+                    VerticalAlignment = VerticalAlignment.Center,
+                    Margin = new Thickness(0, -1, 0, 0)
+                }
+            };
+            Panel.SetZIndex(vis.RotateHandle, 955);
+            AttachRotateGizmoMouseBehavior(vis.RotateHandle, sec);
+            _interactiveCanvas.Children.Add(vis.RotateHandle);
+
+            // Centralny znacznik stanowiska ogniowego (w stylu znacznikow taktycznych na mapie)
+            vis.OriginMarkerPin = new Border
+            {
+                Width = 22,
+                Height = 22,
+                CornerRadius = new CornerRadius(11),
+                BorderBrush = new SolidColorBrush(Color.FromRgb(6, 14, 18)),
+                BorderThickness = new Thickness(2),
+                Cursor = Cursors.SizeAll,
+                Tag = "FTH_RANGE_SECTOR_EL",
+                ToolTip = $"{sec.Name} — Chwyć LPM, aby przesunąć znacznik w dowolne miejsce na mapie (PPM + ruch myszką = obróć sektor)",
+                Child = new TextBlock
+                {
+                    Text = "🎯",
+                    FontSize = 10,
+                    HorizontalAlignment = HorizontalAlignment.Center,
+                    VerticalAlignment = VerticalAlignment.Center
+                }
+            };
+            Panel.SetZIndex(vis.OriginMarkerPin, 960);
+            AttachInteractiveMarkerMouseBehaviors(vis.OriginMarkerPin, sec);
+            _interactiveCanvas.Children.Add(vis.OriginMarkerPin);
+
+            vis.LabelTextBlock = new TextBlock
+            {
+                Foreground = Brushes.White,
+                FontSize = 8.8,
+                FontWeight = FontWeights.Bold,
+                FontFamily = new FontFamily("Consolas")
+            };
+
+            vis.LabelBadge = new Border
+            {
+                Background = new SolidColorBrush(Color.FromArgb(232, 6, 14, 18)),
+                BorderThickness = new Thickness(1.2),
+                CornerRadius = new CornerRadius(4),
+                Padding = new Thickness(5, 2, 5, 2),
+                Cursor = Cursors.SizeAll,
+                Tag = "FTH_RANGE_SECTOR_EL",
+                ToolTip = "Chwyć LPM, aby przesunąć stanowisko po mapie | PPM + ruch myszką = obróć sektor",
+                Child = vis.LabelTextBlock
+            };
+            Panel.SetZIndex(vis.LabelBadge, 960);
+            AttachInteractiveMarkerMouseBehaviors(vis.LabelBadge, sec);
+            _interactiveCanvas.Children.Add(vis.LabelBadge);
+
+            UpdateSingleSectorVisualsInPlace(sec, w, h, mpp);
+        }
+
+        private static Border CreateWingAngleHandle(TacticalRangeSectorItem sec)
+        {
+            var wing = new Border
+            {
+                Width = 14,
+                Height = 14,
+                CornerRadius = new CornerRadius(7),
+                Background = new SolidColorBrush(Color.FromRgb(6, 14, 18)),
+                BorderThickness = new Thickness(1.8),
+                Cursor = Cursors.SizeWE,
+                Tag = "FTH_RANGE_SECTOR_EL",
+                ToolTip = "Przeciągnij myszką, aby rozszerzyć lub zwęzić kąt 'kawałka pizzy' (5°–360°)",
+                Child = new TextBlock
+                {
+                    Text = "◆",
+                    Foreground = Brushes.White,
+                    FontSize = 7.5,
+                    HorizontalAlignment = HorizontalAlignment.Center,
+                    VerticalAlignment = VerticalAlignment.Center
+                }
+            };
+            AttachSpreadWingMouseBehavior(wing, sec);
+            return wing;
+        }
+
+        private static void UpdateSingleSectorVisualsInPlace(TacticalRangeSectorItem sec, double w, double h, double mpp)
+        {
+            var vis = sec.Visuals;
+            if (vis == null) return;
+
+            double halfW = w / 2.0;
+            double halfH = h / 2.0;
+
+            double cx = halfW + (sec.OffsetEastMeters / mpp);
+            double cy = halfH - (sec.OffsetNorthMeters / mpp);
+
+            double baseRadiusPx = Math.Max(8.0, sec.BaseRadiusMeters / mpp);
+            double effRadiusPx = Math.Max(8.0, sec.GetEffectiveRadiusMeters() / mpp);
+
+            Color mainColor = Colors.Cyan;
+            try { mainColor = (Color)ColorConverter.ConvertFromString(sec.ColorHex); } catch { }
+
+            byte fillAlpha = (byte)Math.Clamp((int)Math.Round(sec.FillOpacity * 255.0), 15, 200);
+            Brush fillBrush = new SolidColorBrush(Color.FromArgb(fillAlpha, mainColor.R, mainColor.G, mainColor.B));
+            Brush strokeBrush = new SolidColorBrush(mainColor);
+            Brush baseRefBrush = new SolidColorBrush(Color.FromArgb(190, 255, 255, 255));
+
+            bool isFullCircle = sec.SpreadAngleDeg >= 359.5;
+            double azRad = sec.AzimuthDeg * Math.PI / 180.0;
+
+            vis.SectorPath.Fill = fillBrush;
+            vis.SectorPath.Stroke = strokeBrush;
+            vis.SectorPath.StrokeThickness = ReferenceEquals(sec, _selectedRangeSector) ? 2.2 : 1.6;
+            vis.SectorPath.Data = BuildSectorOrCircleGeometry(cx, cy, effRadiusPx, sec.AzimuthDeg, sec.SpreadAngleDeg, isClosedSlice: true);
+
+            if (Math.Abs(sec.ElevationDeltaMeters) >= 0.5)
+            {
+                Brush deltaArcBrush = sec.ElevationDeltaMeters > 0
+                    ? new SolidColorBrush(Color.FromArgb(230, 46, 204, 113))
+                    : new SolidColorBrush(Color.FromArgb(230, 250, 208, 44));
+
+                vis.BaseArcPath.Visibility = Visibility.Visible;
+                vis.BaseArcPath.Stroke = baseRefBrush;
+                vis.BaseArcPath.Data = BuildSectorOrCircleGeometry(cx, cy, baseRadiusPx, sec.AzimuthDeg, sec.SpreadAngleDeg, isClosedSlice: false);
+
+                vis.EffArcHighlight.Visibility = Visibility.Visible;
+                vis.EffArcHighlight.Stroke = deltaArcBrush;
+                vis.EffArcHighlight.Data = BuildSectorOrCircleGeometry(cx, cy, effRadiusPx, sec.AzimuthDeg, sec.SpreadAngleDeg, isClosedSlice: false);
+            }
+            else
+            {
+                vis.BaseArcPath.Visibility = Visibility.Collapsed;
+                vis.EffArcHighlight.Visibility = Visibility.Collapsed;
+            }
+
+            double effMeters = sec.GetEffectiveRadiusMeters();
+            int ringIdx = 0;
+            for (double ringM = 25.0; ringM < effMeters - 5.0 && ringIdx < vis.RingPaths.Count; ringM += 25.0, ringIdx++)
+            {
+                var rp = vis.RingPaths[ringIdx];
+                rp.Visibility = Visibility.Visible;
+                rp.Stroke = new SolidColorBrush(Color.FromArgb(90, mainColor.R, mainColor.G, mainColor.B));
+                rp.Data = BuildSectorOrCircleGeometry(cx, cy, ringM / mpp, sec.AzimuthDeg, sec.SpreadAngleDeg, isClosedSlice: false);
+            }
+            for (int k = ringIdx; k < vis.RingPaths.Count; k++)
+            {
+                vis.RingPaths[k].Visibility = Visibility.Collapsed;
+            }
+
+            double tipX = cx + effRadiusPx * Math.Sin(azRad);
+            double tipY = cy - effRadiusPx * Math.Cos(azRad);
+
+            vis.AimLine.X1 = cx;
+            vis.AimLine.Y1 = cy;
+            vis.AimLine.X2 = tipX;
+            vis.AimLine.Y2 = tipY;
+            vis.AimLine.Stroke = strokeBrush;
+
+            vis.RotateHandle.BorderBrush = strokeBrush;
+            Canvas.SetLeft(vis.RotateHandle, tipX - 11);
+            Canvas.SetTop(vis.RotateHandle, tipY - 11);
+
+            double halfSpread = sec.SpreadAngleDeg / 2.0;
+            double leftRad = (sec.AzimuthDeg - halfSpread) * Math.PI / 180.0;
+            double rightRad = (sec.AzimuthDeg + halfSpread) * Math.PI / 180.0;
+            double wingDistPx = effRadiusPx * 0.72;
+
+            vis.LeftWingHandle.BorderBrush = strokeBrush;
+            Canvas.SetLeft(vis.LeftWingHandle, cx + wingDistPx * Math.Sin(leftRad) - 7);
+            Canvas.SetTop(vis.LeftWingHandle, cy - wingDistPx * Math.Cos(leftRad) - 7);
+
+            vis.RightWingHandle.BorderBrush = strokeBrush;
+            Canvas.SetLeft(vis.RightWingHandle, cx + wingDistPx * Math.Sin(rightRad) - 7);
+            Canvas.SetTop(vis.RightWingHandle, cy - wingDistPx * Math.Cos(rightRad) - 7);
+
+            vis.OriginMarkerPin.Background = strokeBrush;
+            Canvas.SetLeft(vis.OriginMarkerPin, cx - 11);
+            Canvas.SetTop(vis.OriginMarkerPin, cy - 11);
+
+            string dhBadgeText = Math.Abs(sec.ElevationDeltaMeters) >= 0.5
+                ? $" ➔ {effMeters:0}m (ΔH:{sec.ElevationDeltaMeters:+0.#;-0.#}m)"
+                : "";
+            string angleBadgeText = isFullCircle ? "360°" : $"{sec.SpreadAngleDeg:0}° | Az:{sec.AzimuthDeg:0}°";
+
+            vis.LabelBadge.BorderBrush = strokeBrush;
+            vis.LabelTextBlock.Text = $"{sec.Name}: {sec.BaseRadiusMeters:0}m{dhBadgeText} [{angleBadgeText}]";
+            Canvas.SetLeft(vis.LabelBadge, cx + 14);
+            Canvas.SetTop(vis.LabelBadge, cy - 11);
         }
 
         private static Geometry BuildSectorOrCircleGeometry(
@@ -1206,50 +1323,141 @@ namespace FieldTakHub.Builder.Services
             return geom;
         }
 
-        private static void AttachDragMoveSectorBehavior(FrameworkElement el, TacticalRangeSectorItem sec, double mpp)
+        // ====================================================================
+        // INTERAKCJA MYSZKA NA MAPIE (LPM = PRZESUWANIE, PPM / SCROLL = OBROT)
+        // ====================================================================
+        private static void AttachInteractiveMarkerMouseBehaviors(FrameworkElement el, TacticalRangeSectorItem sec)
         {
-            bool isDragging = false;
-            Point lastMousePos = new Point();
+            bool isDraggingMove = false;
+            bool isRightRotating = false;
+            Point startMouse = new Point();
+            double startEastM = 0;
+            double startNorthM = 0;
 
+            // 1. Lewy przycisk myszy (LPM) -> Plynne przesuwanie znacznika i sektora po calej mapie
             el.MouseLeftButtonDown += (s, e) =>
             {
                 if (_interactiveCanvas == null) return;
                 _selectedRangeSector = sec;
-                RebuildRangeSectorsListUi();
                 PopulateRangeSectorEditorFromSelected();
 
-                isDragging = true;
-                lastMousePos = e.GetPosition(_interactiveCanvas);
+                isDraggingMove = true;
+                _isInteractingWithSectorOnMap = true;
+                startMouse = e.GetPosition(_interactiveCanvas);
+                startEastM = sec.OffsetEastMeters;
+                startNorthM = sec.OffsetNorthMeters;
+
+                el.CaptureMouse();
+                e.Handled = true;
+            };
+
+            // 2. Prawy przycisk myszy (PPM) -> Bezposrednie obracanie kierunku sektora myszka wokol znacznika!
+            el.MouseRightButtonDown += (s, e) =>
+            {
+                if (_interactiveCanvas == null) return;
+                _selectedRangeSector = sec;
+                PopulateRangeSectorEditorFromSelected();
+
+                isRightRotating = true;
+                _isInteractingWithSectorOnMap = true;
                 el.CaptureMouse();
                 e.Handled = true;
             };
 
             el.MouseMove += (s, e) =>
             {
-                if (!isDragging || _interactiveCanvas == null) return;
-                Point curPos = e.GetPosition(_interactiveCanvas);
-                double dxPx = curPos.X - lastMousePos.X;
-                double dyPx = curPos.Y - lastMousePos.Y;
-                lastMousePos = curPos;
+                if (_interactiveCanvas == null) return;
 
-                sec.OffsetEastMeters += dxPx * mpp;
-                sec.OffsetNorthMeters -= dyPx * mpp;
+                if (isDraggingMove)
+                {
+                    Point cur = e.GetPosition(_interactiveCanvas);
+                    double mpp = GetExactMetersPerPixel();
+                    if (mpp <= 0.0001 || double.IsNaN(mpp) || double.IsInfinity(mpp)) mpp = 1.0;
 
-                var (cw, ch) = GetExactCanvasSize();
-                RenderAllWeaponRangeSectorsOnSheet(cw, ch);
-                e.Handled = true;
+                    sec.OffsetEastMeters = startEastM + (cur.X - startMouse.X) * mpp;
+                    sec.OffsetNorthMeters = startNorthM - (cur.Y - startMouse.Y) * mpp;
+
+                    var (cw, ch) = GetExactCanvasSize();
+                    UpdateSingleSectorVisualsInPlace(sec, cw, ch, mpp);
+                    e.Handled = true;
+                }
+                else if (isRightRotating)
+                {
+                    Point cur = e.GetPosition(_interactiveCanvas);
+                    var (cw, ch) = GetExactCanvasSize();
+                    double mpp = GetExactMetersPerPixel();
+                    if (mpp <= 0.0001 || double.IsNaN(mpp) || double.IsInfinity(mpp)) mpp = 1.0;
+
+                    double cx = (cw / 2.0) + (sec.OffsetEastMeters / mpp);
+                    double cy = (ch / 2.0) - (sec.OffsetNorthMeters / mpp);
+
+                    double dx = cur.X - cx;
+                    double dy = cy - cur.Y;
+                    if (Math.Abs(dx) > 1.0 || Math.Abs(dy) > 1.0)
+                    {
+                        double angleDeg = Math.Atan2(dx, dy) * 180.0 / Math.PI;
+                        if (angleDeg < 0) angleDeg += 360.0;
+                        sec.AzimuthDeg = Math.Round(angleDeg);
+
+                        SyncSelectedSectorSlidersFast(sec);
+                        UpdateSingleSectorVisualsInPlace(sec, cw, ch, mpp);
+                    }
+                    e.Handled = true;
+                }
             };
 
             el.MouseLeftButtonUp += (s, e) =>
             {
-                if (!isDragging) return;
-                isDragging = false;
+                if (!isDraggingMove) return;
+                isDraggingMove = false;
+                _isInteractingWithSectorOnMap = false;
                 el.ReleaseMouseCapture();
+                RebuildRangeSectorsListUi();
+                try { TacticalConfigPanel.MarkDirty(); } catch { }
+                e.Handled = true;
+            };
+
+            el.MouseRightButtonUp += (s, e) =>
+            {
+                if (!isRightRotating) return;
+                isRightRotating = false;
+                _isInteractingWithSectorOnMap = false;
+                el.ReleaseMouseCapture();
+                RebuildRangeSectorsListUi();
+                try { TacticalConfigPanel.MarkDirty(); } catch { }
+                e.Handled = true;
+            };
+
+            // 3. Kolko myszy (Scroll) nad znacznikiem -> obrot o 5° (z Shift = zmiana kata pizzy, z Ctrl = zmiana promienia)
+            el.MouseWheel += (s, e) =>
+            {
+                _selectedRangeSector = sec;
+                double step = e.Delta > 0 ? 5.0 : -5.0;
+
+                if ((Keyboard.Modifiers & ModifierKeys.Shift) != 0)
+                {
+                    sec.SpreadAngleDeg = Math.Clamp(sec.SpreadAngleDeg + step, 5.0, 360.0);
+                }
+                else if ((Keyboard.Modifiers & ModifierKeys.Control) != 0)
+                {
+                    sec.BaseRadiusMeters = Math.Clamp(sec.BaseRadiusMeters + step, 5.0, 500.0);
+                }
+                else
+                {
+                    sec.AzimuthDeg = ((sec.AzimuthDeg + step) % 360.0 + 360.0) % 360.0;
+                }
+
+                PopulateRangeSectorEditorFromSelected();
+                RebuildRangeSectorsListUi();
+                var (cw, ch) = GetExactCanvasSize();
+                double mpp = GetExactMetersPerPixel();
+                if (mpp <= 0.0001 || double.IsNaN(mpp) || double.IsInfinity(mpp)) mpp = 1.0;
+                UpdateSingleSectorVisualsInPlace(sec, cw, ch, mpp);
                 e.Handled = true;
             };
         }
 
-        private static void AttachDragRotateAzimuthBehavior(FrameworkElement handleEl, TacticalRangeSectorItem sec, double cx, double cy)
+        private static void AttachRotateGizmoMouseBehavior(FrameworkElement handleEl, TacticalRangeSectorItem sec)
         {
             bool isRotating = false;
 
@@ -1257,10 +1465,10 @@ namespace FieldTakHub.Builder.Services
             {
                 if (_interactiveCanvas == null) return;
                 _selectedRangeSector = sec;
-                RebuildRangeSectorsListUi();
                 PopulateRangeSectorEditorFromSelected();
 
                 isRotating = true;
+                _isInteractingWithSectorOnMap = true;
                 handleEl.CaptureMouse();
                 e.Handled = true;
             };
@@ -1269,6 +1477,13 @@ namespace FieldTakHub.Builder.Services
             {
                 if (!isRotating || _interactiveCanvas == null) return;
                 Point p = e.GetPosition(_interactiveCanvas);
+                var (cw, ch) = GetExactCanvasSize();
+                double mpp = GetExactMetersPerPixel();
+                if (mpp <= 0.0001 || double.IsNaN(mpp) || double.IsInfinity(mpp)) mpp = 1.0;
+
+                double cx = (cw / 2.0) + (sec.OffsetEastMeters / mpp);
+                double cy = (ch / 2.0) - (sec.OffsetNorthMeters / mpp);
+
                 double dx = p.X - cx;
                 double dy = cy - p.Y;
                 if (Math.Abs(dx) > 1.0 || Math.Abs(dy) > 1.0)
@@ -1277,15 +1492,14 @@ namespace FieldTakHub.Builder.Services
                     if (angleDeg < 0) angleDeg += 360.0;
                     sec.AzimuthDeg = Math.Round(angleDeg);
 
-                    _suppressRangeSectorUiEvents = true;
-                    if (_rsAzimuthSlider != null && ReferenceEquals(_selectedRangeSector, sec))
-                        _rsAzimuthSlider.Value = sec.AzimuthDeg;
-                    if (_rsAzimuthValText != null && ReferenceEquals(_selectedRangeSector, sec))
-                        _rsAzimuthValText.Text = FormatAzimuthWithCardinal(sec.AzimuthDeg);
-                    _suppressRangeSectorUiEvents = false;
+                    if ((Keyboard.Modifiers & ModifierKeys.Control) != 0)
+                    {
+                        double distPx = Math.Sqrt(dx * dx + dy * dy);
+                        sec.BaseRadiusMeters = Math.Clamp(Math.Round(distPx * mpp), 5.0, 500.0);
+                    }
 
-                    var (cw, ch) = GetExactCanvasSize();
-                    RenderAllWeaponRangeSectorsOnSheet(cw, ch);
+                    SyncSelectedSectorSlidersFast(sec);
+                    UpdateSingleSectorVisualsInPlace(sec, cw, ch, mpp);
                 }
                 e.Handled = true;
             };
@@ -1294,10 +1508,88 @@ namespace FieldTakHub.Builder.Services
             {
                 if (!isRotating) return;
                 isRotating = false;
+                _isInteractingWithSectorOnMap = false;
                 handleEl.ReleaseMouseCapture();
+                RebuildRangeSectorsListUi();
+                try { TacticalConfigPanel.MarkDirty(); } catch { }
                 e.Handled = true;
             };
         }
+
+        private static void AttachSpreadWingMouseBehavior(FrameworkElement wingEl, TacticalRangeSectorItem sec)
+        {
+            bool isSpreading = false;
+
+            wingEl.MouseLeftButtonDown += (s, e) =>
+            {
+                if (_interactiveCanvas == null) return;
+                _selectedRangeSector = sec;
+                PopulateRangeSectorEditorFromSelected();
+
+                isSpreading = true;
+                _isInteractingWithSectorOnMap = true;
+                wingEl.CaptureMouse();
+                e.Handled = true;
+            };
+
+            wingEl.MouseMove += (s, e) =>
+            {
+                if (!isSpreading || _interactiveCanvas == null) return;
+                Point p = e.GetPosition(_interactiveCanvas);
+                var (cw, ch) = GetExactCanvasSize();
+                double mpp = GetExactMetersPerPixel();
+                if (mpp <= 0.0001 || double.IsNaN(mpp) || double.IsInfinity(mpp)) mpp = 1.0;
+
+                double cx = (cw / 2.0) + (sec.OffsetEastMeters / mpp);
+                double cy = (ch / 2.0) - (sec.OffsetNorthMeters / mpp);
+
+                double dx = p.X - cx;
+                double dy = cy - p.Y;
+                if (Math.Abs(dx) > 1.0 || Math.Abs(dy) > 1.0)
+                {
+                    double cursorAngle = Math.Atan2(dx, dy) * 180.0 / Math.PI;
+                    if (cursorAngle < 0) cursorAngle += 360.0;
+
+                    double diff = Math.Abs(((cursorAngle - sec.AzimuthDeg + 540.0) % 360.0) - 180.0);
+                    sec.SpreadAngleDeg = Math.Clamp(Math.Round(diff * 2.0), 5.0, 360.0);
+
+                    SyncSelectedSectorSlidersFast(sec);
+                    UpdateSingleSectorVisualsInPlace(sec, cw, ch, mpp);
+                }
+                e.Handled = true;
+            };
+
+            wingEl.MouseLeftButtonUp += (s, e) =>
+            {
+                if (!isSpreading) return;
+                isSpreading = false;
+                _isInteractingWithSectorOnMap = false;
+                wingEl.ReleaseMouseCapture();
+                RebuildRangeSectorsListUi();
+                try { TacticalConfigPanel.MarkDirty(); } catch { }
+                e.Handled = true;
+            };
+        }
+
+        private static void SyncSelectedSectorSlidersFast(TacticalRangeSectorItem sec)
+        {
+            if (!ReferenceEquals(_selectedRangeSector, sec)) return;
+            _suppressRangeSectorUiEvents = true;
+            try
+            {
+                if (_rsAzimuthSlider != null) _rsAzimuthSlider.Value = sec.AzimuthDeg;
+                if (_rsAzimuthValText != null) _rsAzimuthValText.Text = FormatAzimuthWithCardinal(sec.AzimuthDeg);
+                if (_rsSpreadSlider != null) _rsSpreadSlider.Value = sec.SpreadAngleDeg;
+                if (_rsSpreadValText != null)
+                    _rsSpreadValText.Text = sec.SpreadAngleDeg >= 359 ? "360° (Pełny okrąg)" : $"{sec.SpreadAngleDeg:0}° (Wycinek pizzy)";
+                if (_rsBaseRadiusBox != null && !_rsBaseRadiusBox.IsKeyboardFocused)
+                    _rsBaseRadiusBox.Text = sec.BaseRadiusMeters.ToString("0.#", CultureInfo.InvariantCulture);
+            }
+            finally
+            {
+                _suppressRangeSectorUiEvents = false;
+            }
+        }
     }
 }
-//===END_STAGE2_RANGE_SECTORS_CS===
+//===END_INTERACTIVE_GIZMO_CS===
