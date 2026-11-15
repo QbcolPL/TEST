@@ -1846,6 +1846,8 @@ namespace FieldTakHub.Builder.Services
             }
         
             
+        
+            RestyleAndAlignMapObjectsTable(_objectsListStack);
         }
 
         private static StackPanel CreateSectionCard(string title)

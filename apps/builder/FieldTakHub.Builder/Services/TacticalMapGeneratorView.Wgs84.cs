@@ -5,7 +5,10 @@ using System.Globalization;
 using System.Linq;
 using System.Reflection;
 using System.Windows;
+using System.Text;
+using System.Text.RegularExpressions;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Shapes;
@@ -40,7 +43,355 @@ namespace FieldTakHub.Builder.Services
             return _coordSystem != null && _coordSystem.IndexOf("WGS84", StringComparison.OrdinalIgnoreCase) >= 0;
         }
 
-        public static void RestyleAndAlignMapObjectsTable(Panel listPanel) { }
+        private static bool _isRestylingObjectsTable = false;
+
+        // ====================================================================
+        // 3-WIERSZOWA TABELA OBIEKTOW NA MAPIE (SZYBKA O(N), ZERO ZAWIESZANIA)
+        // ====================================================================
+        public static void RestyleAndAlignMapObjectsTable(Panel listPanel)
+        {
+            if (listPanel == null || _isRestylingObjectsTable) return;
+            _isRestylingObjectsTable = true;
+            try
+            {
+                var cards = listPanel.Children.OfType<Border>().ToList();
+                foreach (var card in cards)
+                {
+                    if (card.Tag is string t && t == "FTH_RESTYLED_OBJ_CARD")
+                        continue;
+
+                    try
+                    {
+                        RestyleSingleMapObjectCard(card);
+                        card.Tag = "FTH_RESTYLED_OBJ_CARD";
+                    }
+                    catch { }
+                }
+            }
+            finally
+            {
+                _isRestylingObjectsTable = false;
+            }
+        }
+
+        private static void RestyleSingleMapObjectCard(Border card)
+        {
+            var allControls = new List<DependencyObject>();
+            var visited = new HashSet<DependencyObject>();
+            CollectLogicalChildrenBounded(card, allControls, visited, 0);
+
+            var checkBox = allControls.OfType<CheckBox>().FirstOrDefault();
+            var textBoxes = allControls.OfType<TextBox>().ToList();
+            if (checkBox == null || textBoxes.Count < 1) return;
+
+            TextBox nameBox = textBoxes[0];
+            TextBox legendBox = textBoxes.Count > 1 ? textBoxes[1] : null;
+            Slider sizeSlider = allControls.OfType<Slider>().FirstOrDefault();
+
+            var buttons = allControls.OfType<Button>().ToList();
+            if (buttons.Count < 2) return;
+
+            Button colorBtn = buttons[0];
+            Button pinBtn = buttons.Count > 1 ? buttons[1] : null;
+            Button deleteBtn = buttons[buttons.Count - 1];
+
+            Button typeBtn = null;
+            Button simplifyBtn = null;
+            if (buttons.Count >= 4)
+            {
+                for (int i = 2; i < buttons.Count - 1; i++)
+                {
+                    var b = buttons[i];
+                    string bTxt = ExtractPlainButtonText(b);
+                    if (bTxt.IndexOf("Typ", StringComparison.OrdinalIgnoreCase) >= 0 || typeBtn == null)
+                        typeBtn = b;
+                    else
+                        simplifyBtn = b;
+                }
+            }
+
+            var btnAndTbSet = new HashSet<DependencyObject>(buttons.Cast<DependencyObject>().Concat(textBoxes.Cast<DependencyObject>()));
+            Border symbolBadge = null;
+            foreach (var brd in allControls.OfType<Border>())
+            {
+                if (ReferenceEquals(brd, card)) continue;
+                if (IsDescendantFast(brd, btnAndTbSet)) continue;
+                symbolBadge = brd;
+                break;
+            }
+
+            var btnSet = new HashSet<DependencyObject>(buttons.Cast<DependencyObject>());
+            TextBlock counterTb = null;
+            foreach (var tb in allControls.OfType<TextBlock>())
+            {
+                if (IsDescendantFast(tb, btnSet)) continue;
+                string txt = (tb.Text ?? "").Trim();
+                if (txt.EndsWith("x", StringComparison.OrdinalIgnoreCase) || txt.Contains("px") || Regex.IsMatch(txt, @"^\d+\s*x$"))
+                    counterTb = tb;
+            }
+
+            SafeDetachElement(checkBox);
+            SafeDetachElement(colorBtn);
+            if (pinBtn != null) SafeDetachElement(pinBtn);
+            if (symbolBadge != null) SafeDetachElement(symbolBadge);
+            SafeDetachElement(nameBox);
+            SafeDetachElement(deleteBtn);
+            if (legendBox != null) SafeDetachElement(legendBox);
+            if (sizeSlider != null) SafeDetachElement(sizeSlider);
+            if (typeBtn != null) SafeDetachElement(typeBtn);
+            if (simplifyBtn != null) SafeDetachElement(simplifyBtn);
+            if (counterTb != null) SafeDetachElement(counterTb);
+
+            card.Background = new SolidColorBrush(Color.FromRgb(10, 24, 30));
+            card.BorderBrush = new SolidColorBrush(Color.FromRgb(24, 62, 74));
+            card.BorderThickness = new Thickness(1);
+            card.CornerRadius = new CornerRadius(6);
+            card.Padding = new Thickness(9, 7, 9, 7);
+            card.Margin = new Thickness(0, 0, 0, 6);
+
+            var mainStack = new StackPanel();
+
+            // WIERSZ 1: [Checkbox] [Kolor 22x22] [Pinezka 26x22] [Symbol] [Nazwa *] [Usun -]
+            var row1 = new Grid { Height = 26 };
+            row1.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            row1.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            row1.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            row1.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            row1.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            row1.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+            checkBox.VerticalAlignment = VerticalAlignment.Center;
+            checkBox.Margin = new Thickness(0, 0, 6, 0);
+            Grid.SetColumn(checkBox, 0);
+            row1.Children.Add(checkBox);
+
+            colorBtn.Width = 22;
+            colorBtn.Height = 22;
+            colorBtn.VerticalAlignment = VerticalAlignment.Center;
+            colorBtn.Margin = new Thickness(0, 0, 5, 0);
+            colorBtn.BorderBrush = new SolidColorBrush(Color.FromArgb(180, 255, 255, 255));
+            colorBtn.BorderThickness = new Thickness(1);
+            colorBtn.Cursor = Cursors.Hand;
+            Grid.SetColumn(colorBtn, 1);
+            row1.Children.Add(colorBtn);
+
+            if (pinBtn != null)
+            {
+                pinBtn.Width = 26;
+                pinBtn.Height = 22;
+                pinBtn.Padding = new Thickness(0);
+                pinBtn.Margin = new Thickness(0, 0, 5, 0);
+                pinBtn.VerticalAlignment = VerticalAlignment.Center;
+                pinBtn.HorizontalContentAlignment = HorizontalAlignment.Center;
+                pinBtn.VerticalContentAlignment = VerticalAlignment.Center;
+                pinBtn.Background = new SolidColorBrush(Color.FromRgb(7, 17, 21));
+                pinBtn.BorderBrush = TacticalConfigPanel.BrushAccent;
+                pinBtn.BorderThickness = new Thickness(1);
+                pinBtn.Foreground = TacticalConfigPanel.BrushAccent;
+                pinBtn.FontSize = 11;
+                if (string.IsNullOrWhiteSpace(ExtractPlainButtonText(pinBtn))) pinBtn.Content = "📍";
+                Grid.SetColumn(pinBtn, 2);
+                row1.Children.Add(pinBtn);
+            }
+
+            if (symbolBadge != null)
+            {
+                symbolBadge.Height = 22;
+                symbolBadge.MinWidth = 32;
+                symbolBadge.VerticalAlignment = VerticalAlignment.Center;
+                symbolBadge.Margin = new Thickness(0, 0, 6, 0);
+                Grid.SetColumn(symbolBadge, 3);
+                row1.Children.Add(symbolBadge);
+            }
+
+            nameBox.Height = 24;
+            nameBox.Width = double.NaN;
+            nameBox.MinWidth = 80;
+            nameBox.HorizontalAlignment = HorizontalAlignment.Stretch;
+            nameBox.VerticalAlignment = VerticalAlignment.Center;
+            nameBox.VerticalContentAlignment = VerticalAlignment.Center;
+            nameBox.Padding = new Thickness(6, 0, 6, 0);
+            nameBox.Margin = new Thickness(0, 0, 6, 0);
+            nameBox.Background = new SolidColorBrush(Color.FromRgb(7, 17, 21));
+            nameBox.Foreground = Brushes.White;
+            nameBox.CaretBrush = TacticalConfigPanel.BrushAccent;
+            nameBox.BorderBrush = TacticalConfigPanel.BrushAccent;
+            nameBox.BorderThickness = new Thickness(1);
+            nameBox.FontSize = 11;
+            nameBox.FontWeight = FontWeights.Bold;
+            Grid.SetColumn(nameBox, 4);
+            row1.Children.Add(nameBox);
+
+            deleteBtn.Width = 24;
+            deleteBtn.Height = 22;
+            deleteBtn.Padding = new Thickness(0);
+            deleteBtn.Margin = new Thickness(0);
+            deleteBtn.VerticalAlignment = VerticalAlignment.Center;
+            deleteBtn.HorizontalContentAlignment = HorizontalAlignment.Center;
+            deleteBtn.VerticalContentAlignment = VerticalAlignment.Center;
+            deleteBtn.Cursor = Cursors.Hand;
+            Grid.SetColumn(deleteBtn, 5);
+            row1.Children.Add(deleteBtn);
+
+            mainStack.Children.Add(row1);
+
+            // WIERSZ 2: W legendzie: [ Pole opisu w legendzie * ]
+            if (legendBox != null)
+            {
+                var row2 = new Grid { Margin = new Thickness(0, 5, 0, 0), Height = 24 };
+                row2.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(68) });
+                row2.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+
+                var lblLeg = new TextBlock
+                {
+                    Text = "W legendzie:",
+                    Foreground = TacticalConfigPanel.BrushMutedText,
+                    FontSize = 9.5,
+                    VerticalAlignment = VerticalAlignment.Center
+                };
+                Grid.SetColumn(lblLeg, 0);
+                row2.Children.Add(lblLeg);
+
+                legendBox.Height = 23;
+                legendBox.Width = double.NaN;
+                legendBox.HorizontalAlignment = HorizontalAlignment.Stretch;
+                legendBox.VerticalAlignment = VerticalAlignment.Center;
+                legendBox.VerticalContentAlignment = VerticalAlignment.Center;
+                legendBox.Padding = new Thickness(6, 0, 6, 0);
+                legendBox.Margin = new Thickness(0);
+                legendBox.Background = new SolidColorBrush(Color.FromRgb(7, 17, 21));
+                legendBox.Foreground = new SolidColorBrush(Color.FromRgb(215, 228, 232));
+                legendBox.CaretBrush = TacticalConfigPanel.BrushAccent;
+                legendBox.BorderBrush = new SolidColorBrush(Color.FromRgb(22, 56, 68));
+                legendBox.BorderThickness = new Thickness(1);
+                legendBox.FontSize = 10.5;
+                legendBox.ToolTip = null;
+                Grid.SetColumn(legendBox, 1);
+                row2.Children.Add(legendBox);
+
+                mainStack.Children.Add(row2);
+            }
+
+            // WIERSZ 3: Wielkosc (Slider) LUB Narzedzia Geometrii (Typ + Uprosc + 12x)
+            if (sizeSlider != null || typeBtn != null || simplifyBtn != null || counterTb != null)
+            {
+                var row3 = new Grid { Margin = new Thickness(0, 5, 0, 0), Height = 24 };
+                row3.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(68) });
+                row3.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+                row3.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+                var lblRow3 = new TextBlock
+                {
+                    Text = sizeSlider != null ? "Wielkość:" : "Geometria:",
+                    Foreground = TacticalConfigPanel.BrushMutedText,
+                    FontSize = 9.5,
+                    VerticalAlignment = VerticalAlignment.Center
+                };
+                Grid.SetColumn(lblRow3, 0);
+                row3.Children.Add(lblRow3);
+
+                if (sizeSlider != null)
+                {
+                    sizeSlider.VerticalAlignment = VerticalAlignment.Center;
+                    sizeSlider.Margin = new Thickness(0, 0, 8, 0);
+                    Grid.SetColumn(sizeSlider, 1);
+                    row3.Children.Add(sizeSlider);
+                }
+                else
+                {
+                    var actionsBar = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+                    if (typeBtn != null)
+                    {
+                        typeBtn.Width = double.NaN;
+                        typeBtn.Height = 22;
+                        typeBtn.Padding = new Thickness(8, 0, 8, 0);
+                        typeBtn.Margin = new Thickness(0, 0, 6, 0);
+                        typeBtn.Background = new SolidColorBrush(Color.FromRgb(7, 17, 21));
+                        typeBtn.Foreground = TacticalConfigPanel.BrushAccent;
+                        typeBtn.BorderBrush = TacticalConfigPanel.BrushAccent;
+                        typeBtn.BorderThickness = new Thickness(1);
+                        typeBtn.FontSize = 9.5;
+                        typeBtn.FontWeight = FontWeights.SemiBold;
+                        typeBtn.Content = "🔁 Zmień typ (AO/Sektor/Trasa)";
+                        typeBtn.Cursor = Cursors.Hand;
+                        actionsBar.Children.Add(typeBtn);
+                    }
+                    if (simplifyBtn != null)
+                    {
+                        simplifyBtn.Width = double.NaN;
+                        simplifyBtn.Height = 22;
+                        simplifyBtn.Padding = new Thickness(8, 0, 8, 0);
+                        simplifyBtn.Margin = new Thickness(0, 0, 6, 0);
+                        simplifyBtn.Background = new SolidColorBrush(Color.FromRgb(7, 17, 21));
+                        simplifyBtn.Foreground = Brushes.White;
+                        simplifyBtn.BorderBrush = new SolidColorBrush(Color.FromRgb(28, 74, 88));
+                        simplifyBtn.BorderThickness = new Thickness(1);
+                        simplifyBtn.FontSize = 9.5;
+                        simplifyBtn.Content = "✂️ Uprość kształt";
+                        simplifyBtn.Cursor = Cursors.Hand;
+                        actionsBar.Children.Add(simplifyBtn);
+                    }
+                    Grid.SetColumn(actionsBar, 1);
+                    row3.Children.Add(actionsBar);
+                }
+
+                if (counterTb != null)
+                {
+                    counterTb.VerticalAlignment = VerticalAlignment.Center;
+                    counterTb.Foreground = TacticalConfigPanel.BrushAccent;
+                    counterTb.FontSize = 10;
+                    counterTb.FontWeight = FontWeights.Bold;
+                    counterTb.FontFamily = new FontFamily("Consolas");
+                    counterTb.Margin = new Thickness(4, 0, 0, 0);
+                    Grid.SetColumn(counterTb, 2);
+                    row3.Children.Add(counterTb);
+                }
+
+                mainStack.Children.Add(row3);
+            }
+
+            card.Child = mainStack;
+        }
+
+        private static void CollectLogicalChildrenBounded(DependencyObject parent, List<DependencyObject> list, HashSet<DependencyObject> visited, int depth)
+        {
+            if (parent == null || depth > 5 || !visited.Add(parent)) return;
+            if (parent is Panel pnl)
+            {
+                foreach (UIElement ch in pnl.Children)
+                {
+                    if (ch != null)
+                    {
+                        list.Add(ch);
+                        CollectLogicalChildrenBounded(ch, list, visited, depth + 1);
+                    }
+                }
+            }
+            else if (parent is Decorator dec && dec.Child != null)
+            {
+                list.Add(dec.Child);
+                CollectLogicalChildrenBounded(dec.Child, list, visited, depth + 1);
+            }
+        }
+
+        private static bool IsDescendantFast(DependencyObject node, HashSet<DependencyObject> targets)
+        {
+            DependencyObject cur = node;
+            for (int i = 0; i < 8 && cur != null; i++)
+            {
+                if (targets.Contains(cur)) return true;
+                cur = LogicalTreeHelper.GetParent(cur);
+            }
+            return false;
+        }
+
+        private static string ExtractPlainButtonText(Button b)
+        {
+            if (b == null || b.Content == null) return "";
+            if (b.Content is string s) return s;
+            if (b.Content is TextBlock tb) return tb.Text ?? "";
+            return b.Content.ToString() ?? "";
+        }
 
         private static string GetWgs84LegendSubtitleSummary()
         {
@@ -85,7 +436,7 @@ namespace FieldTakHub.Builder.Services
                 }
                 else
                 {
-                    RedrawVectorsOnly();
+                    __REDRAW_CALL__;
                 }
             }
             catch { }
@@ -108,8 +459,7 @@ namespace FieldTakHub.Builder.Services
                     {
                         if (child is Border legBorder && legBorder.Child is StackPanel ls && ls.Children.Count > 1)
                         {
-                            if (ls.Children[1] is TextBlock subTb)
-                                subTb.Text = expectedSub;
+                            if (ls.Children[1] is TextBlock subTb) subTb.Text = expectedSub;
                         }
                     }
                 }
@@ -177,7 +527,7 @@ namespace FieldTakHub.Builder.Services
             var win = new Window
             {
                 Title = "Customizacja i Kalibracja Siatki WGS84 (Lat / Lon)",
-                Width = 440,
+                Width = 460,
                 SizeToContent = SizeToContent.Height,
                 WindowStartupLocation = WindowStartupLocation.CenterOwner,
                 Owner = owner,
@@ -189,6 +539,21 @@ namespace FieldTakHub.Builder.Services
             var panel = BuildWgs84CustomizationPanel(isModalDialog: true);
             panel.Visibility = Visibility.Visible;
             root.Children.Add(panel);
+
+            var closeBtn = new Button
+            {
+                Content = "✓ ZAMKNIJ OKNO KALIBRACJI WGS84",
+                Height = 32,
+                Margin = new Thickness(0, 10, 0, 0),
+                Background = TacticalConfigPanel.BrushAccent,
+                Foreground = new SolidColorBrush(Color.FromRgb(6, 14, 18)),
+                BorderThickness = new Thickness(0),
+                FontWeight = FontWeights.Bold,
+                Cursor = Cursors.Hand
+            };
+            closeBtn.Click += (s, e) => win.Close();
+            root.Children.Add(closeBtn);
+
             win.Content = root;
             win.ShowDialog();
         }
@@ -226,21 +591,22 @@ namespace FieldTakHub.Builder.Services
             if (!isModalDialog) _wgs84ActiveStepStatusText = statusTb;
             sp.Children.Add(statusTb);
 
-            sp.Children.Add(new TextBlock { Text = "Format współrzędnych na ramce:", Foreground = TacticalConfigPanel.BrushMutedText, FontSize = 9.5, Margin = new Thickness(0, 1, 0, 2) });
-            var cbFormat = new ComboBox { Height = 26, FontSize = 10.5, Margin = new Thickness(0, 0, 0, 6) };
+            sp.Children.Add(CreateFieldLabel("Format zapisu współrzędnych na ramce:"));
             string[] formats = new[]
             {
                 "DMS (49°50'58\"N) — Stopnie Minuty Sekundy",
                 "DM (49°50.97'N) — Stopnie i Minuty dziesiętne",
                 "DD (49.8494°N) — Stopnie dziesiętne"
             };
-            foreach (var f in formats) cbFormat.Items.Add(f);
-            cbFormat.SelectedItem = formats.FirstOrDefault(x => x == _wgs84FormatPreset) ?? formats[0];
-            cbFormat.SelectionChanged += (s, e) => { if (cbFormat.SelectedItem is string v) { _wgs84FormatPreset = v; TriggerWgs84Redraw(); } };
-            sp.Children.Add(cbFormat);
+            sp.Children.Add(CreateDarkTacticalComboBox(formats, _wgs84FormatPreset, val => { _wgs84FormatPreset = val; TriggerWgs84Redraw(); }));
 
-            sp.Children.Add(new TextBlock { Text = "Gęstość linii (Krok WGS84):", Foreground = TacticalConfigPanel.BrushMutedText, FontSize = 9.5, Margin = new Thickness(0, 1, 0, 2) });
-            var cbStep = new ComboBox { Height = 26, FontSize = 10.5, Margin = new Thickness(0, 0, 0, 6) };
+            var row2Grid = new Grid { Margin = new Thickness(0, 0, 0, 2) };
+            row2Grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1.15, GridUnitType.Star) });
+            row2Grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(8) });
+            row2Grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1.0, GridUnitType.Star) });
+
+            var colStep = new StackPanel();
+            colStep.Children.Add(CreateFieldLabel("Gęstość linii (Krok WGS84):"));
             string[] steps = new[]
             {
                 "Auto (dostosuj do skali mapy)",
@@ -256,26 +622,393 @@ namespace FieldTakHub.Builder.Services
                 "0.0020° (co 0.002 stopnia ~222 m)",
                 "0.0050° (co 0.005 stopnia ~555 m)"
             };
-            foreach (var st in steps) cbStep.Items.Add(st);
-            cbStep.SelectedItem = steps.FirstOrDefault(x => x == _wgs84StepPreset) ?? steps[0];
-            cbStep.SelectionChanged += (s, e) => { if (cbStep.SelectedItem is string v) { _wgs84StepPreset = v; TriggerWgs84Redraw(); } };
-            sp.Children.Add(cbStep);
+            colStep.Children.Add(CreateDarkTacticalComboBox(steps, _wgs84StepPreset, val => { _wgs84StepPreset = val; TriggerWgs84Redraw(); }));
+            Grid.SetColumn(colStep, 0);
+            row2Grid.Children.Add(colStep);
 
-            sp.Children.Add(new TextBlock { Text = "Podział wewnętrzny oczka:", Foreground = TacticalConfigPanel.BrushMutedText, FontSize = 9.5, Margin = new Thickness(0, 1, 0, 2) });
-            var cbSub = new ComboBox { Height = 26, FontSize = 10.5, Margin = new Thickness(0, 0, 0, 6) };
+            var colSub = new StackPanel();
+            colSub.Children.Add(CreateFieldLabel("Podział wewnętrzny oczka:"));
             string[] subs = new[] { "Brak podziału", "Krzyżyki w środku (+)", "Podsiatka 2x2 (4 ćwiartki)", "Podsiatka 5x5 (25 pól)" };
-            foreach (var sb in subs) cbSub.Items.Add(sb);
-            cbSub.SelectedItem = subs.FirstOrDefault(x => x == _wgs84SubGridPreset) ?? subs[1];
-            cbSub.SelectionChanged += (s, e) => { if (cbSub.SelectedItem is string v) { _wgs84SubGridPreset = v; TriggerWgs84Redraw(); } };
-            sp.Children.Add(cbSub);
+            colSub.Children.Add(CreateDarkTacticalComboBox(subs, _wgs84SubGridPreset, val => { _wgs84SubGridPreset = val; TriggerWgs84Redraw(); }));
+            Grid.SetColumn(colSub, 2);
+            row2Grid.Children.Add(colSub);
+            sp.Children.Add(row2Grid);
+
+            var chkSnap = new CheckBox
+            {
+                Content = "Kotwicz linie do pełnych sekund/stopni GPS (rzeczywista siatka)",
+                IsChecked = _wgs84SnapToTrueGeo,
+                Foreground = Brushes.White,
+                FontSize = 10,
+                Margin = new Thickness(0, 2, 0, 6)
+            };
+            chkSnap.Checked += (s, e) => { _wgs84SnapToTrueGeo = true; TriggerWgs84Redraw(); };
+            chkSnap.Unchecked += (s, e) => { _wgs84SnapToTrueGeo = false; TriggerWgs84Redraw(); };
+            sp.Children.Add(chkSnap);
+
+            sp.Children.Add(new Border { Height = 1, Background = new SolidColorBrush(Color.FromRgb(22, 56, 68)), Margin = new Thickness(0, 2, 0, 6) });
+            sp.Children.Add(new TextBlock
+            {
+                Text = "Kalibracja na żywo (Przesunięcie N/S, E/W oraz Skala %):",
+                Foreground = TacticalConfigPanel.BrushAccent,
+                FontSize = 9.8,
+                FontWeight = FontWeights.SemiBold,
+                Margin = new Thickness(0, 0, 0, 4)
+            });
+
+            var calTable = new Grid { Margin = new Thickness(0, 0, 0, 4) };
+            calTable.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            calTable.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(8) });
+            calTable.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+
+            var spN = new StackPanel();
+            spN.Children.Add(CreateFieldLabel("Przesunięcie Północ/Południe (m):"));
+            var tbN = CreateDarkTextBox(_wgs84OffsetNorthMeters.ToString("0.#", CultureInfo.InvariantCulture));
+            if (!isModalDialog) _wgs84OffsetNBox = tbN;
+            tbN.TextChanged += (s, e) =>
+            {
+                if (_suppressWgs84LiveTextEvents) return;
+                if (double.TryParse(tbN.Text.Replace(',', '.'), NumberStyles.Float, CultureInfo.InvariantCulture, out double vN))
+                {
+                    _wgs84OffsetNorthMeters = Math.Clamp(vN, -50000.0, 50000.0);
+                    TriggerWgs84Redraw();
+                }
+            };
+            spN.Children.Add(tbN);
+
+            var nudgeN = new UniformGrid { Columns = 4, Margin = new Thickness(0, 3, 0, 0) };
+            foreach (double delta in new[] { -25.0, -5.0, 5.0, 25.0 })
+            {
+                double d = delta;
+                nudgeN.Children.Add(CreateMiniNudgeButton(d > 0 ? $"+{d:0}m" : $"{d:0}m", () =>
+                {
+                    _suppressWgs84LiveTextEvents = true;
+                    _wgs84OffsetNorthMeters += d;
+                    string sVal = _wgs84OffsetNorthMeters.ToString("0.#", CultureInfo.InvariantCulture);
+                    tbN.Text = sVal;
+                    if (_wgs84OffsetNBox != null) _wgs84OffsetNBox.Text = sVal;
+                    _suppressWgs84LiveTextEvents = false;
+                    TriggerWgs84Redraw();
+                }));
+            }
+            spN.Children.Add(nudgeN);
+            Grid.SetColumn(spN, 0);
+            calTable.Children.Add(spN);
+
+            var spE = new StackPanel();
+            spE.Children.Add(CreateFieldLabel("Przesunięcie Wschód/Zachód (m):"));
+            var tbE = CreateDarkTextBox(_wgs84OffsetEastMeters.ToString("0.#", CultureInfo.InvariantCulture));
+            if (!isModalDialog) _wgs84OffsetEBox = tbE;
+            tbE.TextChanged += (s, e) =>
+            {
+                if (_suppressWgs84LiveTextEvents) return;
+                if (double.TryParse(tbE.Text.Replace(',', '.'), NumberStyles.Float, CultureInfo.InvariantCulture, out double vE))
+                {
+                    _wgs84OffsetEastMeters = Math.Clamp(vE, -50000.0, 50000.0);
+                    TriggerWgs84Redraw();
+                }
+            };
+            spE.Children.Add(tbE);
+
+            var nudgeE = new UniformGrid { Columns = 4, Margin = new Thickness(0, 3, 0, 0) };
+            foreach (double delta in new[] { -25.0, -5.0, 5.0, 25.0 })
+            {
+                double d = delta;
+                nudgeE.Children.Add(CreateMiniNudgeButton(d > 0 ? $"+{d:0}m" : $"{d:0}m", () =>
+                {
+                    _suppressWgs84LiveTextEvents = true;
+                    _wgs84OffsetEastMeters += d;
+                    string sVal = _wgs84OffsetEastMeters.ToString("0.#", CultureInfo.InvariantCulture);
+                    tbE.Text = sVal;
+                    if (_wgs84OffsetEBox != null) _wgs84OffsetEBox.Text = sVal;
+                    _suppressWgs84LiveTextEvents = false;
+                    TriggerWgs84Redraw();
+                }));
+            }
+            spE.Children.Add(nudgeE);
+            Grid.SetColumn(spE, 2);
+            calTable.Children.Add(spE);
+            sp.Children.Add(calTable);
+
+            var scaleGrid = new Grid { Margin = new Thickness(0, 2, 0, 4) };
+            scaleGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            scaleGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(8) });
+            scaleGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+
+            var spSx = new StackPanel();
+            spSx.Children.Add(CreateFieldLabel("Korekta szerokości X (%):"));
+            var tbSx = CreateDarkTextBox(_wgs84ScaleXPercent.ToString("0.#", CultureInfo.InvariantCulture));
+            if (!isModalDialog) _wgs84ScaleXBox = tbSx;
+            tbSx.TextChanged += (s, e) =>
+            {
+                if (_suppressWgs84LiveTextEvents) return;
+                if (double.TryParse(tbSx.Text.Replace(',', '.'), NumberStyles.Float, CultureInfo.InvariantCulture, out double vSx) && vSx >= 20.0 && vSx <= 500.0)
+                {
+                    _wgs84ScaleXPercent = vSx;
+                    TriggerWgs84Redraw();
+                }
+            };
+            spSx.Children.Add(tbSx);
+            Grid.SetColumn(spSx, 0);
+            scaleGrid.Children.Add(spSx);
+
+            var spSy = new StackPanel();
+            spSy.Children.Add(CreateFieldLabel("Korekta wysokości Y (%):"));
+            var tbSy = CreateDarkTextBox(_wgs84ScaleYPercent.ToString("0.#", CultureInfo.InvariantCulture));
+            if (!isModalDialog) _wgs84ScaleYBox = tbSy;
+            tbSy.TextChanged += (s, e) =>
+            {
+                if (_suppressWgs84LiveTextEvents) return;
+                if (double.TryParse(tbSy.Text.Replace(',', '.'), NumberStyles.Float, CultureInfo.InvariantCulture, out double vSy) && vSy >= 20.0 && vSy <= 500.0)
+                {
+                    _wgs84ScaleYPercent = vSy;
+                    TriggerWgs84Redraw();
+                }
+            };
+            spSy.Children.Add(tbSy);
+            Grid.SetColumn(spSy, 2);
+            scaleGrid.Children.Add(spSy);
+            sp.Children.Add(scaleGrid);
+
+            sp.Children.Add(CreateFieldLabel("Współrzędne środka arkusza (WGS84 Lat N / Lon E):"));
+            var centerGrid = new Grid { Margin = new Thickness(0, 2, 0, 6) };
+            centerGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            centerGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(8) });
+            centerGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+
+            var tbLat = CreateDarkTextBox(_centerLat.ToString("F6", CultureInfo.InvariantCulture), isAccentText: true);
+            if (!isModalDialog) _wgs84CenterLatOverrideBox = tbLat;
+            Grid.SetColumn(tbLat, 0);
+            centerGrid.Children.Add(tbLat);
+
+            var tbLon = CreateDarkTextBox(_centerLon.ToString("F6", CultureInfo.InvariantCulture), isAccentText: true);
+            if (!isModalDialog) _wgs84CenterLonOverrideBox = tbLon;
+            Grid.SetColumn(tbLon, 2);
+            centerGrid.Children.Add(tbLon);
+            sp.Children.Add(centerGrid);
+
+            var btnRow = new Grid();
+            btnRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1.5, GridUnitType.Star) });
+            btnRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(6) });
+            btnRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+
+            var btnApply = new Button
+            {
+                Content = "✓ ZASTOSUJ WSPÓŁRZĘDNE ŚRODKA",
+                Height = 28,
+                Background = TacticalConfigPanel.BrushAccent,
+                Foreground = new SolidColorBrush(Color.FromRgb(6, 14, 18)),
+                BorderThickness = new Thickness(0),
+                FontWeight = FontWeights.Bold,
+                FontSize = 9.5,
+                Cursor = Cursors.Hand
+            };
+            btnApply.Click += (s, e) =>
+            {
+                if (double.TryParse(tbLat.Text.Replace(',', '.'), NumberStyles.Float, CultureInfo.InvariantCulture, out double nLat) && nLat >= -85.0 && nLat <= 85.0)
+                    _centerLat = nLat;
+                if (double.TryParse(tbLon.Text.Replace(',', '.'), NumberStyles.Float, CultureInfo.InvariantCulture, out double nLon) && nLon >= -180.0 && nLon <= 180.0)
+                    _centerLon = nLon;
+                TriggerWgs84Redraw();
+            };
+            Grid.SetColumn(btnApply, 0);
+            btnRow.Children.Add(btnApply);
+
+            var btnReset = new Button
+            {
+                Content = "↺ Reset (0m / 100%)",
+                Height = 28,
+                Background = new SolidColorBrush(Color.FromRgb(7, 17, 21)),
+                Foreground = Brushes.White,
+                BorderBrush = new SolidColorBrush(Color.FromRgb(22, 56, 68)),
+                BorderThickness = new Thickness(1),
+                FontSize = 9.5,
+                Cursor = Cursors.Hand
+            };
+            btnReset.Click += (s, e) =>
+            {
+                _suppressWgs84LiveTextEvents = true;
+                _wgs84OffsetNorthMeters = 0.0;
+                _wgs84OffsetEastMeters = 0.0;
+                _wgs84ScaleXPercent = 100.0;
+                _wgs84ScaleYPercent = 100.0;
+                tbN.Text = "0"; tbE.Text = "0"; tbSx.Text = "100"; tbSy.Text = "100";
+                if (_wgs84OffsetNBox != null) _wgs84OffsetNBox.Text = "0";
+                if (_wgs84OffsetEBox != null) _wgs84OffsetEBox.Text = "0";
+                if (_wgs84ScaleXBox != null) _wgs84ScaleXBox.Text = "100";
+                if (_wgs84ScaleYBox != null) _wgs84ScaleYBox.Text = "100";
+                _suppressWgs84LiveTextEvents = false;
+                TriggerWgs84Redraw();
+            };
+            Grid.SetColumn(btnReset, 2);
+            btnRow.Children.Add(btnReset);
+            sp.Children.Add(btnRow);
 
             card.Child = sp;
             return card;
         }
 
-        // ====================================================================
-        // SZYBKIE O(1) CZYSZCZENIE I RENDEROWANIE POJEDYNCZEJ SIATKI WGS84
-        // ====================================================================
+        private static TextBlock CreateFieldLabel(string text)
+        {
+            return new TextBlock { Text = text, Foreground = TacticalConfigPanel.BrushMutedText, FontSize = 9.5, Margin = new Thickness(0, 1, 0, 2) };
+        }
+
+        private static TextBox CreateDarkTextBox(string initialText, bool isAccentText = false)
+        {
+            return new TextBox
+            {
+                Text = initialText,
+                Height = 25,
+                Background = new SolidColorBrush(Color.FromRgb(7, 17, 21)),
+                Foreground = isAccentText ? TacticalConfigPanel.BrushAccent : Brushes.White,
+                CaretBrush = TacticalConfigPanel.BrushAccent,
+                BorderBrush = new SolidColorBrush(Color.FromRgb(22, 56, 68)),
+                BorderThickness = new Thickness(1),
+                VerticalContentAlignment = VerticalAlignment.Center,
+                Padding = new Thickness(6, 0, 6, 0),
+                FontSize = 10.5,
+                FontWeight = isAccentText ? FontWeights.SemiBold : FontWeights.Normal
+            };
+        }
+
+        private static ComboBox CreateDarkTacticalComboBox(IEnumerable<string> items, string selectedItem, Action<string> onChanged)
+        {
+            var cb = new ComboBox { Height = 27, FontSize = 10.5, Margin = new Thickness(0, 0, 0, 6) };
+            ApplyDarkTacticalComboBoxTemplate(cb);
+
+            string matched = null;
+            foreach (var item in items) { cb.Items.Add(item); if (item == selectedItem) matched = item; }
+            cb.SelectedItem = matched ?? cb.Items.Cast<object>().FirstOrDefault();
+            cb.SelectionChanged += (s, e) => { if (cb.SelectedItem is string val) onChanged?.Invoke(val); };
+            return cb;
+        }
+
+        private static void ApplyDarkTacticalComboBoxTemplate(ComboBox cb)
+        {
+            var bgBrush = new SolidColorBrush(Color.FromRgb(7, 17, 21));
+            var popupBgBrush = new SolidColorBrush(Color.FromRgb(10, 24, 30));
+            var borderBrush = new SolidColorBrush(Color.FromRgb(22, 56, 68));
+            var accentBrush = TacticalConfigPanel.BrushAccent;
+
+            cb.Background = bgBrush;
+            cb.Foreground = Brushes.White;
+            cb.BorderBrush = borderBrush;
+            cb.BorderThickness = new Thickness(1);
+
+            var itemStyle = new Style(typeof(ComboBoxItem));
+            itemStyle.Setters.Add(new Setter(Control.BackgroundProperty, popupBgBrush));
+            itemStyle.Setters.Add(new Setter(Control.ForegroundProperty, Brushes.White));
+            itemStyle.Setters.Add(new Setter(Control.BorderThicknessProperty, new Thickness(0)));
+            itemStyle.Setters.Add(new Setter(Control.PaddingProperty, new Thickness(8, 5, 8, 5)));
+
+            var hoverTrigger = new Trigger { Property = UIElement.IsMouseOverProperty, Value = true };
+            hoverTrigger.Setters.Add(new Setter(Control.BackgroundProperty, new SolidColorBrush(Color.FromRgb(18, 48, 58))));
+            hoverTrigger.Setters.Add(new Setter(Control.ForegroundProperty, accentBrush));
+            itemStyle.Triggers.Add(hoverTrigger);
+
+            var selTrigger = new Trigger { Property = ListBoxItem.IsSelectedProperty, Value = true };
+            selTrigger.Setters.Add(new Setter(Control.BackgroundProperty, new SolidColorBrush(Color.FromRgb(14, 40, 48))));
+            selTrigger.Setters.Add(new Setter(Control.ForegroundProperty, accentBrush));
+            itemStyle.Triggers.Add(selTrigger);
+            cb.ItemContainerStyle = itemStyle;
+
+            var template = new ControlTemplate(typeof(ComboBox));
+            var rootGrid = new FrameworkElementFactory(typeof(Grid));
+
+            var toggleBtn = new FrameworkElementFactory(typeof(ToggleButton));
+            toggleBtn.SetValue(Control.BackgroundProperty, bgBrush);
+            toggleBtn.SetValue(Control.BorderBrushProperty, borderBrush);
+            toggleBtn.SetValue(Control.BorderThicknessProperty, new Thickness(1));
+            toggleBtn.SetValue(ToggleButton.FocusableProperty, false);
+            toggleBtn.SetValue(ToggleButton.ClickModeProperty, ClickMode.Press);
+            toggleBtn.SetBinding(ToggleButton.IsCheckedProperty, new System.Windows.Data.Binding("IsDropDownOpen")
+            {
+                RelativeSource = new System.Windows.Data.RelativeSource(System.Windows.Data.RelativeSourceMode.TemplatedParent),
+                Mode = System.Windows.Data.BindingMode.TwoWay
+            });
+
+            var tbTemplate = new ControlTemplate(typeof(ToggleButton));
+            var tbBorder = new FrameworkElementFactory(typeof(Border));
+            tbBorder.SetValue(Border.BackgroundProperty, bgBrush);
+            tbBorder.SetValue(Border.BorderBrushProperty, borderBrush);
+            tbBorder.SetValue(Border.BorderThicknessProperty, new Thickness(1));
+            tbBorder.SetValue(Border.CornerRadiusProperty, new CornerRadius(4));
+
+            var arrowText = new FrameworkElementFactory(typeof(TextBlock));
+            arrowText.SetValue(TextBlock.TextProperty, "▾");
+            arrowText.SetValue(TextBlock.ForegroundProperty, accentBrush);
+            arrowText.SetValue(TextBlock.FontSizeProperty, 11.0);
+            arrowText.SetValue(FrameworkElement.HorizontalAlignmentProperty, HorizontalAlignment.Right);
+            arrowText.SetValue(FrameworkElement.VerticalAlignmentProperty, VerticalAlignment.Center);
+            arrowText.SetValue(FrameworkElement.MarginProperty, new Thickness(0, 0, 8, 0));
+            tbBorder.AppendChild(arrowText);
+            tbTemplate.VisualTree = tbBorder;
+            toggleBtn.SetValue(Control.TemplateProperty, tbTemplate);
+            rootGrid.AppendChild(toggleBtn);
+
+            var contentPres = new FrameworkElementFactory(typeof(ContentPresenter));
+            contentPres.SetValue(FrameworkElement.NameProperty, "ContentSite");
+            contentPres.SetValue(UIElement.IsHitTestVisibleProperty, false);
+            contentPres.SetValue(ContentPresenter.ContentProperty, new TemplateBindingExtension(ComboBox.SelectionBoxItemProperty));
+            contentPres.SetValue(ContentPresenter.ContentTemplateProperty, new TemplateBindingExtension(ComboBox.SelectionBoxItemTemplateProperty));
+            contentPres.SetValue(ContentPresenter.ContentStringFormatProperty, new TemplateBindingExtension(ComboBox.SelectionBoxItemStringFormatProperty));
+            contentPres.SetValue(FrameworkElement.MarginProperty, new Thickness(8, 3, 24, 3));
+            contentPres.SetValue(FrameworkElement.VerticalAlignmentProperty, VerticalAlignment.Center);
+            contentPres.SetValue(FrameworkElement.HorizontalAlignmentProperty, HorizontalAlignment.Left);
+            rootGrid.AppendChild(contentPres);
+
+            var popup = new FrameworkElementFactory(typeof(Popup));
+            popup.SetValue(FrameworkElement.NameProperty, "Popup");
+            popup.SetValue(Popup.PlacementProperty, PlacementMode.Bottom);
+            popup.SetValue(Popup.AllowsTransparencyProperty, true);
+            popup.SetValue(Popup.FocusableProperty, false);
+            popup.SetValue(Popup.PopupAnimationProperty, PopupAnimation.Slide);
+            popup.SetBinding(Popup.IsOpenProperty, new System.Windows.Data.Binding("IsDropDownOpen")
+            {
+                RelativeSource = new System.Windows.Data.RelativeSource(System.Windows.Data.RelativeSourceMode.TemplatedParent)
+            });
+
+            var dropBorder = new FrameworkElementFactory(typeof(Border));
+            dropBorder.SetValue(Border.BackgroundProperty, popupBgBrush);
+            dropBorder.SetValue(Border.BorderBrushProperty, accentBrush);
+            dropBorder.SetValue(Border.BorderThicknessProperty, new Thickness(1));
+            dropBorder.SetValue(Border.CornerRadiusProperty, new CornerRadius(4));
+            dropBorder.SetBinding(FrameworkElement.MinWidthProperty, new System.Windows.Data.Binding("ActualWidth")
+            {
+                RelativeSource = new System.Windows.Data.RelativeSource(System.Windows.Data.RelativeSourceMode.TemplatedParent)
+            });
+            dropBorder.SetValue(FrameworkElement.MaxHeightProperty, 260.0);
+
+            var scrollViewer = new FrameworkElementFactory(typeof(ScrollViewer));
+            scrollViewer.SetValue(ScrollViewer.CanContentScrollProperty, true);
+            scrollViewer.AppendChild(new FrameworkElementFactory(typeof(ItemsPresenter)));
+            dropBorder.AppendChild(scrollViewer);
+            popup.AppendChild(dropBorder);
+            rootGrid.AppendChild(popup);
+
+            template.VisualTree = rootGrid;
+            template.Seal();
+            cb.Template = template;
+        }
+
+        private static Button CreateMiniNudgeButton(string label, Action onClick)
+        {
+            var b = new Button
+            {
+                Content = label,
+                Height = 20,
+                Margin = new Thickness(1, 0, 1, 0),
+                Background = new SolidColorBrush(Color.FromRgb(7, 17, 21)),
+                Foreground = TacticalConfigPanel.BrushAccent,
+                BorderBrush = new SolidColorBrush(Color.FromRgb(22, 56, 68)),
+                BorderThickness = new Thickness(1),
+                FontSize = 9,
+                Cursor = Cursors.Hand
+            };
+            b.Click += (s, e) => onClick();
+            return b;
+        }
+
         private static List<Canvas> GetAllMapSheetCanvasesFast()
         {
             var list = new List<Canvas>();

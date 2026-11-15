@@ -1,1 +1,1 @@
-Field TAK Hub Step 1 Unfreeze Map Generator & Fast WGS84 Grid UTC: 2026-11-15T07:27:31.3103372Z | RunId: a6d85f56952645a2b347e4336d39334e
+Field TAK Hub Step 2 Dark ComboBox UI, Live WGS84 Calibration & 3-Row Object Table UTC: 2026-11-15T07:54:27.4611493Z | RunId: 393c77a51c16458d9261c00ece098333
