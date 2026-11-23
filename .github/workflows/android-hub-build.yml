@@ -1,0 +1,242 @@
+# Field TAK Hub - kompilacja aplikacji Android w GitHub Actions.
+#
+# Uruchamianie:
+#   * FTH_BUILD_ALL_IN_ONE.bat (workflow_dispatch z wejsciami ponizej),
+#   * push na main ze zmianami w apps/android-hub/**,
+#   * pull request ze zmianami w apps/android-hub/**.
+#
+# Sekrety (opcjonalne, ustawia je FTH_BUILD_ALL_IN_ONE.bat):
+#   ANDROID_DEBUG_KEYSTORE_BASE64     staly klucz debug -> aktualizacja APK bez odinstalowania
+#   ANDROID_RELEASE_KEYSTORE_BASE64   magazyn kluczy release (PKCS12, Base64)
+#   ANDROID_RELEASE_KEYSTORE_PASSWORD haslo magazynu
+#   ANDROID_RELEASE_KEY_ALIAS         alias klucza
+#   ANDROID_RELEASE_KEY_PASSWORD      (opcjonalnie) haslo klucza, domyslnie = haslo magazynu
+
+name: Android Hub build
+
+on:
+  workflow_dispatch:
+    inputs:
+      project_dir:
+        description: "Katalog projektu Android (z settings.gradle.kts), wzgledem repozytorium"
+        required: true
+        default: "apps/android-hub"
+        type: string
+      build_type:
+        description: "Wariant"
+        required: true
+        default: "debug"
+        type: choice
+        options:
+          - debug
+          - release
+      gradle_version:
+        description: "Wersja Gradle tylko dla projektu bez gradlew (stary apps/mobile: 8.5)"
+        required: false
+        default: "8.5"
+        type: string
+      java_version:
+        description: "Wersja JDK"
+        required: false
+        default: "17"
+        type: string
+      lint:
+        description: "Uruchom Android Lint"
+        required: false
+        default: false
+        type: boolean
+  push:
+    branches: [main]
+    paths:
+      - "apps/android-hub/**"
+  pull_request:
+    paths:
+      - "apps/android-hub/**"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-hub-${{ github.event_name }}-${{ github.ref }}-${{ inputs.build_type || 'debug' }}-${{ inputs.project_dir || 'apps/android-hub' }}
+  cancel-in-progress: true
+
+env:
+  PROJECT_DIR: ${{ inputs.project_dir || 'apps/android-hub' }}
+  BUILD_TYPE: ${{ inputs.build_type || 'debug' }}
+  GRADLE_VERSION: ${{ inputs.gradle_version || '8.5' }}
+  JAVA_VERSION: ${{ inputs.java_version || '17' }}
+  RUN_LINT: ${{ inputs.lint && 'true' || 'false' }}
+
+jobs:
+  build:
+    name: APK ${{ inputs.build_type || 'debug' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Sprawdz projekt i wariant
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "$BUILD_TYPE" in
+            debug|release) ;;
+            *) echo "::error::build_type musi byc debug albo release"; exit 1 ;;
+          esac
+          case "$PROJECT_DIR" in
+            /*|*..*) echo "::error::Niedozwolona sciezka projektu: $PROJECT_DIR"; exit 1 ;;
+          esac
+          if [ ! -f "$PROJECT_DIR/settings.gradle.kts" ] && [ ! -f "$PROJECT_DIR/settings.gradle" ]; then
+            echo "::error::Brak settings.gradle(.kts) w katalogu $PROJECT_DIR"
+            exit 1
+          fi
+          if [ -f "$PROJECT_DIR/gradlew" ]; then
+            echo "USE_WRAPPER=true" >> "$GITHUB_ENV"
+          else
+            echo "USE_WRAPPER=false" >> "$GITHUB_ENV"
+            echo "::notice::Projekt bez Gradle Wrapper - uzywam Gradle $GRADLE_VERSION"
+          fi
+          echo "VARIANT=${BUILD_TYPE^}" >> "$GITHUB_ENV"
+
+      - name: JDK ${{ env.JAVA_VERSION }}
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+
+      - name: Gradle (wrapper projektu)
+        if: env.USE_WRAPPER == 'true'
+        uses: gradle/actions/setup-gradle@v6
+
+      - name: Gradle ${{ env.GRADLE_VERSION }} (projekt bez wrappera)
+        if: env.USE_WRAPPER != 'true'
+        uses: gradle/actions/setup-gradle@v6
+        with:
+          gradle-version: ${{ env.GRADLE_VERSION }}
+
+      - name: Staly klucz debug z sekretu
+        if: env.BUILD_TYPE == 'debug'
+        shell: bash
+        env:
+          DEBUG_KS_B64: ${{ secrets.ANDROID_DEBUG_KEYSTORE_BASE64 }}
+        run: |
+          set -euo pipefail
+          if [ -z "${DEBUG_KS_B64:-}" ]; then
+            echo "::warning::Brak sekretu ANDROID_DEBUG_KEYSTORE_BASE64 - kazdy build ma inny podpis i aktualizacja na telefonie wymaga odinstalowania. Uruchom raz: FTH_BUILD_ALL_IN_ONE.bat setup-debug-key"
+            exit 0
+          fi
+          dirs=("$HOME/.android")
+          if [ -n "${ANDROID_USER_HOME:-}" ]; then dirs+=("$ANDROID_USER_HOME"); fi
+          if [ -n "${ANDROID_SDK_HOME:-}" ]; then dirs+=("$ANDROID_SDK_HOME/.android"); fi
+          for d in "${dirs[@]}"; do
+            mkdir -p "$d"
+            printf '%s' "$DEBUG_KS_B64" | tr -d '\r\n ' | base64 -d > "$d/debug.keystore"
+          done
+          echo "Uzyto stalego klucza debug z sekretu."
+
+      - name: Build ${{ env.BUILD_TYPE }} i testy jednostkowe
+        working-directory: ${{ env.PROJECT_DIR }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "$USE_WRAPPER" = "true" ]; then
+            chmod +x ./gradlew
+            GRADLE=./gradlew
+          else
+            GRADLE=gradle
+          fi
+          tasks=("assemble${VARIANT}" "test${VARIANT}UnitTest")
+          if [ "$RUN_LINT" = "true" ]; then tasks+=("lint${VARIANT}"); fi
+          "$GRADLE" --no-daemon --stacktrace "${tasks[@]}"
+
+      - name: Podpis release (zipalign + apksigner)
+        if: env.BUILD_TYPE == 'release'
+        shell: bash
+        env:
+          KS_B64: ${{ secrets.ANDROID_RELEASE_KEYSTORE_BASE64 }}
+          KS_PASS: ${{ secrets.ANDROID_RELEASE_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_RELEASE_KEY_ALIAS }}
+          KEY_PASS: ${{ secrets.ANDROID_RELEASE_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [ -z "${KS_B64:-}" ] || [ -z "${KS_PASS:-}" ] || [ -z "${KEY_ALIAS:-}" ]; then
+            echo "::error::Brak sekretow release. Uruchom raz: FTH_BUILD_ALL_IN_ONE.bat setup-release-key"
+            exit 1
+          fi
+          export KS_PASS
+          export KEY_PASS="${KEY_PASS:-$KS_PASS}"
+          BT="$(ls -d "$ANDROID_HOME"/build-tools/*/ | sort -V | tail -n 1)"
+          KS="$RUNNER_TEMP/release.p12"
+          printf '%s' "$KS_B64" | tr -d '\r\n ' | base64 -d > "$KS"
+          OUT="$RUNNER_TEMP/signed"
+          mkdir -p "$OUT"
+          mapfile -t apks < <(find "$PROJECT_DIR" -path '*/build/outputs/apk/*' -path '*/release/*' -name '*.apk' | sort)
+          if [ "${#apks[@]}" -eq 0 ]; then
+            echo "::error::Nie znaleziono APK release"
+            rm -f "$KS"
+            exit 1
+          fi
+          for apk in "${apks[@]}"; do
+            base="$(basename "$apk" .apk)"
+            if "${BT}apksigner" verify "$apk" > /dev/null 2>&1; then
+              echo "APK juz podpisany przez Gradle: $apk"
+              cp "$apk" "$OUT/$base.apk"
+            else
+              "${BT}zipalign" -p -f 4 "$apk" "$RUNNER_TEMP/aligned.apk"
+              "${BT}apksigner" sign --ks "$KS" --ks-pass env:KS_PASS \
+                --ks-key-alias "$KEY_ALIAS" --key-pass env:KEY_PASS \
+                --out "$OUT/${base%-unsigned}-signed.apk" "$RUNNER_TEMP/aligned.apk"
+            fi
+          done
+          rm -f "$KS" "$RUNNER_TEMP/aligned.apk"
+
+      - name: Zbierz APK, SHA-256 i certyfikat podpisu
+        shell: bash
+        run: |
+          set -euo pipefail
+          DIST="$RUNNER_TEMP/dist"
+          mkdir -p "$DIST"
+          if [ "$BUILD_TYPE" = "release" ]; then
+            cp "$RUNNER_TEMP"/signed/*.apk "$DIST"/
+          else
+            mapfile -t apks < <(find "$PROJECT_DIR" -path '*/build/outputs/apk/*' -path '*/debug/*' -name '*.apk' | sort)
+            if [ "${#apks[@]}" -eq 0 ]; then
+              echo "::error::Nie znaleziono APK debug"
+              exit 1
+            fi
+            cp "${apks[@]}" "$DIST"/
+          fi
+          BT="$(ls -d "$ANDROID_HOME"/build-tools/*/ | sort -V | tail -n 1)"
+          cd "$DIST"
+          sha256sum ./*.apk > SHA256SUMS.txt
+          {
+            echo "### APK ${BUILD_TYPE} z ${PROJECT_DIR}"
+            echo ""
+            echo '```'
+            cat SHA256SUMS.txt
+            for f in ./*.apk; do
+              echo "--- $f"
+              "${BT}apksigner" verify --print-certs "$f" | grep -E 'certificate (DN|SHA-256 digest)' || true
+            done
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Artefakt APK
+        uses: actions/upload-artifact@v7
+        with:
+          name: fth-android-${{ env.BUILD_TYPE }}-${{ github.run_number }}
+          path: ${{ runner.temp }}/dist/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Raporty po bledzie
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: fth-android-reports-${{ github.run_number }}
+          path: |
+            ${{ env.PROJECT_DIR }}/**/build/reports/
+            ${{ env.PROJECT_DIR }}/**/build/test-results/
+          if-no-files-found: ignore
+          retention-days: 7
