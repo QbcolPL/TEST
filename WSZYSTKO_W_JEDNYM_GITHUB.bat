@@ -5,27 +5,29 @@ cd /d "%~dp0"
 set "BAT_FILE=%~f0"
 
 echo ============================================================================
-echo [1/3] Wdrazanie odczytywania i rekonstrukcji Sektorow Ognia przy ponownym
-echo       wczytywaniu plikow .KMZ / .KML do Generatora Map...
+echo [1/3] Aktualizacja aplikacji Android (apps\mobile):
+echo       - Dopasowanie UI 1:1 do wizualizacji taktycznej
+echo       - Animowany laser skanera QR (gora-dol z poswiata)
+echo       - Twarda bramka 5 uprawnien przy pierwszym uruchomieniu + Manifest
 echo ============================================================================
-powershell -NoProfile -ExecutionPolicy Bypass -Command "Add-Type -TypeDefinition ([System.Text.RegularExpressions.Regex]::Split([System.IO.File]::ReadAllText([System.Environment]::GetEnvironmentVariable('BAT_FILE'), [System.Text.Encoding]::UTF8), '//===' + 'ADD_SECTOR_KMZ_IMPORT_CS===')[1]); [FthAddSectorKmzImport]::Run()"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "Add-Type -TypeDefinition ([System.Text.RegularExpressions.Regex]::Split([System.IO.File]::ReadAllText([System.Environment]::GetEnvironmentVariable('BAT_FILE'), [System.Text.Encoding]::UTF8), '//===' + 'ANDROID_ALL_IN_ONE_CS===')[1]); [FthAndroidAllInOneUpdater]::Run()"
 
 if errorlevel 1 (
     echo.
-    echo [BLAD] Wystapil blad podczas aktualizacji plikow lub wysylki na GitHub!
+    echo [BLAD] Wystapil blad podczas aktualizacji aplikacji Android lub wysylki na GitHub!
     pause
     exit /b 1
 )
 
 echo.
 echo ============================================================================
-echo [SUKCES] Odczytywanie Sektorow Ognia z plikow .KMZ / .KML zostalo wdrozone
-echo i wyslane na GitHub (QbcolPL/TEST)! Kompilacja na GitHub Actions uruchomiona.
+echo [SUKCES] Aplikacja Android z nowym UI, animowanym laserem QR i twarda
+echo bramka uprawnien zostala wyslana na GitHub (QbcolPL/TEST)!
 echo ============================================================================
 pause
 exit /b 0
 
-//===ADD_SECTOR_KMZ_IMPORT_CS===
+//===ANDROID_ALL_IN_ONE_CS===
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -34,7 +36,7 @@ using System.Linq;
 using System.Text;
 using System.Text.RegularExpressions;
 
-public static class FthAddSectorKmzImport
+public static class FthAndroidAllInOneUpdater
 {
     private const string RepoRemoteUrl = "https://github.com/QbcolPL/TEST.git";
     private const string RepoActionsUrl = "https://github.com/QbcolPL/TEST/actions";
@@ -43,359 +45,177 @@ public static class FthAddSectorKmzImport
     {
         string currentDir = Directory.GetCurrentDirectory();
         string targetDir = ResolveTargetProjectDirectory(currentDir);
-        Console.WriteLine("[OK] Katalog roboczy projektu: " + targetDir);
+        Console.WriteLine("[OK] Katalog roboczy repozytorium: " + targetDir);
+
+        string mobileDir = ResolveMobileDirectory(targetDir);
+        Console.WriteLine("[OK] Katalog aplikacji Android: " + mobileDir);
 
         UTF8Encoding utf8NoBom = new UTF8Encoding(false);
-        string servicesDir = Path.Combine(targetDir, @"apps\builder\FieldTakHub.Builder\Services");
 
-        string tmgPath = Path.Combine(servicesDir, "TacticalMapGeneratorView.cs");
-        string engPath = Path.Combine(servicesDir, "TacticalMapGeneratorView.Engine.cs");
-        string rngPath = Path.Combine(servicesDir, "TacticalMapGeneratorView.RangeSectors.cs");
+        string mainActPath = Directory.GetFiles(mobileDir, "MainActivity.kt", SearchOption.AllDirectories)
+            .FirstOrDefault(p => !p.Contains("\\build\\") && !p.Contains("/build/"));
+        if (string.IsNullOrEmpty(mainActPath))
+            throw new Exception("Nie znaleziono pliku MainActivity.kt w katalogu: " + mobileDir);
 
-        if (!File.Exists(tmgPath) || !File.Exists(rngPath))
-            throw new Exception("Nie znaleziono plikow TacticalMapGeneratorView.cs lub RangeSectors.cs!");
+        string manifestPath = Directory.GetFiles(mobileDir, "AndroidManifest.xml", SearchOption.AllDirectories)
+            .FirstOrDefault(p => !p.Contains("\\build\\") && !p.Contains("/build/"));
+        if (string.IsNullOrEmpty(manifestPath))
+            throw new Exception("Nie znaleziono pliku AndroidManifest.xml w katalogu: " + mobileDir);
 
-        string tmg = File.ReadAllText(tmgPath, Encoding.UTF8);
-        string eng = File.Exists(engPath) ? File.ReadAllText(engPath, Encoding.UTF8) : "";
+        Console.WriteLine("[OK] MainActivity.kt: " + mainActPath);
+        Console.WriteLine("[OK] AndroidManifest.xml: " + manifestPath);
 
-        // 1. Podpiecie automatycznego odczytywania sektorow ognia przy wczytywaniu pliku .KMZ / .KML
-        tmg = InjectRangeSectorsIntoKmlImportCode(tmg, "TacticalMapGeneratorView.cs");
-        if (!string.IsNullOrEmpty(eng))
+        string existingMain = File.ReadAllText(mainActPath, Encoding.UTF8);
+        string packageName = "com.fieldtakhub.mobile";
+        Match mPkg = Regex.Match(existingMain, @"^\s*package\s+([a-zA-Z0-9_.]+)", RegexOptions.Multiline);
+        if (mPkg.Success)
+            packageName = mPkg.Groups[1].Value.Trim();
+        Console.WriteLine("[OK] Wykryty pakiet Android: " + packageName);
+
+        bool hasCameraX = false;
+        bool hasMlKit = false;
+        foreach (string gradleFile in Directory.GetFiles(mobileDir, "build.gradle*", SearchOption.AllDirectories))
         {
-            eng = InjectRangeSectorsIntoKmlImportCode(eng, "TacticalMapGeneratorView.Engine.cs");
+            if (gradleFile.Contains("\\build\\") || gradleFile.Contains("/build/")) continue;
+            string gTxt = File.ReadAllText(gradleFile, Encoding.UTF8);
+            if (gTxt.Contains("camera-view") || gTxt.Contains("camera-lifecycle")) hasCameraX = true;
+            if (gTxt.Contains("barcode-scanning")) hasMlKit = true;
         }
+        Console.WriteLine("[INFO] Wykryte biblioteki: CameraX=" + hasCameraX + ", MLKit=" + hasMlKit);
 
-        int openTmg = tmg.Count(c => c == '{');
-        int closeTmg = tmg.Count(c => c == '}');
-        if (openTmg != closeTmg)
-            throw new Exception("Niezgodnosc nawiasow klamrowych w TacticalMapGeneratorView.cs!");
-        File.WriteAllText(tmgPath, tmg, utf8NoBom);
-
-        if (!string.IsNullOrEmpty(eng))
-        {
-            int openEng = eng.Count(c => c == '{');
-            int closeEng = eng.Count(c => c == '}');
-            if (openEng != closeEng)
-                throw new Exception("Niezgodnosc nawiasow klamrowych w TacticalMapGeneratorView.Engine.cs!");
-            File.WriteAllText(engPath, eng, utf8NoBom);
-        }
-
-        // 2. Rozbudowa TacticalMapGeneratorView.RangeSectors.cs o kotwiczenie geograficzne WGS84
-        //    oraz odczytywanie i odtwarzanie sektorow ognia z plikow .KMZ / .KML
-        string combined = tmg + "\n" + eng;
-        string latField = DetectLatFieldName(combined);
-        string lonField = DetectLonFieldName(combined, latField);
+        UpdateAndroidManifestPermissions(manifestPath, utf8NoBom);
 
         string batFile = Environment.GetEnvironmentVariable("BAT_FILE");
         string rawBat = File.ReadAllText(batFile, Encoding.UTF8);
 
-        string[] parts = Regex.Split(rawBat, "//===" + "PAYLOAD_IMPORT_KMZ_SECTORS_CS===");
-        if (parts.Length < 2)
-            throw new Exception("Brak bloku PAYLOAD_IMPORT_KMZ_SECTORS_CS w pliku .bat!");
-        string[] endParts = Regex.Split(parts[1], "//===" + "END_IMPORT_KMZ_SECTORS_CS===");
-        string importMethods = endParts[0].Trim()
-            .Replace("__LAT_FIELD__", latField)
-            .Replace("__LON_FIELD__", lonField);
+        string ktMain = ExtractBlock(rawBat, "PAYLOAD_MAIN_ACTIVITY_KT", "END_MAIN_ACTIVITY_KT");
+        string camImports = (hasCameraX && hasMlKit) ? ExtractBlock(rawBat, "PAYLOAD_CAMERAX_IMPORTS_KT", "END_CAMERAX_IMPORTS_KT") : "";
+        string camImpl = (hasCameraX && hasMlKit)
+            ? ExtractBlock(rawBat, "PAYLOAD_CAMERAX_IMPL_KT", "END_CAMERAX_IMPL_KT")
+            : ExtractBlock(rawBat, "PAYLOAD_FALLBACK_CAM_KT", "END_FALLBACK_CAM_KT");
 
-        string rng = File.ReadAllText(rngPath, Encoding.UTF8);
+        ktMain = ktMain
+            .Replace("__PACKAGE_NAME__", packageName)
+            .Replace("__CAMERAX_IMPORTS__", camImports)
+            .Replace("__CAMERAX_VIEWFINDER_IMPL__", camImpl);
 
-        int existingIdx = rng.IndexOf("private static void SyncSectorGeoAnchorFromOffsets", StringComparison.Ordinal);
-        if (existingIdx >= 0)
-        {
-            rng = rng.Substring(0, existingIdx).TrimEnd() + "\r\n    }\r\n}";
-        }
+        int openBraces = ktMain.Count(c => c == '{');
+        int closeBraces = ktMain.Count(c => c == '}');
+        Console.WriteLine("[WERYFIKACJA] Nawiasy w MainActivity.kt: { = " + openBraces + ", } = " + closeBraces);
+        if (openBraces != closeBraces)
+            throw new Exception("Niezgodnosc nawiasow klamrowych w MainActivity.kt!");
 
-        // A) Dodaj pola HasGeoAnchor, ShooterLat, ShooterLon do TacticalRangeSectorItem
-        if (!rng.Contains("public bool HasGeoAnchor"))
-        {
-            rng = rng.Replace(
-                "public double OffsetNorthMeters { get; set; } = 0.0;",
-                "public double OffsetNorthMeters { get; set; } = 0.0;\r\n            public bool HasGeoAnchor { get; set; } = false;\r\n            public double ShooterLat { get; set; } = 0.0;\r\n            public double ShooterLon { get; set; } = 0.0;");
-        }
-
-        // B) Aktualizuj kotwice geograficzna przy tworzeniu nowego sektora i przy przesuwaniu myszka na mapie
-        if (!rng.Contains("SyncSectorGeoAnchorFromOffsets(item);"))
-        {
-            rng = rng.Replace(
-                "_weaponRangeSectors.Add(item);",
-                "SyncSectorGeoAnchorFromOffsets(item);\r\n            _weaponRangeSectors.Add(item);");
-        }
-
-        if (!rng.Contains("SyncSectorGeoAnchorFromOffsets(sec);"))
-        {
-            rng = rng.Replace(
-                "sec.OffsetNorthMeters = startNorthM - (cur.Y - startMouse.Y) * mpp;",
-                "sec.OffsetNorthMeters = startNorthM - (cur.Y - startMouse.Y) * mpp;\r\n                    SyncSectorGeoAnchorFromOffsets(sec);");
-        }
-
-        // C) Synchronizuj przesuniecie w metrach ze wspolrzednymi GPS podczas renderowania arkusza
-        if (!rng.Contains("if (sec.HasGeoAnchor) SyncSectorOffsetsFromGeoAnchor(sec);"))
-        {
-            string renderAnchor = "if (_isInteractingWithSectorOnMap)";
-            rng = rng.Replace(
-                renderAnchor,
-                "if (!_isInteractingWithSectorOnMap) { foreach (var sec in _weaponRangeSectors) { if (sec.HasGeoAnchor) SyncSectorOffsetsFromGeoAnchor(sec); } }\r\n                " + renderAnchor);
-        }
-
-        // D) Dodaj przycisk '📂 Wczytaj z .KMZ / .KML' obok przycisku eksportu w panelu Sektorow Ognia
-        if (!rng.Contains("ImportStandaloneRangeSectorsKmzDialog()"))
-        {
-            string oldBtnBlock = @"var btnExportKmz = new Button
-            {
-                Content = ""📦 Eksportuj Sektory Ognia do pliku .KMZ / .KML dla ATAK"",
-                Height = 24,
-                Margin = new Thickness(0, 0, 0, 6),
-                Background = new SolidColorBrush(Color.FromRgb(7, 17, 21)),
-                Foreground = new SolidColorBrush(Color.FromRgb(46, 204, 113)),
-                BorderBrush = new SolidColorBrush(Color.FromRgb(46, 204, 113)),
-                BorderThickness = new Thickness(1),
-                FontWeight = FontWeights.Bold,
-                FontSize = 9.5,
-                Cursor = Cursors.Hand,
-                ToolTip = ""Zapisz wyrysowane sektory ognia jako wielokąty KML/KMZ gotowe do zaimportowania w ATAK (sektory są też automatycznie dołączane do głównego eksportu mapy .KMZ)""
-            };
-            btnExportKmz.Click += (s, e) => ExportStandaloneRangeSectorsKmzDialog();
-            sp.Children.Add(btnExportKmz);";
-
-            string newBtnBlock = @"var kmzActionGrid = new UniformGrid { Columns = 2, Margin = new Thickness(0, 0, 0, 6) };
-            var btnImportKmz = new Button
-            {
-                Content = ""📂 Wczytaj z .KMZ / .KML"",
-                Height = 24,
-                Margin = new Thickness(0, 0, 3, 0),
-                Background = new SolidColorBrush(Color.FromRgb(7, 17, 21)),
-                Foreground = TacticalConfigPanel.BrushAccent,
-                BorderBrush = TacticalConfigPanel.BrushAccent,
-                BorderThickness = new Thickness(1),
-                FontWeight = FontWeights.Bold,
-                FontSize = 9.2,
-                Cursor = Cursors.Hand,
-                ToolTip = ""Wczytaj wyrysowane wcześniej sektory ognia z pliku .KMZ lub .KML (obsługiwany jest także główny przycisk importu KMZ Generatora Map)""
-            };
-            btnImportKmz.Click += (s, e) => ImportStandaloneRangeSectorsKmzDialog();
-            kmzActionGrid.Children.Add(btnImportKmz);
-
-            var btnExportKmz = new Button
-            {
-                Content = ""📦 Eksportuj .KMZ (ATAK)"",
-                Height = 24,
-                Margin = new Thickness(3, 0, 0, 0),
-                Background = new SolidColorBrush(Color.FromRgb(7, 17, 21)),
-                Foreground = new SolidColorBrush(Color.FromRgb(46, 204, 113)),
-                BorderBrush = new SolidColorBrush(Color.FromRgb(46, 204, 113)),
-                BorderThickness = new Thickness(1),
-                FontWeight = FontWeights.Bold,
-                FontSize = 9.2,
-                Cursor = Cursors.Hand,
-                ToolTip = ""Zapisz wyrysowane sektory ognia jako wielokąty KML/KMZ dla ATAK""
-            };
-            btnExportKmz.Click += (s, e) => ExportStandaloneRangeSectorsKmzDialog();
-            kmzActionGrid.Children.Add(btnExportKmz);
-            sp.Children.Add(kmzActionGrid);";
-
-            if (rng.Contains("btnExportKmz"))
-            {
-                rng = rng.Replace(oldBtnBlock, newBtnBlock);
-            }
-            else
-            {
-                rng = rng.Replace("sp.Children.Add(hdrGrid);", "sp.Children.Add(hdrGrid);\r\n            " + newBtnBlock);
-            }
-        }
-
-        // E) Wstaw metody importu KML/KMZ oraz synchronizacji kotwic geograficznych przed zamknieciem klasy
-        int lastBrace = rng.LastIndexOf('}');
-        int secondLastBrace = rng.LastIndexOf('}', lastBrace - 1);
-        if (secondLastBrace < 0)
-            throw new Exception("Nieprawidlowa struktura nawiasow w TacticalMapGeneratorView.RangeSectors.cs!");
-
-        rng = rng.Substring(0, secondLastBrace) + "\r\n        " + importMethods + "\r\n    }\r\n}\r\n";
-
-        int openRng = rng.Count(c => c == '{');
-        int closeRng = rng.Count(c => c == '}');
-        Console.WriteLine("[WERYFIKACJA] Nawiasy w TacticalMapGeneratorView.RangeSectors.cs: { = " + openRng + ", } = " + closeRng);
-        if (openRng != closeRng)
-            throw new Exception("Niezgodnosc nawiasow klamrowych w TacticalMapGeneratorView.RangeSectors.cs!");
-
-        File.WriteAllText(rngPath, rng, utf8NoBom);
-        Console.WriteLine("[OK] Zaktualizowano TacticalMapGeneratorView.RangeSectors.cs o odczytywanie sektorow z .KMZ / .KML.");
+        File.WriteAllText(mainActPath, ktMain + "\n", utf8NoBom);
+        Console.WriteLine("[OK] Zapisano zaktualizowany plik MainActivity.kt.");
 
         string triggerPath = Path.Combine(targetDir, ".fth_build_trigger.txt");
-        File.WriteAllText(triggerPath, "Field TAK Hub Import Weapon Range Sectors from KMZ/KML UTC: " + DateTime.UtcNow.ToString("O") + " | RunId: " + Guid.NewGuid().ToString("N") + "\n", utf8NoBom);
+        File.WriteAllText(triggerPath, "Field TAK Hub Android UI Visual Match + Animated Laser + Hard Permissions Gate UTC: " + DateTime.UtcNow.ToString("O") + " | RunId: " + Guid.NewGuid().ToString("N") + "\n", utf8NoBom);
 
         PushAndTriggerGitHubActions(targetDir);
     }
 
-    private static string InjectRangeSectorsIntoKmlImportCode(string code, string fileLabel)
+    private static string ExtractBlock(string raw, string startTag, string endTag)
     {
-        if (code.Contains("ExtractAndImportRangeSectorsFromKml("))
-            return code;
-
-        int count = 0;
-
-        // 1. Owin pierwszy argument w wywolaniach XDocument.Parse(...)
-        code = WrapFirstArgBalanced(code, "XDocument.Parse", "ExtractAndImportRangeSectorsFromKml", ref count);
-
-        // 2. Owin wywolania .ReadToEnd() ze StreamReadera (przy rozpakowywaniu doc.kml z archiwum .KMZ)
-        code = Regex.Replace(
-            code,
-            @"([a-zA-Z0-9_]+\.ReadToEnd\s*\(\s*\))",
-            m =>
-            {
-                count++;
-                return "ExtractAndImportRangeSectorsFromKml(" + m.Groups[1].Value + ")";
-            });
-
-        // 3. Owin zbalansowane wywolania File.ReadAllText(...) (przy wczytywaniu pliku .KML)
-        code = WrapCallBalanced(code, "File.ReadAllText", "ExtractAndImportRangeSectorsFromKml", ref count);
-
-        if (count > 0)
-        {
-            Console.WriteLine("[OK] Podpieto automatyczny odczyt sektorow ognia z KML/KMZ w " + fileLabel + " (" + count + " miejsc).");
-        }
-        return code;
+        string[] parts = Regex.Split(raw, "//===" + startTag + "===");
+        if (parts.Length < 2)
+            throw new Exception("Brak bloku " + startTag + " w skrypcie .bat!");
+        string[] endParts = Regex.Split(parts[1], "//===" + endTag + "===");
+        return endParts[0].Trim();
     }
 
-    private static string WrapFirstArgBalanced(string code, string methodToken, string wrapperName, ref int count)
+    private static void UpdateAndroidManifestPermissions(string manifestPath, UTF8Encoding utf8NoBom)
     {
-        int idx = 0;
-        while (idx < code.Length)
+        string xml = File.ReadAllText(manifestPath, Encoding.UTF8);
+
+        string[] requiredPerms = new[]
         {
-            int pos = code.IndexOf(methodToken, idx, StringComparison.Ordinal);
-            if (pos < 0) break;
+            "<uses-permission android:name=\"android.permission.CAMERA\" />",
+            "<uses-permission android:name=\"android.permission.ACCESS_FINE_LOCATION\" />",
+            "<uses-permission android:name=\"android.permission.ACCESS_COARSE_LOCATION\" />",
+            "<uses-permission android:name=\"android.permission.BLUETOOTH\" android:maxSdkVersion=\"30\" />",
+            "<uses-permission android:name=\"android.permission.BLUETOOTH_ADMIN\" android:maxSdkVersion=\"30\" />",
+            "<uses-permission android:name=\"android.permission.BLUETOOTH_SCAN\" />",
+            "<uses-permission android:name=\"android.permission.BLUETOOTH_CONNECT\" />",
+            "<uses-permission android:name=\"android.permission.READ_EXTERNAL_STORAGE\" android:maxSdkVersion=\"32\" />",
+            "<uses-permission android:name=\"android.permission.WRITE_EXTERNAL_STORAGE\" android:maxSdkVersion=\"29\" />",
+            "<uses-permission android:name=\"android.permission.MANAGE_EXTERNAL_STORAGE\" />",
+            "<uses-permission android:name=\"android.permission.REQUEST_INSTALL_PACKAGES\" />",
+            "<uses-permission android:name=\"android.permission.QUERY_ALL_PACKAGES\" />"
+        };
 
-            int openP = pos + methodToken.Length;
-            while (openP < code.Length && char.IsWhiteSpace(code[openP])) openP++;
-            if (openP >= code.Length || code[openP] != '(')
+        StringBuilder toInsert = new StringBuilder();
+        foreach (string permTag in requiredPerms)
+        {
+            Match mName = Regex.Match(permTag, @"android:name=""([^""]+)""");
+            if (!mName.Success) continue;
+            string permName = mName.Groups[1].Value;
+            if (!xml.Contains(permName))
             {
-                idx = openP;
-                continue;
+                toInsert.AppendLine("    " + permTag);
             }
-
-            int depth = 0;
-            int argEnd = -1;
-            for (int i = openP; i < code.Length; i++)
-            {
-                char ch = code[i];
-                if (ch == '(') depth++;
-                else if (ch == ')')
-                {
-                    depth--;
-                    if (depth == 0) { argEnd = i; break; }
-                }
-                else if (ch == ',' && depth == 1)
-                {
-                    argEnd = i;
-                    break;
-                }
-            }
-            if (argEnd < 0) break;
-
-            string firstArg = code.Substring(openP + 1, argEnd - (openP + 1)).Trim();
-            if (firstArg.Contains(wrapperName))
-            {
-                idx = argEnd + 1;
-                continue;
-            }
-
-            string wrappedArg = wrapperName + "(" + firstArg + ")";
-            code = code.Substring(0, openP + 1) + wrappedArg + code.Substring(argEnd);
-            count++;
-            idx = openP + 1 + wrappedArg.Length + 1;
         }
-        return code;
+
+        if (toInsert.Length > 0)
+        {
+            int appTagIdx = xml.IndexOf("<application", StringComparison.OrdinalIgnoreCase);
+            if (appTagIdx > 0)
+            {
+                xml = xml.Substring(0, appTagIdx) + toInsert.ToString() + "\n    " + xml.Substring(appTagIdx);
+                File.WriteAllText(manifestPath, xml, utf8NoBom);
+                Console.WriteLine("[OK] Uzupelniono brakujace uprawnienia w AndroidManifest.xml.");
+            }
+        }
+        else
+        {
+            Console.WriteLine("[OK] Wszystkie wymagane uprawnienia sa juz zadeklarowane w AndroidManifest.xml.");
+        }
     }
 
-    private static string WrapCallBalanced(string code, string targetToken, string wrapperName, ref int count)
+    private static string ResolveMobileDirectory(string repoRoot)
     {
-        int idx = 0;
-        while (idx < code.Length)
+        string[] candidates = new[]
         {
-            int pos = code.IndexOf(targetToken, idx, StringComparison.Ordinal);
-            if (pos < 0) break;
-
-            int openP = pos + targetToken.Length;
-            while (openP < code.Length && char.IsWhiteSpace(code[openP])) openP++;
-            if (openP >= code.Length || code[openP] != '(')
-            {
-                idx = openP;
-                continue;
-            }
-
-            int depth = 0;
-            int closeP = -1;
-            for (int i = openP; i < code.Length; i++)
-            {
-                if (code[i] == '(') depth++;
-                else if (code[i] == ')')
-                {
-                    depth--;
-                    if (depth == 0) { closeP = i; break; }
-                }
-            }
-            if (closeP < 0) break;
-
-            string before = code.Substring(Math.Max(0, pos - wrapperName.Length - 4), Math.Min(wrapperName.Length + 4, pos));
-            if (before.Contains(wrapperName))
-            {
-                idx = closeP + 1;
-                continue;
-            }
-
-            string callExpr = code.Substring(pos, closeP - pos + 1);
-            string wrapped = wrapperName + "(" + callExpr + ")";
-            code = code.Substring(0, pos) + wrapped + code.Substring(closeP + 1);
-            count++;
-            idx = pos + wrapped.Length;
-        }
-        return code;
-    }
-
-    private static string DetectLatFieldName(string combined)
-    {
-        int mppIdx = combined.IndexOf("GetExactMetersPerPixel", StringComparison.Ordinal);
-        if (mppIdx >= 0)
+            Path.Combine(repoRoot, @"apps\mobile"),
+            Path.Combine(repoRoot, @"apps\android"),
+            Path.Combine(repoRoot, @"mobile"),
+            Path.Combine(repoRoot, @"android")
+        };
+        foreach (string dir in candidates)
         {
-            string snippet = combined.Substring(mppIdx, Math.Min(600, combined.Length - mppIdx));
-            Match m = Regex.Match(snippet, @"(_[a-zA-Z0-9_]*Lat[a-zA-Z0-9_]*)\b");
-            if (m.Success) return m.Groups[1].Value;
+            if (Directory.Exists(dir)) return dir;
         }
-        string[] candidates = new[] { "_centerLat", "_currentLat", "_mapCenterLat", "_targetLat", "_lat" };
-        foreach (string c in candidates)
-            if (Regex.IsMatch(combined, @"\b" + Regex.Escape(c) + @"\b")) return c;
-        return "_centerLat";
-    }
-
-    private static string DetectLonFieldName(string combined, string latField)
-    {
-        string guessedLon = latField.Replace("Lat", "Lon").Replace("lat", "lon");
-        if (Regex.IsMatch(combined, @"\b" + Regex.Escape(guessedLon) + @"\b")) return guessedLon;
-        string[] candidates = new[] { "_centerLon", "_currentLon", "_mapCenterLon", "_targetLon", "_lon", "_centerLng" };
-        foreach (string c in candidates)
-            if (Regex.IsMatch(combined, @"\b" + Regex.Escape(c) + @"\b")) return c;
-        return "_centerLon";
+        throw new Exception("Nie znaleziono katalogu aplikacji mobilnej (apps\\mobile) w: " + repoRoot);
     }
 
     private static string ResolveTargetProjectDirectory(string baseDir)
     {
-        string csprojRel = @"apps\builder\FieldTakHub.Builder\FieldTakHub.Builder.csproj";
-        if (File.Exists(Path.Combine(baseDir, csprojRel))) return baseDir;
+        if (Directory.Exists(Path.Combine(baseDir, @"apps\mobile")) || Directory.Exists(Path.Combine(baseDir, @"apps\builder")))
+            return baseDir;
         string subTestMain = Path.Combine(baseDir, "TEST-main");
-        if (File.Exists(Path.Combine(subTestMain, csprojRel))) return subTestMain;
+        if (Directory.Exists(Path.Combine(subTestMain, @"apps\mobile")) || Directory.Exists(Path.Combine(subTestMain, @"apps\builder")))
+            return subTestMain;
         string subGotowe = Path.Combine(baseDir, "TEST-main-Gotowe");
-        if (File.Exists(Path.Combine(subGotowe, csprojRel))) return subGotowe;
+        if (Directory.Exists(Path.Combine(subGotowe, @"apps\mobile")) || Directory.Exists(Path.Combine(subGotowe, @"apps\builder")))
+            return subGotowe;
         string parentDir = Path.GetDirectoryName(baseDir);
         if (!string.IsNullOrEmpty(parentDir))
         {
-            if (File.Exists(Path.Combine(parentDir, csprojRel))) return parentDir;
+            if (Directory.Exists(Path.Combine(parentDir, @"apps\mobile")) || Directory.Exists(Path.Combine(parentDir, @"apps\builder")))
+                return parentDir;
             string parentTestMain = Path.Combine(parentDir, "TEST-main");
-            if (File.Exists(Path.Combine(parentTestMain, csprojRel))) return parentTestMain;
+            if (Directory.Exists(Path.Combine(parentTestMain, @"apps\mobile")) || Directory.Exists(Path.Combine(parentTestMain, @"apps\builder")))
+                return parentTestMain;
         }
-        throw new Exception("Nie znaleziono projektu FieldTakHub.Builder w katalogu: " + baseDir);
+        throw new Exception("Nie znaleziono katalogu projektu Field TAK Hub w: " + baseDir);
     }
 
     private static void PushAndTriggerGitHubActions(string targetDir)
     {
+        Console.WriteLine();
+        Console.WriteLine("============================================================================");
+        Console.WriteLine("[2/3] Wysylka zmian aplikacji Android na GitHub (QbcolPL/TEST)...");
+        Console.WriteLine("============================================================================");
+
         string gitExe = "git";
         string g1 = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), @"Git\cmd\git.exe");
         string g2 = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), @"Programs\Git\cmd\git.exe");
@@ -413,17 +233,19 @@ public static class FthAddSectorKmzImport
         RunProcess(gitExe, "remote set-url origin " + RepoRemoteUrl, targetDir);
 
         RunProcess(gitExe, "add -A", targetDir);
-        RunProcess(gitExe, "commit -m \"Add automatic import and reconstruction of weapon range sectors from .KMZ / .KML files\" --allow-empty", targetDir);
+        RunProcess(gitExe, "commit -m \"Android: Match tactical UI to mockup, animate QR laser scanner, and enforce hard permissions gate on first launch\" --allow-empty", targetDir);
 
         int pushExitCode = RunProcess(gitExe, "push -u origin main --force", targetDir);
         if (pushExitCode != 0)
             throw new Exception("Polecenie 'git push -u origin main --force' zwrocilo kod bledu: " + pushExitCode);
 
+        Console.WriteLine("[3/3] Otwieranie zakladki GitHub Actions...");
         try { Process.Start(new ProcessStartInfo { FileName = RepoActionsUrl, UseShellExecute = true }); } catch { }
     }
 
     private static int RunProcess(string fileName, string arguments, string workingDir)
     {
+        Console.WriteLine("> " + Path.GetFileName(fileName) + " " + arguments);
         var psi = new ProcessStartInfo
         {
             FileName = fileName,
@@ -439,438 +261,1501 @@ public static class FthAddSectorKmzImport
         }
     }
 }
-//===ADD_SECTOR_KMZ_IMPORT_CS===
+//===ANDROID_ALL_IN_ONE_CS===
 
-//===PAYLOAD_IMPORT_KMZ_SECTORS_CS===
-        // ====================================================================
-        // KOTWICZENIE GEOGRAFICZNE WGS84 (LAT/LON <-> OFFSET METERS)
-        // Zapewnia, ze wczytane z .KMZ/.KML sektory trafiaja dokladnie w swoje
-        // wspolrzedne GPS na mapie niezaleznie od przesuniecia srodka arkusza!
-        // ====================================================================
-        private static void SyncSectorGeoAnchorFromOffsets(TacticalRangeSectorItem sec)
-        {
-            if (sec == null) return;
-            double centerLat = __LAT_FIELD__;
-            double centerLon = __LON_FIELD__;
-            double latRad = centerLat * Math.PI / 180.0;
-            double mPerDegLat = 111132.92 - 559.82 * Math.Cos(2.0 * latRad) + 1.175 * Math.Cos(4.0 * latRad);
-            double mPerDegLon = Math.Max(1000.0, 111412.84 * Math.Cos(latRad) - 93.5 * Math.Cos(3.0 * latRad));
+//===PAYLOAD_MAIN_ACTIVITY_KT===
+package __PACKAGE_NAME__
 
-            sec.ShooterLat = centerLat + (sec.OffsetNorthMeters / mPerDegLat);
-            sec.ShooterLon = centerLon + (sec.OffsetEastMeters / mPerDegLon);
-            sec.HasGeoAnchor = true;
-        }
+import android.Manifest
+import android.annotation.SuppressLint
+import android.content.Context
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.location.Location
+import android.location.LocationManager
+import android.net.Uri
+import android.os.Build
+import android.os.Bundle
+import android.os.Environment
+import android.provider.Settings
+import android.widget.Toast
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicText
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.core.content.ContextCompat
+import androidx.core.view.WindowCompat
+import java.util.Locale
+import kotlin.math.cos
+import kotlin.math.floor
+import kotlin.math.pow
+import kotlin.math.sin
+import kotlin.math.sqrt
+import kotlin.math.tan
+__CAMERAX_IMPORTS__
 
-        private static void SyncSectorOffsetsFromGeoAnchor(TacticalRangeSectorItem sec)
-        {
-            if (sec == null || !sec.HasGeoAnchor) return;
-            double centerLat = __LAT_FIELD__;
-            double centerLon = __LON_FIELD__;
-            double latRad = centerLat * Math.PI / 180.0;
-            double mPerDegLat = 111132.92 - 559.82 * Math.Cos(2.0 * latRad) + 1.175 * Math.Cos(4.0 * latRad);
-            double mPerDegLon = Math.Max(1000.0, 111412.84 * Math.Cos(latRad) - 93.5 * Math.Cos(3.0 * latRad));
+private val FthBgDeep = Color(0xFF050C10)
+private val FthCardBg = Color(0xFF0A171D)
+private val FthCardBorder = Color(0xFF193C47)
+private val FthInputBg = Color(0xFF071217)
+private val FthCyan = Color(0xFF1FE8CC)
+private val FthCyanBright = Color(0xFF39F8DC)
+private val FthGreenOk = Color(0xFF2EE682)
+private val FthTextPrimary = Color(0xFFEAF7F9)
+private val FthTextMuted = Color(0xFF779DA8)
+private val FthRedBg = Color(0xFF280B0E)
+private val FthRedBorder = Color(0xFFE8453C)
+private val FthRedBright = Color(0xFFFF524A)
+private val FthAmberWarn = Color(0xFFFAD02C)
 
-            sec.OffsetNorthMeters = (sec.ShooterLat - centerLat) * mPerDegLat;
-            sec.OffsetEastMeters = (sec.ShooterLon - centerLon) * mPerDegLon;
-        }
+private enum class FthTab(val label: String) {
+    SCANNER("SKANER"),
+    PACKAGES("PACZKI"),
+    OPORD("OPORD"),
+    CHEATSHEET("ŚCIĄGA")
+}
 
-        // ====================================================================
-        // ODCZYTYWANIE WYRYSOWANYCH SEKTOROW OGNIA PRZY IMPORCIE .KMZ / .KML
-        // ====================================================================
-        public static string ExtractAndImportRangeSectorsFromKml(string kmlContent)
-        {
-            if (string.IsNullOrEmpty(kmlContent)) return kmlContent;
+private data class FthPermState(
+    val gps: Boolean,
+    val camera: Boolean,
+    val bluetooth: Boolean,
+    val files: Boolean,
+    val installApk: Boolean
+) {
+    val grantedCount: Int
+        get() = listOf(gps, camera, bluetooth, files, installApk).count { it }
+    val allGranted: Boolean
+        get() = gps && camera && bluetooth && files && installApk
+}
 
-            if (kmlContent.IndexOf("Sektory Ognia i Zasięg Replik", StringComparison.OrdinalIgnoreCase) < 0 &&
-                kmlContent.IndexOf("fth_sector_", StringComparison.OrdinalIgnoreCase) < 0 &&
-                kmlContent.IndexOf("Zasięg płaski:", StringComparison.OrdinalIgnoreCase) < 0)
-            {
-                return kmlContent;
-            }
+class MainActivity : ComponentActivity() {
 
-            try
-            {
-                int importedCount = ParseAndRegisterRangeSectorsFromKmlText(kmlContent, centerMapIfStandalone: false);
-                if (importedCount > 0)
-                {
-                    string cleanedKml = Regex.Replace(
-                        kmlContent,
-                        @"<Folder>\s*<name>\s*Sektory Ognia i Zasięg Replik\s*</name>[\s\S]*?</Folder>",
-                        string.Empty,
-                        RegexOptions.IgnoreCase);
+    private var permState by mutableStateOf(FthPermState(false, false, false, false, false))
+    private var initialPromptTriggered = false
 
-                    bool hasOtherPlacemarks = cleanedKml.IndexOf("<Placemark", StringComparison.OrdinalIgnoreCase) >= 0;
-                    if (!hasOtherPlacemarks)
-                    {
-                        CenterMapOnImportedSectorsIfNeeded();
-                    }
+    private val runtimePermissionsLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) {
+        refreshPermissions()
+    }
 
-                    SchedulePostImportRangeSectorRefresh();
-                    return hasOtherPlacemarks ? cleanedKml : kmlContent;
-                }
-            }
-            catch { }
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        WindowCompat.setDecorFitsSystemWindows(window, true)
+        window.statusBarColor = 0xFF050C10.toInt()
+        window.navigationBarColor = 0xFF050C10.toInt()
 
-            return kmlContent;
-        }
+        refreshPermissions()
 
-        private static void SchedulePostImportRangeSectorRefresh()
-        {
-            if (_interactiveCanvas == null) return;
-            _interactiveCanvas.Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Loaded, new Action(() =>
-            {
-                foreach (var sec in _weaponRangeSectors)
-                {
-                    if (sec.HasGeoAnchor)
-                        SyncSectorOffsetsFromGeoAnchor(sec);
-                }
-                RebuildRangeSectorsListUi();
-                PopulateRangeSectorEditorFromSelected();
-                RefreshRangeSectorsNow(forceFullRebuild: true);
-            }));
-        }
-
-        private static void CenterMapOnImportedSectorsIfNeeded()
-        {
-            var anchored = _weaponRangeSectors.Where(s => s.HasGeoAnchor).ToList();
-            if (anchored.Count == 0) return;
-
-            double avgLat = anchored.Average(s => s.ShooterLat);
-            double avgLon = anchored.Average(s => s.ShooterLon);
-
-            if (Math.Abs(__LAT_FIELD__ - avgLat) > 0.018 || Math.Abs(__LON_FIELD__ - avgLon) > 0.025)
-            {
-                __LAT_FIELD__ = avgLat;
-                __LON_FIELD__ = avgLon;
-            }
-
-            foreach (var sec in anchored)
-            {
-                SyncSectorOffsetsFromGeoAnchor(sec);
-            }
-        }
-
-        private static int ParseAndRegisterRangeSectorsFromKmlText(string kmlContent, bool centerMapIfStandalone)
-        {
-            if (string.IsNullOrEmpty(kmlContent)) return 0;
-
-            string scopeText = kmlContent;
-            Match mFolder = Regex.Match(
-                kmlContent,
-                @"<Folder>\s*<name>\s*Sektory Ognia i Zasięg Replik\s*</name>([\s\S]*?)</Folder>",
-                RegexOptions.IgnoreCase);
-            if (mFolder.Success)
-            {
-                scopeText = mFolder.Groups[1].Value;
-            }
-
-            var styleColors = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-            var styleOpacities = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
-
-            foreach (Match sm in Regex.Matches(scopeText, @"<Style\s+id=""([^""]+)""\s*>([\s\S]*?)</Style>", RegexOptions.IgnoreCase))
-            {
-                string styleId = sm.Groups[1].Value.Trim();
-                string styleBody = sm.Groups[2].Value;
-
-                Match polyColorMatch = Regex.Match(styleBody, @"<PolyStyle>[\s\S]*?<color>\s*([0-9a-fA-F]{8})\s*</color>", RegexOptions.IgnoreCase);
-                if (polyColorMatch.Success)
-                {
-                    string aabbggrr = polyColorMatch.Groups[1].Value;
-                    int alphaInt = Convert.ToInt32(aabbggrr.Substring(0, 2), 16);
-                    string bb = aabbggrr.Substring(2, 2);
-                    string gg = aabbggrr.Substring(4, 2);
-                    string rr = aabbggrr.Substring(6, 2);
-
-                    styleColors[styleId] = "#" + rr.ToUpperInvariant() + gg.ToUpperInvariant() + bb.ToUpperInvariant();
-                    styleOpacities[styleId] = Math.Clamp(Math.Round(alphaInt / 255.0, 2), 0.05, 0.65);
-                }
-                else
-                {
-                    Match lineColorMatch = Regex.Match(styleBody, @"<LineStyle>[\s\S]*?<color>\s*([0-9a-fA-F]{8})\s*</color>", RegexOptions.IgnoreCase);
-                    if (lineColorMatch.Success)
-                    {
-                        string aabbggrr = lineColorMatch.Groups[1].Value;
-                        string bb = aabbggrr.Substring(2, 2);
-                        string gg = aabbggrr.Substring(4, 2);
-                        string rr = aabbggrr.Substring(6, 2);
-                        styleColors[styleId] = "#" + rr.ToUpperInvariant() + gg.ToUpperInvariant() + bb.ToUpperInvariant();
+        setContent {
+            LaunchedEffect(Unit) {
+                if (!initialPromptTriggered) {
+                    initialPromptTriggered = true
+                    if (!permState.gps || !permState.camera || !permState.bluetooth) {
+                        requestRuntimePermissions()
                     }
                 }
             }
 
-            var pointCoordsByStyle = new Dictionary<string, (double lat, double lon)>(StringComparer.OrdinalIgnoreCase);
-            var pointCoordsByName = new Dictionary<string, (double lat, double lon)>(StringComparer.OrdinalIgnoreCase);
+            FthMainApp(
+                activity = this@MainActivity,
+                permState = permState,
+                onRequestRuntime = { requestRuntimePermissions() },
+                onRequestFiles = { openAllFilesPermissionSettings() },
+                onRequestInstallApk = { openInstallPackagesSettings() },
+                onRequestNextMissing = { requestNextMissingPermission() }
+            )
+        }
+    }
 
-            foreach (Match pm in Regex.Matches(scopeText, @"<Placemark>([\s\S]*?)</Placemark>", RegexOptions.IgnoreCase))
-            {
-                string pBody = pm.Groups[1].Value;
-                if (pBody.IndexOf("<Point>", StringComparison.OrdinalIgnoreCase) < 0) continue;
+    override fun onResume() {
+        super.onResume()
+        refreshPermissions()
+    }
 
-                Match coordMatch = Regex.Match(pBody, @"<Point>[\s\S]*?<coordinates>\s*([-\d.]+)\s*,\s*([-\d.]+)", RegexOptions.IgnoreCase);
-                if (!coordMatch.Success) continue;
+    private fun refreshPermissions() {
+        val gps = hasPerm(Manifest.permission.ACCESS_FINE_LOCATION) ||
+            hasPerm(Manifest.permission.ACCESS_COARSE_LOCATION)
+        val camera = hasPerm(Manifest.permission.CAMERA)
+        val bt = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            hasPerm(Manifest.permission.BLUETOOTH_SCAN) && hasPerm(Manifest.permission.BLUETOOTH_CONNECT)
+        } else {
+            hasPerm(Manifest.permission.BLUETOOTH)
+        }
+        val files = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            Environment.isExternalStorageManager()
+        } else {
+            hasPerm(Manifest.permission.READ_EXTERNAL_STORAGE) &&
+                hasPerm(Manifest.permission.WRITE_EXTERNAL_STORAGE)
+        }
+        val installApk = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            packageManager.canRequestPackageInstalls()
+        } else {
+            true
+        }
+        permState = FthPermState(gps, camera, bt, files, installApk)
+    }
 
-                if (double.TryParse(coordMatch.Groups[1].Value, NumberStyles.Float, CultureInfo.InvariantCulture, out double ptLon) &&
-                    double.TryParse(coordMatch.Groups[2].Value, NumberStyles.Float, CultureInfo.InvariantCulture, out double ptLat))
-                {
-                    Match stMatch = Regex.Match(pBody, @"<styleUrl>\s*#?([^<\s]+)\s*</styleUrl>", RegexOptions.IgnoreCase);
-                    if (stMatch.Success)
-                    {
-                        pointCoordsByStyle[stMatch.Groups[1].Value.Trim()] = (ptLat, ptLon);
+    private fun hasPerm(permission: String): Boolean {
+        return ContextCompat.checkSelfPermission(this, permission) == PackageManager.PERMISSION_GRANTED
+    }
+
+    private fun requestRuntimePermissions() {
+        val perms = mutableListOf(
+            Manifest.permission.ACCESS_FINE_LOCATION,
+            Manifest.permission.ACCESS_COARSE_LOCATION,
+            Manifest.permission.CAMERA
+        )
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            perms.add(Manifest.permission.BLUETOOTH_SCAN)
+            perms.add(Manifest.permission.BLUETOOTH_CONNECT)
+        } else {
+            perms.add(Manifest.permission.BLUETOOTH)
+        }
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+            perms.add(Manifest.permission.READ_EXTERNAL_STORAGE)
+            perms.add(Manifest.permission.WRITE_EXTERNAL_STORAGE)
+        }
+        runtimePermissionsLauncher.launch(perms.toTypedArray())
+    }
+
+    private fun openAllFilesPermissionSettings() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            try {
+                val intent = Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION).apply {
+                    data = Uri.parse("package:$packageName")
+                }
+                startActivity(intent)
+            } catch (_: Exception) {
+                try {
+                    startActivity(Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION))
+                } catch (_: Exception) {
+                    openAppDetailsSettings()
+                }
+            }
+        } else {
+            requestRuntimePermissions()
+        }
+    }
+
+    private fun openInstallPackagesSettings() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            try {
+                val intent = Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES).apply {
+                    data = Uri.parse("package:$packageName")
+                }
+                startActivity(intent)
+            } catch (_: Exception) {
+                openAppDetailsSettings()
+            }
+        }
+    }
+
+    private fun openAppDetailsSettings() {
+        try {
+            val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                data = Uri.parse("package:$packageName")
+            }
+            startActivity(intent)
+        } catch (_: Exception) { }
+    }
+
+    private fun requestNextMissingPermission() {
+        when {
+            !permState.gps || !permState.camera || !permState.bluetooth -> requestRuntimePermissions()
+            !permState.files -> openAllFilesPermissionSettings()
+            !permState.installApk -> openInstallPackagesSettings()
+        }
+    }
+}
+
+@Composable
+private fun FthMainApp(
+    activity: ComponentActivity,
+    permState: FthPermState,
+    onRequestRuntime: () -> Unit,
+    onRequestFiles: () -> Unit,
+    onRequestInstallApk: () -> Unit,
+    onRequestNextMissing: () -> Unit
+) {
+    val context = LocalContext.current
+    var currentTab by remember { mutableStateOf(FthTab.SCANNER) }
+    var callsign by remember { mutableStateOf("Wilk-1") }
+    var lastScannedPayload by remember { mutableStateOf<String?>(null) }
+    var activeProfile by remember { mutableStateOf("BLUFOR") }
+    var opordSubTab by remember { mutableStateOf(0) }
+
+    val isLockedByPermissions = !permState.allGranted
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(FthBgDeep)
+    ) {
+        FthTacticalGridBackground(modifier = Modifier.fillMaxSize())
+
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(horizontal = 14.dp, vertical = 10.dp)
+        ) {
+            FthHeaderBar(
+                onBackClick = {
+                    if (!isLockedByPermissions) {
+                        currentTab = FthTab.SCANNER
+                    } else {
+                        Toast.makeText(
+                            context,
+                            "Nadaj wszystkie 5 uprawnień, aby odblokować aplikację.",
+                            Toast.LENGTH_SHORT
+                        ).show()
                     }
+                }
+            )
 
-                    Match nmMatch = Regex.Match(pBody, @"<name>\s*Stanowisko:\s*(.*?)\s*</name>", RegexOptions.IgnoreCase);
-                    if (nmMatch.Success)
-                    {
-                        pointCoordsByName[UnescapeKmlXml(nmMatch.Groups[1].Value.Trim())] = (ptLat, ptLon);
+            Spacer(modifier = Modifier.height(12.dp))
+
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+            ) {
+                if (isLockedByPermissions) {
+                    FthOnboardingPermissionsScreen(
+                        permState = permState,
+                        activeProfile = activeProfile,
+                        isHardGateMode = true,
+                        onToggleProfile = {
+                            activeProfile = if (activeProfile == "BLUFOR") "OPFOR" else "BLUFOR"
+                        },
+                        onRequestGps = onRequestRuntime,
+                        onRequestCamera = onRequestRuntime,
+                        onRequestBluetooth = onRequestRuntime,
+                        onRequestFiles = onRequestFiles,
+                        onRequestInstallApk = onRequestInstallApk,
+                        onPrimaryAction = onRequestNextMissing
+                    )
+                } else {
+                    when (currentTab) {
+                        FthTab.SCANNER -> FthScannerScreen(
+                            activity = activity,
+                            callsign = callsign,
+                            onCallsignChange = { callsign = it },
+                            lastScannedPayload = lastScannedPayload,
+                            onQrDetected = { code ->
+                                if (lastScannedPayload != code) {
+                                    lastScannedPayload = code
+                                    Toast.makeText(context, "Zeskanowano pakiet QR!", Toast.LENGTH_SHORT).show()
+                                }
+                            },
+                            onInjectClick = {
+                                val msg = if (lastScannedPayload != null) {
+                                    "Wstrzykuję pakiet dla [$callsign] do ATAK + Meshtastic..."
+                                } else {
+                                    "Synchronizacja profilu [$callsign] z ATAK-CIV + Meshtastic..."
+                                }
+                                Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
+                            }
+                        )
+                        FthTab.PACKAGES -> FthOnboardingPermissionsScreen(
+                            permState = permState,
+                            activeProfile = activeProfile,
+                            isHardGateMode = false,
+                            onToggleProfile = {
+                                activeProfile = if (activeProfile == "BLUFOR") "OPFOR" else "BLUFOR"
+                            },
+                            onRequestGps = onRequestRuntime,
+                            onRequestCamera = onRequestRuntime,
+                            onRequestBluetooth = onRequestRuntime,
+                            onRequestFiles = onRequestFiles,
+                            onRequestInstallApk = onRequestInstallApk,
+                            onPrimaryAction = {
+                                activeProfile = if (activeProfile == "BLUFOR") "OPFOR" else "BLUFOR"
+                            }
+                        )
+                        FthTab.OPORD -> FthOpordScreen(
+                            context = context,
+                            callsign = callsign,
+                            selectedSubTab = opordSubTab,
+                            onSelectSubTab = { opordSubTab = it }
+                        )
+                        FthTab.CHEATSHEET -> FthCheatSheetScreen()
                     }
                 }
             }
 
-            int addedOrUpdated = 0;
+            Spacer(modifier = Modifier.height(8.dp))
 
-            foreach (Match pm in Regex.Matches(scopeText, @"<Placemark>([\s\S]*?)</Placemark>", RegexOptions.IgnoreCase))
-            {
-                string pBody = pm.Groups[1].Value;
-                if (pBody.IndexOf("<Polygon>", StringComparison.OrdinalIgnoreCase) < 0) continue;
-
-                string desc = "";
-                Match descMatch = Regex.Match(pBody, @"<description>([\s\S]*?)</description>", RegexOptions.IgnoreCase);
-                if (descMatch.Success) desc = UnescapeKmlXml(descMatch.Groups[1].Value.Trim());
-
-                string styleId = "";
-                Match stMatch = Regex.Match(pBody, @"<styleUrl>\s*#?([^<\s]+)\s*</styleUrl>", RegexOptions.IgnoreCase);
-                if (stMatch.Success) styleId = stMatch.Groups[1].Value.Trim();
-
-                bool isRangeSector = styleId.StartsWith("fth_sector_", StringComparison.OrdinalIgnoreCase) ||
-                                     desc.IndexOf("Zasięg płaski:", StringComparison.OrdinalIgnoreCase) >= 0;
-                if (!isRangeSector) continue;
-
-                string secId = styleId.StartsWith("fth_sector_", StringComparison.OrdinalIgnoreCase)
-                    ? styleId.Substring("fth_sector_".Length)
-                    : Guid.NewGuid().ToString("N");
-
-                string rawName = "Stanowisko";
-                Match nameTagMatch = Regex.Match(pBody, @"<name>([\s\S]*?)</name>", RegexOptions.IgnoreCase);
-                if (nameTagMatch.Success)
-                {
-                    rawName = UnescapeKmlXml(nameTagMatch.Groups[1].Value.Trim());
-                    int bracketIdx = rawName.IndexOf(" [", StringComparison.Ordinal);
-                    if (bracketIdx > 0) rawName = rawName.Substring(0, bracketIdx).Trim();
-                }
-
-                string weaponPreset = "Karabinek Szturmowy (60 m)";
-                double baseRadiusM = 60.0;
-                double deltaHM = 0.0;
-                double azimuthDeg = 45.0;
-                double spreadDeg = 75.0;
-
-                if (!string.IsNullOrEmpty(desc))
-                {
-                    string[] parts = desc.Split('|');
-                    foreach (string rawPart in parts)
-                    {
-                        string part = rawPart.Trim();
-                        if (part.StartsWith("Stanowisko:", StringComparison.OrdinalIgnoreCase))
-                        {
-                            string v = part.Substring("Stanowisko:".Length).Trim();
-                            if (!string.IsNullOrEmpty(v)) rawName = v;
-                        }
-                        else if (part.StartsWith("Klasa:", StringComparison.OrdinalIgnoreCase))
-                        {
-                            string v = part.Substring("Klasa:".Length).Trim();
-                            if (!string.IsNullOrEmpty(v)) weaponPreset = v;
-                        }
-                        else if (part.StartsWith("Zasięg płaski:", StringComparison.OrdinalIgnoreCase))
-                        {
-                            Match mNum = Regex.Match(part, @"([-\d.,]+)");
-                            if (mNum.Success && double.TryParse(mNum.Groups[1].Value.Replace(',', '.'), NumberStyles.Float, CultureInfo.InvariantCulture, out double rVal))
-                                baseRadiusM = Math.Clamp(rVal, 5.0, 500.0);
-                        }
-                        else if (part.IndexOf("dH:", StringComparison.OrdinalIgnoreCase) >= 0)
-                        {
-                            int dhIdx = part.IndexOf("dH:", StringComparison.OrdinalIgnoreCase);
-                            string afterDh = part.Substring(dhIdx + 3);
-                            Match mNum = Regex.Match(afterDh, @"([+-]?\d+(?:[.,]\d+)?)");
-                            if (mNum.Success && double.TryParse(mNum.Groups[1].Value.Replace("+", "").Replace(',', '.'), NumberStyles.Float, CultureInfo.InvariantCulture, out double dhVal))
-                                deltaHM = Math.Clamp(dhVal, -150.0, 150.0);
-                        }
-                        else if (part.StartsWith("Azymut:", StringComparison.OrdinalIgnoreCase))
-                        {
-                            Match mNum = Regex.Match(part, @"([-\d.,]+)");
-                            if (mNum.Success && double.TryParse(mNum.Groups[1].Value.Replace(',', '.'), NumberStyles.Float, CultureInfo.InvariantCulture, out double azVal))
-                                azimuthDeg = ((azVal % 360.0) + 360.0) % 360.0;
-                        }
-                        else if (part.StartsWith("Kąt sektora:", StringComparison.OrdinalIgnoreCase))
-                        {
-                            Match mNum = Regex.Match(part, @"([-\d.,]+)");
-                            if (mNum.Success && double.TryParse(mNum.Groups[1].Value.Replace(',', '.'), NumberStyles.Float, CultureInfo.InvariantCulture, out double spVal))
-                                spreadDeg = Math.Clamp(spVal, 5.0, 360.0);
-                        }
+            FthBottomNavBar(
+                selectedTab = if (isLockedByPermissions) FthTab.PACKAGES else currentTab,
+                isLocked = isLockedByPermissions,
+                onSelectTab = { tab ->
+                    if (isLockedByPermissions) {
+                        Toast.makeText(
+                            context,
+                            "Dostęp zablokowany (${permState.grantedCount}/5). Nadaj najpierw wszystkie uprawnienia!",
+                            Toast.LENGTH_SHORT
+                        ).show()
+                        onRequestNextMissing()
+                    } else {
+                        currentTab = tab
                     }
                 }
+            )
+        }
+    }
+}
 
-                double shooterLat = __LAT_FIELD__;
-                double shooterLon = __LON_FIELD__;
-                bool foundCoords = false;
+@Composable
+private fun FthTacticalGridBackground(modifier: Modifier = Modifier) {
+    Canvas(modifier = modifier) {
+        val step = 34.dp.toPx()
+        val lineColor = Color(0xFF0D232B)
+        var x = 0f
+        while (x < size.width) {
+            drawLine(lineColor, Offset(x, 0f), Offset(x, size.height), strokeWidth = 1f)
+            x += step
+        }
+        var y = 0f
+        while (y < size.height) {
+            drawLine(lineColor, Offset(0f, y), Offset(size.width, y), strokeWidth = 1f)
+            y += step
+        }
+    }
+}
 
-                if (!string.IsNullOrEmpty(styleId) && pointCoordsByStyle.TryGetValue(styleId, out var ptByStyle))
-                {
-                    shooterLat = ptByStyle.lat;
-                    shooterLon = ptByStyle.lon;
-                    foundCoords = true;
+@Composable
+private fun FthHeaderBar(onBackClick: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .background(Color(0xFF08161C))
+            .border(1.3.dp, FthCyan.copy(alpha = 0.78f), RoundedCornerShape(14.dp))
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Canvas(modifier = Modifier.size(32.dp)) {
+            val c = Offset(size.width / 2f, size.height / 2f)
+            val rOuter = size.minDimension * 0.44f
+            val rMid = size.minDimension * 0.28f
+            val rInner = size.minDimension * 0.11f
+            drawCircle(FthCyan, radius = rOuter, center = c, style = Stroke(width = 2.dp.toPx()))
+            drawCircle(FthCyan.copy(alpha = 0.75f), radius = rMid, center = c, style = Stroke(width = 1.5.dp.toPx()))
+            drawCircle(FthCyanBright, radius = rInner, center = c)
+            drawLine(FthCyan, Offset(c.x, 2f), Offset(c.x, size.height * 0.24f), strokeWidth = 1.6.dp.toPx())
+            drawLine(FthCyan, Offset(c.x, size.height * 0.76f), Offset(c.x, size.height - 2f), strokeWidth = 1.6.dp.toPx())
+            drawLine(FthCyan, Offset(2f, c.y), Offset(size.width * 0.24f, c.y), strokeWidth = 1.6.dp.toPx())
+            drawLine(FthCyan, Offset(size.width * 0.76f, c.y), Offset(size.width - 2f, c.y), strokeWidth = 1.6.dp.toPx())
+        }
+
+        Spacer(modifier = Modifier.width(10.dp))
+
+        Column(modifier = Modifier.weight(1f)) {
+            BasicText(
+                text = "FIELD TAK HUB",
+                style = TextStyle(
+                    color = FthTextPrimary,
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    letterSpacing = 1.1.sp
+                )
+            )
+            BasicText(
+                text = "connect · deploy · operate",
+                style = TextStyle(
+                    color = FthCyan.copy(alpha = 0.85f),
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Medium,
+                    letterSpacing = 0.4.sp
+                )
+            )
+        }
+
+        Box(
+            modifier = Modifier
+                .size(34.dp)
+                .clip(RoundedCornerShape(8.dp))
+                .background(Color(0xFF0A1D24))
+                .border(1.dp, FthCyan.copy(alpha = 0.55f), RoundedCornerShape(8.dp))
+                .clickable { onBackClick() },
+            contentAlignment = Alignment.Center
+        ) {
+            BasicText(
+                text = "<",
+                style = TextStyle(
+                    color = FthCyan,
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            )
+        }
+    }
+}
+
+@Composable
+private fun FthOnboardingPermissionsScreen(
+    permState: FthPermState,
+    activeProfile: String,
+    isHardGateMode: Boolean,
+    onToggleProfile: () -> Unit,
+    onRequestGps: () -> Unit,
+    onRequestCamera: () -> Unit,
+    onRequestBluetooth: () -> Unit,
+    onRequestFiles: () -> Unit,
+    onRequestInstallApk: () -> Unit,
+    onPrimaryAction: () -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+    ) {
+        BasicText(
+            text = "MODUŁ: UPRAWNIENIA & PACZKI",
+            style = TextStyle(
+                color = FthCyan.copy(alpha = 0.8f),
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Bold,
+                letterSpacing = 0.9.sp
+            )
+        )
+        Spacer(modifier = Modifier.height(4.dp))
+        BasicText(
+            text = "Onboarding & Permissions",
+            style = TextStyle(
+                color = FthTextPrimary,
+                fontSize = 21.sp,
+                fontWeight = FontWeight.Bold
+            )
+        )
+
+        if (isHardGateMode) {
+            Spacer(modifier = Modifier.height(6.dp))
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(Color(0xFF241B08))
+                    .border(1.dp, FthAmberWarn.copy(alpha = 0.75f), RoundedCornerShape(8.dp))
+                    .padding(horizontal = 10.dp, vertical = 7.dp)
+            ) {
+                BasicText(
+                    text = "WYMAGANE DO STARTU (${permState.grantedCount}/5): Nadaj wszystkie 5 uprawnień poniżej, aby odblokować skaner QR i moduły taktyczne.",
+                    style = TextStyle(
+                        color = FthAmberWarn,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        lineHeight = 15.sp
+                    )
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        FthPermissionCardRow("Lokalizacja GPS", permState.gps, 0, onRequestGps)
+        Spacer(modifier = Modifier.height(9.dp))
+        FthPermissionCardRow("Dostęp do aparatu (QR)", permState.camera, 1, onRequestCamera)
+        Spacer(modifier = Modifier.height(9.dp))
+        FthPermissionCardRow("Łączność Bluetooth & LoRa", permState.bluetooth, 2, onRequestBluetooth)
+        Spacer(modifier = Modifier.height(9.dp))
+        FthPermissionCardRow("Dostęp do plików (.ftak)", permState.files, 3, onRequestFiles)
+        Spacer(modifier = Modifier.height(9.dp))
+        FthPermissionCardRow("Instalacja pakietów (.apk)", permState.installApk, 4, onRequestInstallApk)
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        val btnBorder = if (permState.allGranted) FthCyanBright else FthAmberWarn
+        val btnBg = if (permState.allGranted) {
+            Brush.verticalGradient(listOf(Color(0xFF0E343B), Color(0xFF082228)))
+        } else {
+            Brush.verticalGradient(listOf(Color(0xFF2B1F09), Color(0xFF1A1205)))
+        }
+
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(14.dp))
+                .background(btnBg)
+                .border(1.8.dp, btnBorder, RoundedCornerShape(14.dp))
+                .clickable {
+                    if (permState.allGranted) onToggleProfile() else onPrimaryAction()
                 }
-                else if (pointCoordsByName.TryGetValue(rawName, out var ptByName))
-                {
-                    shooterLat = ptByName.lat;
-                    shooterLon = ptByName.lon;
-                    foundCoords = true;
+                .padding(vertical = 15.dp, horizontal = 14.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                BasicText(
+                    text = if (permState.allGranted) "AKTYWNY PROFIL:" else "BLOKADA STARTU (${permState.grantedCount}/5)",
+                    style = TextStyle(
+                        color = if (permState.allGranted) FthTextMuted else FthAmberWarn,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        letterSpacing = 1.0.sp
+                    )
+                )
+                Spacer(modifier = Modifier.height(2.dp))
+                BasicText(
+                    text = if (permState.allGranted) activeProfile else "NADAJ BRAKUJĄCE UPRAWNIENIA",
+                    style = TextStyle(
+                        color = if (permState.allGranted) FthCyanBright else FthTextPrimary,
+                        fontSize = if (permState.allGranted) 22.sp else 15.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                        letterSpacing = 1.2.sp
+                    )
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(8.dp))
+    }
+}
+
+@Composable
+private fun FthPermissionCardRow(
+    title: String,
+    granted: Boolean,
+    iconType: Int,
+    onClick: () -> Unit
+) {
+    val borderCol = if (granted) FthCardBorder else FthAmberWarn.copy(alpha = 0.65f)
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(11.dp))
+            .background(FthCardBg)
+            .border(1.1.dp, borderCol, RoundedCornerShape(11.dp))
+            .clickable { onClick() }
+            .padding(horizontal = 13.dp, vertical = 13.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        FthPermissionVectorIcon(iconType = iconType, modifier = Modifier.size(22.dp))
+        Spacer(modifier = Modifier.width(12.dp))
+        BasicText(
+            text = title,
+            modifier = Modifier.weight(1f),
+            style = TextStyle(
+                color = FthTextPrimary,
+                fontSize = 14.5.sp,
+                fontWeight = FontWeight.SemiBold
+            )
+        )
+        if (granted) {
+            Canvas(modifier = Modifier.size(18.dp)) {
+                val p = Path().apply {
+                    moveTo(size.width * 0.14f, size.height * 0.52f)
+                    lineTo(size.width * 0.42f, size.height * 0.80f)
+                    lineTo(size.width * 0.88f, size.height * 0.22f)
                 }
-                else
-                {
-                    Match polyCoordsMatch = Regex.Match(pBody, @"<coordinates>([\s\S]*?)</coordinates>", RegexOptions.IgnoreCase);
-                    if (polyCoordsMatch.Success)
-                    {
-                        var coordPairs = new List<(double lon, double lat)>();
-                        foreach (Match cm in Regex.Matches(polyCoordsMatch.Groups[1].Value, @"([-\d.]+)\s*,\s*([-\d.]+)"))
-                        {
-                            if (double.TryParse(cm.Groups[1].Value, NumberStyles.Float, CultureInfo.InvariantCulture, out double cLon) &&
-                                double.TryParse(cm.Groups[2].Value, NumberStyles.Float, CultureInfo.InvariantCulture, out double cLat))
-                            {
-                                coordPairs.Add((cLon, cLat));
+                drawPath(
+                    path = p,
+                    color = FthGreenOk,
+                    style = Stroke(width = 2.6.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)
+                )
+            }
+        } else {
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(6.dp))
+                    .background(Color(0xFF2B2009))
+                    .border(1.dp, FthAmberWarn, RoundedCornerShape(6.dp))
+                    .padding(horizontal = 8.dp, vertical = 3.dp)
+            ) {
+                BasicText(
+                    text = "NADAJ",
+                    style = TextStyle(
+                        color = FthAmberWarn,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.ExtraBold
+                    )
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun FthPermissionVectorIcon(iconType: Int, modifier: Modifier = Modifier) {
+    Canvas(modifier = modifier) {
+        val stroke = Stroke(width = 1.8.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)
+        val c = Offset(size.width / 2f, size.height / 2f)
+        when (iconType) {
+            0 -> {
+                drawCircle(FthCyan, radius = size.minDimension * 0.26f, center = c, style = stroke)
+                drawLine(FthCyan, Offset(c.x, 1f), Offset(c.x, size.height * 0.24f), strokeWidth = 1.8.dp.toPx())
+                drawLine(FthCyan, Offset(c.x, size.height * 0.76f), Offset(c.x, size.height - 1f), strokeWidth = 1.8.dp.toPx())
+                drawLine(FthCyan, Offset(1f, c.y), Offset(size.width * 0.24f, c.y), strokeWidth = 1.8.dp.toPx())
+                drawLine(FthCyan, Offset(size.width * 0.76f, c.y), Offset(size.width - 1f, c.y), strokeWidth = 1.8.dp.toPx())
+            }
+            1 -> {
+                drawRoundRect(
+                    color = FthCyan,
+                    topLeft = Offset(1.5.dp.toPx(), 4.dp.toPx()),
+                    size = Size(size.width - 3.dp.toPx(), size.height - 7.dp.toPx()),
+                    cornerRadius = CornerRadius(3.dp.toPx(), 3.dp.toPx()),
+                    style = stroke
+                )
+                drawCircle(FthCyan, radius = size.minDimension * 0.18f, center = Offset(c.x, c.y + 1.dp.toPx()), style = stroke)
+            }
+            2 -> {
+                val p = Path().apply {
+                    moveTo(size.width * 0.30f, size.height * 0.26f)
+                    lineTo(size.width * 0.72f, size.height * 0.72f)
+                    lineTo(size.width * 0.50f, size.height * 0.90f)
+                    lineTo(size.width * 0.50f, size.height * 0.10f)
+                    lineTo(size.width * 0.72f, size.height * 0.28f)
+                    lineTo(size.width * 0.30f, size.height * 0.74f)
+                }
+                drawPath(p, color = FthCyan, style = stroke)
+            }
+            3 -> {
+                drawRoundRect(
+                    color = FthCyan,
+                    topLeft = Offset(2.dp.toPx(), 4.dp.toPx()),
+                    size = Size(size.width - 4.dp.toPx(), size.height - 7.dp.toPx()),
+                    cornerRadius = CornerRadius(2.5.dp.toPx(), 2.5.dp.toPx()),
+                    style = stroke
+                )
+                drawLine(FthCyan, Offset(2.dp.toPx(), 8.5.dp.toPx()), Offset(size.width - 2.dp.toPx(), 8.5.dp.toPx()), strokeWidth = 1.6.dp.toPx())
+            }
+            else -> {
+                drawCircle(FthCyan, radius = size.minDimension * 0.42f, center = c, style = stroke)
+                drawLine(FthCyan, Offset(c.x, size.height * 0.26f), Offset(c.x, size.height * 0.68f), strokeWidth = 1.8.dp.toPx())
+                drawLine(FthCyan, Offset(c.x - 4.dp.toPx(), size.height * 0.52f), Offset(c.x, size.height * 0.70f), strokeWidth = 1.8.dp.toPx())
+                drawLine(FthCyan, Offset(c.x + 4.dp.toPx(), size.height * 0.52f), Offset(c.x, size.height * 0.70f), strokeWidth = 1.8.dp.toPx())
+            }
+        }
+    }
+}
+
+@Composable
+private fun FthScannerScreen(
+    activity: ComponentActivity,
+    callsign: String,
+    onCallsignChange: (String) -> Unit,
+    lastScannedPayload: String?,
+    onQrDetected: (String) -> Unit,
+    onInjectClick: () -> Unit
+) {
+    val context = LocalContext.current
+    val atakInstalled = remember { isPackageInstalled(context, "com.atakmap.app.civ") }
+    val meshtasticInstalled = remember { isPackageInstalled(context, "com.geeksville.mesh") }
+    val callsignShort = remember(callsign) { buildShortCallsignTag(callsign) }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState()),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth(0.76f)
+                .aspectRatio(1f)
+                .clip(RoundedCornerShape(10.dp))
+                .background(Color(0xFF071318)),
+            contentAlignment = Alignment.Center
+        ) {
+            FthLiveCameraOrViewfinder(
+                activity = activity,
+                onQrDetected = onQrDetected,
+                modifier = Modifier.fillMaxSize()
+            )
+            FthAnimatedLaserScannerOverlay(modifier = Modifier.fillMaxSize())
+        }
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        BasicText(
+            text = if (lastScannedPayload == null) "ZESKANUJ QR / .FTAK" else "WYKRYTO KOD QR (.FTAK GOTOWY)",
+            style = TextStyle(
+                color = if (lastScannedPayload == null) FthTextMuted else FthGreenOk,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Bold,
+                letterSpacing = 1.1.sp
+            )
+        )
+
+        Spacer(modifier = Modifier.height(14.dp))
+
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 2.dp)
+        ) {
+            BasicText(
+                text = "Status integracji",
+                style = TextStyle(
+                    color = FthTextPrimary,
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            )
+            Spacer(modifier = Modifier.height(6.dp))
+
+            FthIntegrationStatusLine("ATAK-CIV", if (atakInstalled) "(OK)" else "(Nie wykryto)", atakInstalled)
+            Spacer(modifier = Modifier.height(3.dp))
+            FthIntegrationStatusLine("Meshtastic", if (meshtasticInstalled) "(OK)" else "(Nie wykryto)", meshtasticInstalled)
+            Spacer(modifier = Modifier.height(3.dp))
+            FthIntegrationStatusLine("Server OTS", "(Połączono)", true)
+
+            Spacer(modifier = Modifier.height(14.dp))
+
+            BasicText(
+                text = "ZNAK WYWOŁAWCZY (Callsign)",
+                style = TextStyle(
+                    color = FthTextMuted,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                    letterSpacing = 0.7.sp
+                )
+            )
+            Spacer(modifier = Modifier.height(5.dp))
+
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(FthInputBg)
+                    .border(1.2.dp, FthCyan.copy(alpha = 0.65f), RoundedCornerShape(8.dp))
+                    .padding(horizontal = 12.dp, vertical = 11.dp)
+            ) {
+                BasicTextField(
+                    value = callsign,
+                    onValueChange = { if (it.length <= 24) onCallsignChange(it) },
+                    singleLine = true,
+                    cursorBrush = SolidColor(FthCyanBright),
+                    textStyle = TextStyle(
+                        color = FthTextPrimary,
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.SemiBold
+                    ),
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+
+            Spacer(modifier = Modifier.height(5.dp))
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                BasicText(
+                    text = "Automated preview:",
+                    style = TextStyle(color = FthTextMuted, fontSize = 11.5.sp)
+                )
+                BasicText(
+                    text = "[$callsignShort]",
+                    style = TextStyle(
+                        color = FthTextPrimary,
+                        fontSize = 11.5.sp,
+                        fontWeight = FontWeight.Bold,
+                        fontFamily = FontFamily.Monospace
+                    )
+                )
+            }
+
+            Spacer(modifier = Modifier.height(14.dp))
+
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(Brush.horizontalGradient(listOf(Color(0xFF15C8B4), Color(0xFF39F6D8))))
+                    .clickable { onInjectClick() }
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.Center
+            ) {
+                BasicText(
+                    text = "↓↑",
+                    style = TextStyle(
+                        color = Color(0xFF05181C),
+                        fontSize = 20.sp,
+                        fontWeight = FontWeight.Black
+                    )
+                )
+                Spacer(modifier = Modifier.width(12.dp))
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    BasicText(
+                        text = "WSTRZYKNIJ DO",
+                        style = TextStyle(
+                            color = Color(0xFF041418),
+                            fontSize = 13.5.sp,
+                            fontWeight = FontWeight.ExtraBold,
+                            letterSpacing = 0.6.sp
+                        )
+                    )
+                    BasicText(
+                        text = "ATAK + MESHTASTIC",
+                        style = TextStyle(
+                            color = Color(0xFF041418),
+                            fontSize = 13.5.sp,
+                            fontWeight = FontWeight.ExtraBold,
+                            letterSpacing = 0.6.sp
+                        )
+                    )
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(8.dp))
+    }
+}
+
+@Composable
+private fun FthAnimatedLaserScannerOverlay(modifier: Modifier = Modifier) {
+    val infiniteTransition = rememberInfiniteTransition(label = "fth_qr_laser")
+    val laserPos by infiniteTransition.animateFloat(
+        initialValue = 0.08f,
+        targetValue = 0.92f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 1850, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "fth_laser_y"
+    )
+
+    Canvas(modifier = modifier) {
+        val w = size.width
+        val h = size.height
+        val cornerLen = w * 0.16f
+        val strokePx = 4.dp.toPx()
+        val halfS = strokePx / 2f
+        val cornerColor = Color(0xFF28EBBF)
+
+        drawLine(cornerColor, Offset(halfS, cornerLen), Offset(halfS, halfS), strokeWidth = strokePx, cap = StrokeCap.Square)
+        drawLine(cornerColor, Offset(halfS, halfS), Offset(cornerLen, halfS), strokeWidth = strokePx, cap = StrokeCap.Square)
+
+        drawLine(cornerColor, Offset(w - cornerLen, halfS), Offset(w - halfS, halfS), strokeWidth = strokePx, cap = StrokeCap.Square)
+        drawLine(cornerColor, Offset(w - halfS, halfS), Offset(w - halfS, cornerLen), strokeWidth = strokePx, cap = StrokeCap.Square)
+
+        drawLine(cornerColor, Offset(halfS, h - cornerLen), Offset(halfS, h - halfS), strokeWidth = strokePx, cap = StrokeCap.Square)
+        drawLine(cornerColor, Offset(halfS, h - halfS), Offset(cornerLen, h - halfS), strokeWidth = strokePx, cap = StrokeCap.Square)
+
+        drawLine(cornerColor, Offset(w - cornerLen, h - halfS), Offset(w - halfS, h - halfS), strokeWidth = strokePx, cap = StrokeCap.Square)
+        drawLine(cornerColor, Offset(w - halfS, h - halfS), Offset(w - halfS, h - cornerLen), strokeWidth = strokePx, cap = StrokeCap.Square)
+
+        val laserY = h * laserPos
+        val glowHalf = 18.dp.toPx()
+        val glowTop = (laserY - glowHalf).coerceAtLeast(strokePx)
+        val glowBottom = (laserY + glowHalf).coerceAtMost(h - strokePx)
+
+        if (glowBottom > glowTop) {
+            drawRect(
+                brush = Brush.verticalGradient(
+                    colors = listOf(
+                        Color.Transparent,
+                        FthCyanBright.copy(alpha = 0.42f),
+                        Color.Transparent
+                    ),
+                    startY = glowTop,
+                    endY = glowBottom
+                ),
+                topLeft = Offset(strokePx, glowTop),
+                size = Size(w - strokePx * 2f, glowBottom - glowTop)
+            )
+        }
+
+        drawLine(
+            brush = Brush.horizontalGradient(
+                colors = listOf(
+                    Color.Transparent,
+                    FthCyan,
+                    Color.White,
+                    FthCyan,
+                    Color.Transparent
+                )
+            ),
+            start = Offset(strokePx, laserY),
+            end = Offset(w - strokePx, laserY),
+            strokeWidth = 2.6.dp.toPx()
+        )
+    }
+}
+
+@Composable
+private fun FthIntegrationStatusLine(label: String, statusText: String, isOk: Boolean) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Box(
+            modifier = Modifier
+                .size(8.dp)
+                .clip(CircleShape)
+                .background(if (isOk) FthGreenOk else FthAmberWarn)
+        )
+        Spacer(modifier = Modifier.width(8.dp))
+        BasicText(
+            text = "$label ",
+            style = TextStyle(color = FthTextPrimary, fontSize = 13.5.sp, fontWeight = FontWeight.SemiBold)
+        )
+        BasicText(
+            text = statusText,
+            style = TextStyle(color = if (isOk) FthGreenOk else FthAmberWarn, fontSize = 13.5.sp, fontWeight = FontWeight.Bold)
+        )
+    }
+}
+
+@Composable
+private fun FthOpordScreen(
+    context: Context,
+    callsign: String,
+    selectedSubTab: Int,
+    onSelectSubTab: (Int) -> Unit
+) {
+    val liveMgrs = remember { getLastKnownMgrs(context) }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(12.dp))
+                .background(FthRedBg)
+                .border(1.5.dp, FthRedBorder, RoundedCornerShape(12.dp))
+                .padding(14.dp)
+        ) {
+            BasicText(
+                text = "SOS MGRS ALARM",
+                style = TextStyle(
+                    color = FthRedBright,
+                    fontSize = 20.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    letterSpacing = 1.0.sp
+                ),
+                modifier = Modifier.fillMaxWidth()
+            )
+            Spacer(modifier = Modifier.height(10.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    BasicText(
+                        text = "MGRS: ${liveMgrs.first}",
+                        style = TextStyle(
+                            color = FthTextPrimary,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Bold,
+                            fontFamily = FontFamily.Monospace
+                        )
+                    )
+                    BasicText(
+                        text = liveMgrs.second,
+                        style = TextStyle(
+                            color = FthTextPrimary,
+                            fontSize = 13.5.sp,
+                            fontWeight = FontWeight.ExtraBold,
+                            fontFamily = FontFamily.Monospace
+                        )
+                    )
+                }
+
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(9.dp))
+                        .background(FthRedBorder)
+                        .clickable {
+                            val body = "SOS! ALARM TAKTYCZNY! Znak: $callsign | Pozycja MGRS: ${liveMgrs.first} ${liveMgrs.second}"
+                            val intent = Intent(Intent.ACTION_SENDTO).apply {
+                                data = Uri.parse("smsto:")
+                                putExtra("sms_body", body)
+                            }
+                            try {
+                                context.startActivity(intent)
+                            } catch (_: Exception) {
+                                Toast.makeText(context, body, Toast.LENGTH_LONG).show()
                             }
                         }
+                        .padding(horizontal = 14.dp, vertical = 9.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    BasicText(
+                        text = "WYŚLIJ\nSMS SOS",
+                        style = TextStyle(
+                            color = Color(0xFF1A0505),
+                            fontSize = 11.5.sp,
+                            fontWeight = FontWeight.ExtraBold,
+                            textAlign = TextAlign.Center
+                        )
+                    )
+                }
+            }
+        }
 
-                        if (coordPairs.Count > 0)
-                        {
-                            if (spreadDeg < 359.5)
-                            {
-                                shooterLon = coordPairs[0].lon;
-                                shooterLat = coordPairs[0].lat;
-                            }
-                            else
-                            {
-                                shooterLon = coordPairs.Average(p => p.lon);
-                                shooterLat = coordPairs.Average(p => p.lat);
-                            }
-                            foundCoords = true;
+        Spacer(modifier = Modifier.height(14.dp))
+
+        BasicText(
+            text = "ROZKAZ BOJOWY (OPORD) & ŁĄCZNOŚĆ",
+            style = TextStyle(color = FthTextPrimary, fontSize = 13.5.sp, fontWeight = FontWeight.ExtraBold, letterSpacing = 0.5.sp)
+        )
+        Spacer(modifier = Modifier.height(4.dp))
+        BasicText(
+            text = "OPORD",
+            style = TextStyle(color = FthTextMuted, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+        )
+        Spacer(modifier = Modifier.height(6.dp))
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            val labels = listOf("[ DZIEŃ 1 ]", "[ DZIEŃ 2 ]", "[ MAPA ]")
+            labels.forEachIndexed { idx, txt ->
+                val isSel = selectedSubTab == idx
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .clip(RoundedCornerShape(7.dp))
+                        .background(if (isSel) Color(0xFF11353E) else FthCardBg)
+                        .border(1.1.dp, if (isSel) FthCyan else FthCardBorder, RoundedCornerShape(7.dp))
+                        .clickable { onSelectSubTab(idx) }
+                        .padding(vertical = 8.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    BasicText(
+                        text = txt,
+                        style = TextStyle(
+                            color = if (isSel) FthCyanBright else FthTextMuted,
+                            fontSize = 11.5.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    )
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(11.dp))
+                .background(FthCardBg)
+                .border(1.dp, FthCardBorder, RoundedCornerShape(11.dp))
+                .padding(12.dp)
+        ) {
+            BasicText(
+                text = "TABELA CZĘSTOTLIWOŚCI (Radio)",
+                style = TextStyle(color = FthTextMuted, fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 0.5.sp)
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            FthRadioFreqRow("PMR: CH 1 (446.00625) · CTCSS 67.0")
+            Spacer(modifier = Modifier.height(7.dp))
+            FthRadioFreqRow("VHF: 145.500 MHz · CTCSS 88.5")
+            Spacer(modifier = Modifier.height(7.dp))
+            FthRadioFreqRow("LoRa: EU_868 · SHORT_FAST · MESH")
+        }
+
+        Spacer(modifier = Modifier.height(14.dp))
+
+        BasicText(
+            text = "Zadanie:",
+            style = TextStyle(color = FthTextPrimary, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+        )
+        Spacer(modifier = Modifier.height(5.dp))
+        val taskText = when (selectedSubTab) {
+            0 -> "Skryte przemieszczenie czujki z przodu, rozpoznanie podejść oraz utrzymanie stałej łączności LoRa Mesh z bazą."
+            1 -> "Zajęcie rubieży obronnej przed świtem, wyznaczenie sektorów ognia dla wsparcia KM i gotowość do ewakuacji MEDEVAC."
+            else -> "Paczka mapowa offline (skala 1:5000, siatka MGRS / WGS84) zsynchronizowana z Field TAK Hub Builder."
+        }
+        BasicText(
+            text = taskText,
+            style = TextStyle(color = FthTextMuted, fontSize = 13.sp, lineHeight = 18.sp)
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+    }
+}
+
+@Composable
+private fun FthRadioFreqRow(text: String) {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(6.dp))
+            .background(Color(0xFF071217))
+            .border(0.8.dp, FthCardBorder.copy(alpha = 0.7f), RoundedCornerShape(6.dp))
+            .padding(horizontal = 10.dp, vertical = 7.dp)
+    ) {
+        BasicText(
+            text = text,
+            style = TextStyle(color = FthTextPrimary, fontSize = 12.5.sp, fontWeight = FontWeight.SemiBold, fontFamily = FontFamily.Monospace)
+        )
+    }
+}
+
+@Composable
+private fun FthCheatSheetScreen() {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+    ) {
+        BasicText(
+            text = "MODUŁ: ŚCIĄGA TAKTYCZNA",
+            style = TextStyle(color = FthCyan.copy(alpha = 0.8f), fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 0.9.sp)
+        )
+        Spacer(modifier = Modifier.height(4.dp))
+        BasicText(
+            text = "Procedury & Meldunki (Offline)",
+            style = TextStyle(color = FthTextPrimary, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+        )
+        Spacer(modifier = Modifier.height(12.dp))
+
+        FthCheatCard(
+            "MELDUNEK SALUTE (Rozpoznanie)",
+            "S - Size (Liczebność)\nA - Activity (Aktywność)\nL - Location (Lokalizacja MGRS)\nU - Unit (Umundurowanie/Formacja)\nT - Time (Czas obserwacji)\nE - Equipment (Uzbrojenie/Sprzęt)"
+        )
+        Spacer(modifier = Modifier.height(10.dp))
+        FthCheatCard(
+            "PROTOKÓŁ MARCH (TCCC)",
+            "M - Massive Hemorrhage (Staza/Krwotok)\nA - Airway (Drożność dróg oddechowych)\nR - Respiration (Opatrunek wentylowy)\nC - Circulation (Wstrząs/Płyny)\nH - Hypothermia / Head (Termika/Głowa)"
+        )
+        Spacer(modifier = Modifier.height(10.dp))
+        FthCheatCard(
+            "ALFABET FONETYCZNY NATO",
+            "Alfa · Bravo · Charlie · Delta · Echo · Foxtrot · Golf · Hotel · India · Juliett · Kilo · Lima · Mike · November · Oscar · Papa · Quebec · Romeo · Sierra · Tango · Uniform · Victor · Whiskey · X-ray · Yankee · Zulu"
+        )
+    }
+}
+
+@Composable
+private fun FthCheatCard(title: String, body: String) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .background(FthCardBg)
+            .border(1.dp, FthCardBorder, RoundedCornerShape(10.dp))
+            .padding(12.dp)
+    ) {
+        BasicText(text = title, style = TextStyle(color = FthCyan, fontSize = 12.5.sp, fontWeight = FontWeight.ExtraBold))
+        Spacer(modifier = Modifier.height(6.dp))
+        BasicText(text = body, style = TextStyle(color = FthTextPrimary, fontSize = 12.sp, lineHeight = 18.sp))
+    }
+}
+
+@Composable
+private fun FthBottomNavBar(
+    selectedTab: FthTab,
+    isLocked: Boolean,
+    onSelectTab: (FthTab) -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(Color(0xFF071319))
+            .border(1.dp, FthCardBorder, RoundedCornerShape(12.dp))
+            .padding(vertical = 8.dp, horizontal = 4.dp),
+        horizontalArrangement = Arrangement.SpaceEvenly,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        FthTab.values().forEach { tab ->
+            val isActive = tab == selectedTab && !isLocked
+            val tint = when {
+                isLocked && tab == FthTab.PACKAGES -> FthAmberWarn
+                isLocked -> Color(0xFF344C54)
+                isActive -> FthCyanBright
+                else -> FthTextMuted
+            }
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .clickable { onSelectTab(tab) }
+                    .padding(vertical = 2.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                FthNavTabIcon(tab = tab, tint = tint, modifier = Modifier.size(20.dp))
+                Spacer(modifier = Modifier.height(3.dp))
+                BasicText(
+                    text = tab.label,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    style = TextStyle(
+                        color = tint,
+                        fontSize = 10.sp,
+                        fontWeight = if (isActive) FontWeight.ExtraBold else FontWeight.SemiBold,
+                        letterSpacing = 0.4.sp
+                    )
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun FthNavTabIcon(tab: FthTab, tint: Color, modifier: Modifier = Modifier) {
+    Canvas(modifier = modifier) {
+        val st = Stroke(width = 1.7.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)
+        val w = size.width
+        val h = size.height
+        when (tab) {
+            FthTab.SCANNER -> {
+                drawRect(tint, Offset(w * 0.12f, h * 0.12f), Size(w * 0.28f, h * 0.28f), style = st)
+                drawRect(tint, Offset(w * 0.60f, h * 0.12f), Size(w * 0.28f, h * 0.28f), style = st)
+                drawRect(tint, Offset(w * 0.12f, h * 0.60f), Size(w * 0.28f, h * 0.28f), style = st)
+                drawRect(tint, Offset(w * 0.62f, h * 0.62f), Size(w * 0.22f, h * 0.22f))
+            }
+            FthTab.PACKAGES -> {
+                drawRoundRect(tint, Offset(w * 0.12f, h * 0.22f), Size(w * 0.76f, h * 0.62f), CornerRadius(2.dp.toPx()), style = st)
+                drawLine(tint, Offset(w * 0.12f, h * 0.44f), Offset(w * 0.88f, h * 0.44f), strokeWidth = 1.5.dp.toPx())
+            }
+            FthTab.OPORD -> {
+                drawRoundRect(tint, Offset(w * 0.18f, h * 0.10f), Size(w * 0.64f, h * 0.80f), CornerRadius(2.dp.toPx()), style = st)
+                drawLine(tint, Offset(w * 0.32f, h * 0.36f), Offset(w * 0.68f, h * 0.36f), strokeWidth = 1.5.dp.toPx())
+                drawLine(tint, Offset(w * 0.32f, h * 0.56f), Offset(w * 0.68f, h * 0.56f), strokeWidth = 1.5.dp.toPx())
+                drawLine(tint, Offset(w * 0.32f, h * 0.74f), Offset(w * 0.56f, h * 0.74f), strokeWidth = 1.5.dp.toPx())
+            }
+            FthTab.CHEATSHEET -> {
+                drawCircle(tint, radius = w * 0.32f, center = Offset(w / 2f, h / 2f), style = st)
+                drawCircle(tint, radius = w * 0.12f, center = Offset(w / 2f, h / 2f))
+            }
+        }
+    }
+}
+
+private fun isPackageInstalled(context: Context, packageName: String): Boolean {
+    return try {
+        context.packageManager.getPackageInfo(packageName, 0)
+        true
+    } catch (_: Exception) {
+        false
+    }
+}
+
+private fun buildShortCallsignTag(callsign: String): String {
+    val clean = callsign.uppercase(Locale.ROOT).filter { it.isLetterOrDigit() }
+    if (clean.isEmpty()) return "FTH1"
+    val digits = clean.filter { it.isDigit() }
+    val letters = clean.filter { it.isLetter() }
+    val prefix = letters.take(3).ifEmpty { clean.take(3) }
+    val suffix = digits.takeLast(1).ifEmpty { "1" }
+    return (prefix + suffix).take(4)
+}
+
+@SuppressLint("MissingPermission")
+private fun getLastKnownMgrs(context: Context): Pair<String, String> {
+    return try {
+        val lm = context.getSystemService(Context.LOCATION_SERVICE) as? LocationManager
+        val providers = lm?.getProviders(true) ?: emptyList()
+        var best: Location? = null
+        for (p in providers) {
+            val loc = lm?.getLastKnownLocation(p) ?: continue
+            if (best == null || loc.accuracy < best.accuracy) best = loc
+        }
+        if (best != null) {
+            latLonToMgrsSplit(best.latitude, best.longitude)
+        } else {
+            Pair("34U", "CA 48120 21050")
+        }
+    } catch (_: Exception) {
+        Pair("34U", "CA 48120 21050")
+    }
+}
+
+private fun latLonToMgrsSplit(latIn: Double, lonIn: Double): Pair<String, String> {
+    val lat = latIn.coerceIn(-80.0, 84.0)
+    val lon = lonIn.coerceIn(-180.0, 179.999999)
+    val zone = floor((lon + 180.0) / 6.0).toInt() + 1
+    val bands = "CDEFGHJKLMNPQRSTUVWXX"
+    val bandIdx = floor((lat + 80.0) / 8.0).toInt().coerceIn(0, bands.length - 1)
+    val band = bands[bandIdx]
+
+    val a = 6378137.0
+    val f = 1.0 / 298.257223563
+    val k0 = 0.9996
+    val e2 = 2.0 * f - f * f
+    val ep2 = e2 / (1.0 - e2)
+    val latRad = Math.toRadians(lat)
+    val lonRad = Math.toRadians(lon)
+    val lon0Rad = Math.toRadians(((zone - 1) * 6 - 180 + 3).toDouble())
+
+    val nVal = a / sqrt(1.0 - e2 * sin(latRad).pow(2))
+    val tVal = tan(latRad).pow(2)
+    val cVal = ep2 * cos(latRad).pow(2)
+    val aVal = cos(latRad) * (lonRad - lon0Rad)
+    val mVal = a * (
+        (1.0 - e2 / 4.0 - 3.0 * e2 * e2 / 64.0 - 5.0 * e2 * e2 * e2 / 256.0) * latRad -
+            (3.0 * e2 / 8.0 + 3.0 * e2 * e2 / 32.0 + 45.0 * e2 * e2 * e2 / 1024.0) * sin(2.0 * latRad) +
+            (15.0 * e2 * e2 / 256.0 + 45.0 * e2 * e2 * e2 / 1024.0) * sin(4.0 * latRad) -
+            (35.0 * e2 * e2 * e2 / 3072.0) * sin(6.0 * latRad)
+        )
+    val easting = k0 * nVal * (
+        aVal + (1.0 - tVal + cVal) * aVal.pow(3) / 6.0 +
+            (5.0 - 18.0 * tVal + tVal * tVal + 72.0 * cVal - 58.0 * ep2) * aVal.pow(5) / 120.0
+        ) + 500000.0
+    var northing = k0 * (
+        mVal + nVal * tan(latRad) * (
+            aVal * aVal / 2.0 +
+                (5.0 - tVal + 9.0 * cVal + 4.0 * cVal * cVal) * aVal.pow(4) / 24.0 +
+                (61.0 - 58.0 * tVal + tVal * tVal + 600.0 * cVal - 330.0 * ep2) * aVal.pow(6) / 720.0
+            )
+        )
+    if (lat < 0.0) northing += 10000000.0
+
+    val setNum = (zone - 1) % 6
+    val colSets = arrayOf("ABCDEFGH", "JKLMNPQR", "STUVWXYZ", "ABCDEFGH", "JKLMNPQR", "STUVWXYZ")
+    val rowSets = arrayOf("ABCDEFGHJKLMNPQRSTUV", "FGHJKLMNPQRSTUVABCDE")
+    val colIdx = ((floor(easting / 100000.0).toInt() - 1) % 8 + 8) % 8
+    val rowIdx = (floor((northing % 2000000.0) / 100000.0).toInt() % 20 + 20) % 20
+    val sq = "${colSets[setNum][colIdx]}${rowSets[setNum % 2][rowIdx]}"
+    val e5 = floor(easting % 100000.0).toInt().coerceIn(0, 99999)
+    val n5 = floor(northing % 100000.0).toInt().coerceIn(0, 99999)
+
+    return Pair(
+        String.format(Locale.US, "%02d%c", zone, band),
+        String.format(Locale.US, "%s %05d %05d", sq, e5, n5)
+    )
+}
+
+__CAMERAX_VIEWFINDER_IMPL__
+//===END_MAIN_ACTIVITY_KT===
+
+//===PAYLOAD_CAMERAX_IMPORTS_KT===
+import androidx.camera.core.CameraSelector
+import androidx.camera.core.ImageAnalysis
+import androidx.camera.core.Preview
+import androidx.camera.lifecycle.ProcessCameraProvider
+import androidx.camera.view.PreviewView
+import androidx.compose.ui.viewinterop.AndroidView
+import com.google.mlkit.vision.barcode.BarcodeScanning
+import com.google.mlkit.vision.common.InputImage
+import java.util.concurrent.Executors
+//===END_CAMERAX_IMPORTS_KT===
+
+//===PAYLOAD_CAMERAX_IMPL_KT===
+@Composable
+@SuppressLint("UnsafeOptInUsageError")
+private fun FthLiveCameraOrViewfinder(
+    activity: ComponentActivity,
+    onQrDetected: (String) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val executor = remember { Executors.newSingleThreadExecutor() }
+    AndroidView(
+        modifier = modifier,
+        factory = { ctx ->
+            val previewView = PreviewView(ctx).apply {
+                scaleType = PreviewView.ScaleType.FILL_CENTER
+            }
+            val cameraProviderFuture = ProcessCameraProvider.getInstance(ctx)
+            cameraProviderFuture.addListener({
+                try {
+                    val cameraProvider = cameraProviderFuture.get()
+                    val preview = Preview.Builder().build().also {
+                        it.setSurfaceProvider(previewView.surfaceProvider)
+                    }
+                    val scanner = BarcodeScanning.getClient()
+                    val analysis = ImageAnalysis.Builder()
+                        .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                        .build()
+                    analysis.setAnalyzer(executor) { imageProxy ->
+                        val mediaImage = imageProxy.image
+                        if (mediaImage != null) {
+                            val inputImg = InputImage.fromMediaImage(mediaImage, imageProxy.imageInfo.rotationDegrees)
+                            scanner.process(inputImg)
+                                .addOnSuccessListener { barcodes ->
+                                    val raw = barcodes.firstOrNull()?.rawValue
+                                    if (!raw.isNullOrBlank()) {
+                                        activity.runOnUiThread { onQrDetected(raw) }
+                                    }
+                                }
+                                .addOnCompleteListener {
+                                    imageProxy.close()
+                                }
+                        } else {
+                            imageProxy.close()
                         }
                     }
-                }
-
-                string colorHex = (!string.IsNullOrEmpty(styleId) && styleColors.TryGetValue(styleId, out string sc)) ? sc : "#1FE0C5";
-                double fillOpacity = (!string.IsNullOrEmpty(styleId) && styleOpacities.TryGetValue(styleId, out double so)) ? so : 0.24;
-
-                var existing = _weaponRangeSectors.FirstOrDefault(x => x.Id == secId);
-                if (existing == null)
-                {
-                    existing = new TacticalRangeSectorItem { Id = secId };
-                    _weaponRangeSectors.Add(existing);
-                }
-
-                existing.Name = rawName;
-                existing.WeaponPreset = weaponPreset;
-                existing.BaseRadiusMeters = baseRadiusM;
-                existing.ElevationDeltaMeters = deltaHM;
-                existing.AzimuthDeg = azimuthDeg;
-                existing.SpreadAngleDeg = spreadDeg;
-                existing.ColorHex = colorHex;
-                existing.FillOpacity = fillOpacity;
-                existing.IsVisible = true;
-
-                if (foundCoords)
-                {
-                    existing.ShooterLat = shooterLat;
-                    existing.ShooterLon = shooterLon;
-                    existing.HasGeoAnchor = true;
-                    SyncSectorOffsetsFromGeoAnchor(existing);
-                }
-
-                _selectedRangeSector = existing;
-                addedOrUpdated++;
-            }
-
-            if (addedOrUpdated > 0)
-            {
-                if (centerMapIfStandalone)
-                {
-                    CenterMapOnImportedSectorsIfNeeded();
-                }
-                RebuildRangeSectorsListUi();
-                PopulateRangeSectorEditorFromSelected();
-                RefreshRangeSectorsNow(forceFullRebuild: true);
-            }
-
-            return addedOrUpdated;
+                    cameraProvider.unbindAll()
+                    cameraProvider.bindToLifecycle(
+                        activity,
+                        CameraSelector.DEFAULT_BACK_CAMERA,
+                        preview,
+                        analysis
+                    )
+                } catch (_: Exception) { }
+            }, ContextCompat.getMainExecutor(ctx))
+            previewView
         }
+    )
+}
+//===END_CAMERAX_IMPL_KT===
 
-        private static void ImportStandaloneRangeSectorsKmzDialog()
-        {
-            var dlg = new Microsoft.Win32.OpenFileDialog
-            {
-                Title = "Wczytaj Sektory Ognia z pliku .KMZ lub .KML",
-                Filter = "Paczki i pliki mapowe ATAK (*.kmz;*.kml)|*.kmz;*.kml|Pliki KMZ (*.kmz)|*.kmz|Pliki KML (*.kml)|*.kml"
-            };
-
-            if (dlg.ShowDialog() != true) return;
-
-            try
-            {
-                string kmlContent = ReadKmlTextFromKmzOrKmlFile(dlg.FileName);
-                int count = ParseAndRegisterRangeSectorsFromKmlText(kmlContent, centerMapIfStandalone: true);
-                if (count > 0)
-                {
-                    MessageBox.Show(
-                        $"Pomyślnie wczytano i odtworzono na mapie {count} sektor(ów) ognia wraz z parametrami zasięgu, kąta oraz przewagi wysokości ΔH.",
-                        "Import Sektorów Ognia z .KMZ / .KML",
-                        MessageBoxButton.OK,
-                        MessageBoxImage.Information);
-                }
-                else
-                {
-                    MessageBox.Show(
-                        "W wybranym pliku nie znaleziono zapisanych sektorów ognia (szukano folderu 'Sektory Ognia i Zasięg Replik').",
-                        "Import Sektorów Ognia",
-                        MessageBoxButton.OK,
-                        MessageBoxImage.Warning);
-                }
-            }
-            catch (Exception ex)
-            {
-                MessageBox.Show("Błąd podczas wczytywania pliku .KMZ / .KML:\n" + ex.Message, "Błąd importu", MessageBoxButton.OK, MessageBoxImage.Error);
-            }
-        }
-
-        private static string ReadKmlTextFromKmzOrKmlFile(string filePath)
-        {
-            if (string.IsNullOrEmpty(filePath) || !System.IO.File.Exists(filePath))
-                return string.Empty;
-
-            if (filePath.EndsWith(".kmz", StringComparison.OrdinalIgnoreCase))
-            {
-                using (var fs = new System.IO.FileStream(filePath, System.IO.FileMode.Open, System.IO.FileAccess.Read, System.IO.FileShare.ReadWrite))
-                using (var za = new System.IO.Compression.ZipArchive(fs, System.IO.Compression.ZipArchiveMode.Read))
-                {
-                    var kmlEntry = za.Entries.FirstOrDefault(e => e.FullName.EndsWith(".kml", StringComparison.OrdinalIgnoreCase));
-                    if (kmlEntry != null)
-                    {
-                        using (var sr = new System.IO.StreamReader(kmlEntry.Open(), System.Text.Encoding.UTF8))
-                        {
-                            return sr.ReadToEnd();
-                        }
-                    }
-                }
-            }
-
-            return System.IO.File.ReadAllText(filePath, System.Text.Encoding.UTF8);
-        }
-
-        private static string UnescapeKmlXml(string s)
-        {
-            if (string.IsNullOrEmpty(s)) return string.Empty;
-            return s.Replace("&lt;", "<")
-                    .Replace("&gt;", ">")
-                    .Replace("&quot;", "\"")
-                    .Replace("&apos;", "'")
-                    .Replace("&amp;", "&");
-        }
-//===END_IMPORT_KMZ_SECTORS_CS===
+//===PAYLOAD_FALLBACK_CAM_KT===
+@Composable
+private fun FthLiveCameraOrViewfinder(
+    activity: ComponentActivity,
+    onQrDetected: (String) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Box(
+        modifier = modifier.background(Color(0xFF061116)),
+        contentAlignment = Alignment.Center
+    ) {
+        BasicText(
+            text = "KAMERA QR GOTOWA",
+            style = TextStyle(color = FthTextMuted, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+        )
+    }
+}
+//===END_FALLBACK_CAM_KT===

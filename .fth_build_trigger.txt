@@ -1,1 +1,1 @@
-Field TAK Hub Import Weapon Range Sectors from KMZ/KML UTC: 2026-11-15T11:01:58.1427766Z | RunId: 81ddc7de8e4c4b7b99af6f96b9073d49
+Field TAK Hub Android UI Visual Match + Animated Laser + Hard Permissions Gate UTC: 2026-11-23T20:59:46.7382601Z | RunId: f86b0b78c8a54630850723857fd115b9
