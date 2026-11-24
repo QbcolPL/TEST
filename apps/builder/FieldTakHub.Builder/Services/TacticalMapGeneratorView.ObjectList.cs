@@ -160,6 +160,7 @@ namespace FieldTakHub.Builder.Services
                 if (target != null && target != obj.Kind) ChangeObjectGeometryKind(win, obj, target);
             });
             typeCombo.Height = MapEditorUi.ControlHeight + 2;
+            typeCombo.MinHeight = 0; // App.xaml daje listom MinHeight 30 — tu wiersz ma mieć wysokość reszty karty
             typeCombo.FontSize = 10;
             typeCombo.Margin = new Thickness(0, 0, 6, 0);
             typeCombo.ToolTip = "Rodzaj obiektu: teren gry (AO, maska poza obszarem), sektor (wypełniony) albo trasa (linia)";

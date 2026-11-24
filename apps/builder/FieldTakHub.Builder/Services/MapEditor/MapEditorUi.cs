@@ -27,10 +27,11 @@ internal static class MapEditorUi
     private static readonly SolidColorBrush SecondaryText = Frozen(Color.FromRgb(215, 228, 232));
     private static readonly FontFamily MonoFont = new FontFamily("Consolas");
 
-    // Własne szablony: domyślny wygląd przycisku Windows zamienia tło na niebieskie po najechaniu myszą,
-    // przez co kółko koloru traciło swój kolor, a czerwony przycisk usuwania — czerwień.
-    private static readonly ControlTemplate RoundButtonTemplate = CreateFlatTemplate(new CornerRadius(50));
-    private static readonly ControlTemplate SquareButtonTemplate = CreateFlatTemplate(new CornerRadius(4));
+    // Jawne style przycisków. Generator map jest częścią głównego okna, a App.xaml nadaje każdemu przyciskowi
+    // Padding 12,8, Margin 4 i MinHeight 34 — w 24-pikselowym przycisku usuwania nie mieścił się wtedy znak „−”,
+    // a kółko koloru robiło się owalem. Własny szablon trzyma też kolor tła po najechaniu myszą.
+    private static readonly Style RoundButtonStyle = CreateFlatStyle(new CornerRadius(50));
+    private static readonly Style SquareButtonStyle = CreateFlatStyle(new CornerRadius(4));
 
     /// <summary>Karta jednego elementu listy. <paramref name="item"/> trafia do Tag — po nim odświeża się zaznaczenie.</summary>
     public static Border Card(object item, bool selected)
@@ -137,7 +138,7 @@ internal static class MapEditorUi
     {
         var swatch = new Button
         {
-            Template = RoundButtonTemplate,
+            Style = RoundButtonStyle,
             Width = size,
             Height = size,
             Background = TacticalConfigPanel.BrushFromHex(hex, DefaultColor),
@@ -163,7 +164,7 @@ internal static class MapEditorUi
     {
         var button = new Button
         {
-            Template = SquareButtonTemplate,
+            Style = SquareButtonStyle,
             Width = 24,
             Height = ControlHeight,
             Content = new TextBlock
@@ -191,7 +192,7 @@ internal static class MapEditorUi
     {
         var button = new Button
         {
-            Template = SquareButtonTemplate,
+            Style = SquareButtonStyle,
             Width = 26,
             Height = ControlHeight,
             Content = glyph,
@@ -214,7 +215,7 @@ internal static class MapEditorUi
     {
         var button = new Button
         {
-            Template = SquareButtonTemplate,
+            Style = SquareButtonStyle,
             Height = ControlHeight,
             Padding = new Thickness(8, 0, 8, 0),
             Content = text,
@@ -265,6 +266,8 @@ internal static class MapEditorUi
     {
         Text = text,
         Height = emphasized ? 24 : ControlHeight,
+        MinHeight = 0,
+        Margin = new Thickness(0),
         FontSize = emphasized ? 11 : 10,
         FontWeight = emphasized ? FontWeights.Bold : FontWeights.Normal,
         Padding = new Thickness(6, 0, 6, 0),
@@ -317,6 +320,18 @@ internal static class MapEditorUi
         Brush? normal = null;
         control.MouseEnter += (_, _) => { if (!control.IsEnabled) return; normal = control.Background; control.Background = hover; };
         control.MouseLeave += (_, _) => { if (normal != null) control.Background = normal; normal = null; };
+    }
+
+    private static Style CreateFlatStyle(CornerRadius radius)
+    {
+        var style = new Style(typeof(Button));
+        style.Setters.Add(new Setter(Control.TemplateProperty, CreateFlatTemplate(radius)));
+        style.Setters.Add(new Setter(Control.PaddingProperty, new Thickness(0)));
+        style.Setters.Add(new Setter(FrameworkElement.MarginProperty, new Thickness(0)));
+        style.Setters.Add(new Setter(FrameworkElement.MinHeightProperty, 0.0));
+        style.Setters.Add(new Setter(FrameworkElement.MinWidthProperty, 0.0));
+        style.Seal();
+        return style;
     }
 
     private static ControlTemplate CreateFlatTemplate(CornerRadius radius)
