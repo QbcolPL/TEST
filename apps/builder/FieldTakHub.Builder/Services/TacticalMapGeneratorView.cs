@@ -572,10 +572,11 @@ namespace FieldTakHub.Builder.Services
                     _wmsSheetCts?.Cancel();
                     _isWmsSheetFetchRunning = false;
                     PendingTileUrls.Clear();
-                    DecodedImageCache.Clear();
+                    ClearDecodedImageCache();
                     GeoportalLidarEngine.ClearCache(Keyboard.Modifiers.HasFlag(ModifierKeys.Shift));
                     _geoAnchoredBaseSheets.Clear();
                     _geoAnchoredLidarSheets.Clear();
+                    ForgetReadyLidarMosaic();
                     _wmsLoadedScaleDenominator = -1;
                     _wmsLoadedLidarFlag = false;
                     RefreshTileCanvasesOnly();
@@ -817,6 +818,12 @@ namespace FieldTakHub.Builder.Services
                 btnKmz.Height = 30; btnKmz.Margin = new Thickness(3, 0, 0, 0); btnKmz.BorderBrush = TacticalConfigPanel.BrushAccent;
                 expRow1.Children.Add(btnGpx); expRow1.Children.Add(btnKmz);
                 sec4.Children.Add(expRow1);
+
+                var btnFramedPrint = MakeActionButton("🗺️ Wydruk z ramką kartograficzną (PDF, seria arkuszy)…", true, () => ShowFramedPrintDialog(win));
+                btnFramedPrint.Height = 30;
+                btnFramedPrint.Margin = new Thickness(0, 0, 0, 6);
+                btnFramedPrint.ToolTip = "Arkusz w stylu map taktycznych: siatka MGRS z podziałką co 100 m, nazwa arkusza, podziałki km/mile, diagram PT/PM (WMM2025), kod QR. Wszystkie elementy można włączać i edytować.";
+                sec4.Children.Add(btnFramedPrint);
 
                 var expRow2 = new UniformGrid { Columns = 3, Margin = new Thickness(0, 0, 0, 6) };
                 var btnPdf = MakeActionButton("🖨️ Zapisz PDF jako...", false, async () => await ExportTacticalMapPdfAsync(win));
@@ -1237,40 +1244,40 @@ namespace FieldTakHub.Builder.Services
 
         private static async Task<byte[]> FetchSingleOfflineTileBytesAsync(TacticalMapLayerDef layer, int tx, int ty, int zoom, CancellationToken ct)
         {
-            if (layer.Id == "geoportal_lidar")
+            var bmp = await FetchLayerTileAsync(layer, tx, ty, zoom, ct);
+            if (bmp == null) return null;
+            var effective = ResolveTileLayer(layer, zoom);
+            if (effective.Id != "geoportal_hires")
             {
-                var (latNorth, lonWest) = TileXYToLatLon(tx, ty, zoom);
-                var (latSouth, lonEast) = TileXYToLatLon(tx + 1, ty + 1, zoom);
-                int reqSz = int.TryParse(GetOptimalWmsTilePixelSize("geoportal_lidar", zoom), out int parsedSz) ? parsedSz : 512;
-                string[] lidarUrls = GeoportalLidarEngine.BuildLidarCandidateUrls(latNorth, latSouth, lonEast, lonWest, reqSz, reqSz);
-                if (RawTileCache.TryGetValue(lidarUrls[0], out var cachedLidar) && IsValidImagePayload(cachedLidar)) return cachedLidar;
+                // Oryginalne bajty z pamięci podręcznej (bez ponownej kompresji), jeśli odpowiedziało źródło główne.
+                byte[] original = GeoportalLidarEngine.TryReadDiskCache(BuildTileUrl(effective, tx, ty, zoom));
+                if (original != null) return original;
+            }
+            return EncodeJpegBytes(bmp, 90);
+        }
 
-                var lidarBmp = await FetchDecodedImageAsync(lidarUrls[0], lidarUrls.Length > 1 ? lidarUrls[1] : null, ct, lidarUrls.Length > 2 ? lidarUrls[2] : null, true);
-                if (RawTileCache.TryGetValue(lidarUrls[0], out var fetchedLidar) && IsValidImagePayload(fetchedLidar)) return fetchedLidar;
-                if (lidarBmp != null)
+        private static byte[] EncodeJpegBytes(BitmapSource bmp, int quality)
+        {
+            if (bmp == null) return null;
+            try
+            {
+                BitmapSource opaque = bmp;
+                if (bmp.Format != PixelFormats.Bgr24)
                 {
-                    try { var enc = new JpegBitmapEncoder { QualityLevel = 90 }; enc.Frames.Add(BitmapFrame.Create(lidarBmp)); using var ms = new MemoryStream(); enc.Save(ms); return ms.ToArray(); } catch { }
+                    var converted = new FormatConvertedBitmap(bmp, PixelFormats.Bgr24, null, 0);
+                    converted.Freeze();
+                    opaque = converted;
                 }
+                var enc = new JpegBitmapEncoder { QualityLevel = Math.Clamp(quality, 1, 100) };
+                enc.Frames.Add(BitmapFrame.Create(opaque));
+                using var ms = new MemoryStream();
+                enc.Save(ms);
+                return ms.ToArray();
+            }
+            catch (Exception ex) when (ex is NotSupportedException || ex is InvalidOperationException || ex is ArgumentException)
+            {
                 return null;
             }
-
-            string url = BuildTileUrl(layer, tx, ty, zoom);
-            if (RawTileCache.TryGetValue(url, out var cached) && IsValidImagePayload(cached)) return cached;
-
-            string fallbackUrl = BuildFallbackTileUrl(layer, tx, ty, zoom), secondFallbackUrl = null;
-            if (layer.IsWmsEpsg3857 && !string.IsNullOrEmpty(layer.SecondFallbackUrlTemplate))
-            {
-                string sz = GetOptimalWmsTilePixelSize(layer.Id, zoom);
-                secondFallbackUrl = FillAllBBoxTokens(layer.SecondFallbackUrlTemplate, GetEpsg3857BBox(tx, ty, zoom), GetEpsg2180TileBBoxNE(tx, ty, zoom), GetEpsg2180TileBBox(tx, ty, zoom), GetEpsg4326TileBBox(tx, ty, zoom), sz, sz);
-            }
-
-            var bmp = await FetchDecodedImageAsync(url, fallbackUrl, ct, secondFallbackUrl, true);
-            if (RawTileCache.TryGetValue(url, out var fetchedBytes) && IsValidImagePayload(fetchedBytes)) return fetchedBytes;
-            if (bmp != null)
-            {
-                try { var enc = new JpegBitmapEncoder { QualityLevel = 90 }; enc.Frames.Add(BitmapFrame.Create(bmp)); using var ms = new MemoryStream(); enc.Save(ms); return ms.ToArray(); } catch { }
-            }
-            return null;
         }
 
         private static async Task BuildMultiZoomOfflineDatabaseAsync(Window win, bool saveDirectlyToFtakSource)

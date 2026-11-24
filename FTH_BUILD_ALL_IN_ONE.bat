@@ -3,7 +3,7 @@ REM ==========================================================================
 REM  FTH_BUILD_ALL_IN_ONE.bat  -  Field TAK Hub: Android + Builder Windows
 REM                               kompilowane w GitHub Actions
 REM
-REM  Jeden skrypt: kontrola -> poprawki Buildera z audytu (jesli sa w _fth_patch)
+REM  Jeden skrypt: kontrola -> poprawki Buildera z paczki (jesli sa w _fth_patch)
 REM  -> commit -> push (bez --force) -> GitHub Actions: aplikacja Android
 REM  (android-hub-build.yml) i Builder Windows (windows-builder.yml) -> czekanie
 REM  na wynik -> pobranie APK i Buildera .exe -> opcjonalnie adb install.
@@ -392,11 +392,11 @@ exit /b 0
 
 
 :apply_builder_fixes
-REM Poprawki Buildera z audytu (docs\AUDYT_KODU_BUILDERA.md) leza w _fth_patch.
-REM Skrypt PowerShell naklada je tylko na pliki niezmienione od audytu - wszystkie albo zadne.
+REM Poprawki Buildera z paczki (opis w _fth_patch\CZYTAJ_MNIE.txt) leza w _fth_patch.
+REM Skrypt PowerShell naklada je tylko na pliki w wersji bazowej - wszystkie albo zadne.
 set "FTH_PATCH_PS=!REPO_ROOT!\_fth_patch\apply-builder-fixes.ps1"
 if not exist "!FTH_PATCH_PS!" exit /b 0
-echo [INFO] Poprawki Buildera z audytu - sprawdzam pliki...
+echo [INFO] Poprawki Buildera z paczki - sprawdzam pliki...
 powershell -NoProfile -ExecutionPolicy Bypass -File "!FTH_PATCH_PS!" -RepoRoot "!REPO_ROOT!"
 set "AF_RC=!errorlevel!"
 if "!AF_RC!"=="0" exit /b 0
