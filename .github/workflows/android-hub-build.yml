@@ -140,6 +140,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # Bledy kompilatora Kotlin jako adnotacje przy plikach (widoczne na stronie przebiegu
+          # i w "gh run view"), zamiast samego stack trace Gradle.
+          cat > "$RUNNER_TEMP/fth-kotlin-matcher.json" <<'JSON'
+          {"problemMatcher":[{"owner":"fth-kotlinc","pattern":[{"regexp":"^e: file://(.+?):(\\d+):(\\d+) (.+)$","file":1,"line":2,"column":3,"message":4}]}]}
+          JSON
+          echo "::add-matcher::$RUNNER_TEMP/fth-kotlin-matcher.json"
           if [ "$USE_WRAPPER" = "true" ]; then
             chmod +x ./gradlew
             GRADLE=./gradlew
@@ -148,7 +154,20 @@ jobs:
           fi
           tasks=("assemble${VARIANT}" "test${VARIANT}UnitTest")
           if [ "$RUN_LINT" = "true" ]; then tasks+=("lint${VARIANT}"); fi
-          "$GRADLE" --no-daemon --stacktrace "${tasks[@]}"
+          LOG="$RUNNER_TEMP/gradle-build.log"
+          rc=0
+          "$GRADLE" --no-daemon --stacktrace "${tasks[@]}" 2>&1 | tee "$LOG" || rc=$?
+          if [ "$rc" -ne 0 ]; then
+            {
+              echo "### Kompilacja nie powiodla sie"
+              echo ""
+              echo '```'
+              grep -E '^e: ' "$LOG" | sed -E 's#^e: file://[^ ]*/(apps/)#e: \1#' | head -n 40 || true
+              grep -A4 -E '^\* What went wrong' "$LOG" | head -n 30 || true
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+          exit "$rc"
 
       - name: Podpis release (zipalign + apksigner)
         if: env.BUILD_TYPE == 'release'

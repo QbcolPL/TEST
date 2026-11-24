@@ -699,8 +699,8 @@ if not defined OUT_DIR set "OUT_DIR=%BUILDS_ROOT%\run-!RUN_ID!"
 if not exist "!OUT_DIR!" mkdir "!OUT_DIR!" >nul 2>&1
 gh run view !RUN_ID! -R "!REPO!" --log-failed > "!OUT_DIR!\build-failed.log" 2>&1
 echo        Log nieudanych krokow: !OUT_DIR!\build-failed.log
-echo        Ostatnie linie:
-powershell -NoProfile -Command "Get-Content -LiteralPath (Join-Path $env:OUT_DIR 'build-failed.log') -Tail 40"
+set "FTH_LOG=!OUT_DIR!\build-failed.log"
+call :show_log_errors
 goto :fail
 
 
@@ -790,8 +790,16 @@ if not defined WIN_OUT_DIR set "WIN_OUT_DIR=%BUILDS_ROOT%\builder-run-!WIN_RUN_I
 if not exist "!WIN_OUT_DIR!" mkdir "!WIN_OUT_DIR!" >nul 2>&1
 gh run view !WIN_RUN_ID! -R "!REPO!" --log-failed > "!WIN_OUT_DIR!\build-failed.log" 2>&1
 echo        Log nieudanych krokow: !WIN_OUT_DIR!\build-failed.log
-echo        Ostatnie linie:
-powershell -NoProfile -Command "Get-Content -LiteralPath (Join-Path $env:WIN_OUT_DIR 'build-failed.log') -Tail 40"
+set "FTH_LOG=!WIN_OUT_DIR!\build-failed.log"
+call :show_log_errors
+exit /b 0
+
+
+:show_log_errors
+REM Z logu nieudanego kroku pokazuje to, co trzeba poprawic: bledy kompilatora (Kotlin "e: plik:linia",
+REM C# "error CS....", javac/aapt "error:") i blok "What went wrong" z Gradle. Bez prefiksow
+REM "zadanie / krok / czas" dodawanych przez gh. Gdy nic nie pasuje - ostatnie 40 linii jak dawniej.
+powershell -NoProfile -Command "$p = $env:FTH_LOG; if (-not (Test-Path -LiteralPath $p)) { exit 0 }; $lines = @(Get-Content -LiteralPath $p -Encoding UTF8); $hits = New-Object System.Collections.Generic.List[string]; for ($i = 0; $i -lt $lines.Count; $i++) { $l = $lines[$i] -replace '^[^\t]*\t[^\t]*\t\S+\s', ''; if ($l -match '^(##\[error\])?e: |error CS\d+|error MSB\d+|: error:|^ERROR:|Manifest merger failed|What went wrong|Execution failed for task|\sFAILED\s*$|There were failing tests') { $hits.Add($l); if ($l -match 'What went wrong') { for ($k = 1; ($k -le 4) -and (($i + $k) -lt $lines.Count); $k++) { $hits.Add(($lines[$i + $k] -replace '^[^\t]*\t[^\t]*\t\S+\s', '')) } } } }; if ($hits.Count -eq 0) { Write-Host '       Ostatnie linie:'; $lines | Select-Object -Last 40 | ForEach-Object { Write-Host $_ } } else { Write-Host '       Najwazniejsze bledy (pelny log w pliku powyzej):'; $hits | Select-Object -Unique | Select-Object -First 40 | ForEach-Object { Write-Host ('       ' + ($_ -replace 'file:///home/runner/work/[^/]+/[^/]+/', '')) } }"
 exit /b 0
 
 
@@ -1179,6 +1187,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # Bledy kompilatora Kotlin jako adnotacje przy plikach (widoczne na stronie przebiegu
+          # i w "gh run view"), zamiast samego stack trace Gradle.
+          cat > "$RUNNER_TEMP/fth-kotlin-matcher.json" <<'JSON'
+          {"problemMatcher":[{"owner":"fth-kotlinc","pattern":[{"regexp":"^e: file://(.+?):(\\d+):(\\d+) (.+)$","file":1,"line":2,"column":3,"message":4}]}]}
+          JSON
+          echo "::add-matcher::$RUNNER_TEMP/fth-kotlin-matcher.json"
           if [ "$USE_WRAPPER" = "true" ]; then
             chmod +x ./gradlew
             GRADLE=./gradlew
@@ -1187,7 +1201,20 @@ jobs:
           fi
           tasks=("assemble${VARIANT}" "test${VARIANT}UnitTest")
           if [ "$RUN_LINT" = "true" ]; then tasks+=("lint${VARIANT}"); fi
-          "$GRADLE" --no-daemon --stacktrace "${tasks[@]}"
+          LOG="$RUNNER_TEMP/gradle-build.log"
+          rc=0
+          "$GRADLE" --no-daemon --stacktrace "${tasks[@]}" 2>&1 | tee "$LOG" || rc=$?
+          if [ "$rc" -ne 0 ]; then
+            {
+              echo "### Kompilacja nie powiodla sie"
+              echo ""
+              echo '```'
+              grep -E '^e: ' "$LOG" | sed -E 's#^e: file://[^ ]*/(apps/)#e: \1#' | head -n 40 || true
+              grep -A4 -E '^\* What went wrong' "$LOG" | head -n 30 || true
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+          exit "$rc"
 
       - name: Podpis release (zipalign + apksigner)
         if: env.BUILD_TYPE == 'release'

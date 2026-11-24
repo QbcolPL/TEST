@@ -771,12 +771,22 @@ class HubViewModel(app: Application) : AndroidViewModel(app) {
         val version = Versions.parse(atak.versionName)
         val settings = atakSettingsPreview()
         if (version != null && version < Atak.DEEP_LINK_MIN) {
-            // Older ATAK: the same settings as a preference file in a data package.
-            val bytes = Atak.preferenceDataPackage(settings, "Field TAK Hub — ustawienia", atak.packageName)
-            sendToAtak(bytes, "fieldtakhub-ustawienia.zip", atak)
-        } else {
-            startIntent(Intents.view(Atak.preferenceUri(settings), atak.packageName), null, "ATAK nie obsłużył linku ustawień.")
+            // Older ATAK: the same settings as a preference file in a data package,
+            // handed over through the local server (suspending), so it runs in a coroutine.
+            viewModelScope.launch {
+                try {
+                    val bytes = Atak.preferenceDataPackage(settings, "Field TAK Hub — ustawienia", atak.packageName)
+                    sendToAtak(bytes, "fieldtakhub-ustawienia.zip", atak)
+                    markDone("atak_identity")
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    notify("Nie wysłano do ATAK", e.message ?: e.javaClass.simpleName, error = true)
+                }
+            }
+            return
         }
+        startIntent(Intents.view(Atak.preferenceUri(settings), atak.packageName), null, "ATAK nie obsłużył linku ustawień.")
         markDone("atak_identity")
     }
 
