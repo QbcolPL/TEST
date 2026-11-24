@@ -12,6 +12,7 @@ using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Shapes;
+using FieldTakHub.Builder.Services.MapEditor;
 
 namespace FieldTakHub.Builder.Services
 {
@@ -207,55 +208,28 @@ namespace FieldTakHub.Builder.Services
             Grid.SetColumn(titleTb, 0);
             hdrGrid.Children.Add(titleTb);
 
-            var btnAdd = new Button
-            {
-                Content = "+ Dodaj Sektor / Okrąg",
-                Height = 23,
-                Padding = new Thickness(8, 0, 8, 0),
-                Background = TacticalConfigPanel.BrushAccent,
-                Foreground = new SolidColorBrush(Color.FromRgb(6, 14, 18)),
-                BorderThickness = new Thickness(0),
-                FontWeight = FontWeights.Bold,
-                FontSize = 9.5,
-                Cursor = Cursors.Hand
-            };
-            btnAdd.Click += (s, e) => AddNewWeaponRangeSector();
+            // Te same przyciski co w pozostałych sekcjach generatora (MakeActionButton): główny — wypełniony, pozostałe — obrysowane.
+            var btnAdd = MakeActionButton("+ Dodaj sektor / okrąg", true, AddNewWeaponRangeSector);
+            btnAdd.Height = 24;
+            btnAdd.Padding = new Thickness(8, 0, 8, 0);
+            btnAdd.FontSize = 9.5;
+            btnAdd.ToolTip = "Dodaj na środek mapy sektor ognia / okrąg zasięgu (przesuwany i obracany myszką)";
             Grid.SetColumn(btnAdd, 1);
             hdrGrid.Children.Add(btnAdd);
             sp.Children.Add(hdrGrid);
             var kmzActionGrid = new UniformGrid { Columns = 2, Margin = new Thickness(0, 0, 0, 6) };
-            var btnImportKmz = new Button
-            {
-                Content = "📂 Wczytaj z .KMZ / .KML",
-                Height = 24,
-                Margin = new Thickness(0, 0, 3, 0),
-                Background = new SolidColorBrush(Color.FromRgb(7, 17, 21)),
-                Foreground = TacticalConfigPanel.BrushAccent,
-                BorderBrush = TacticalConfigPanel.BrushAccent,
-                BorderThickness = new Thickness(1),
-                FontWeight = FontWeights.Bold,
-                FontSize = 9.2,
-                Cursor = Cursors.Hand,
-                ToolTip = "Wczytaj wyrysowane wcześniej sektory ognia z pliku .KMZ lub .KML (obsługiwany jest także główny przycisk importu KMZ Generatora Map)"
-            };
-            btnImportKmz.Click += (s, e) => ImportStandaloneRangeSectorsKmzDialog();
+            var btnImportKmz = MakeActionButton("📂 Wczytaj z .KMZ / .KML", false, ImportStandaloneRangeSectorsKmzDialog);
+            btnImportKmz.Height = 24;
+            btnImportKmz.Margin = new Thickness(0, 0, 3, 0);
+            btnImportKmz.FontSize = 9.5;
+            btnImportKmz.ToolTip = "Wczytaj wyrysowane wcześniej sektory ognia z pliku .KMZ lub .KML (obsługiwany jest także główny przycisk importu KMZ Generatora Map)";
             kmzActionGrid.Children.Add(btnImportKmz);
 
-            var btnExportKmz = new Button
-            {
-                Content = "📦 Eksportuj .KMZ (ATAK)",
-                Height = 24,
-                Margin = new Thickness(3, 0, 0, 0),
-                Background = new SolidColorBrush(Color.FromRgb(7, 17, 21)),
-                Foreground = new SolidColorBrush(Color.FromRgb(46, 204, 113)),
-                BorderBrush = new SolidColorBrush(Color.FromRgb(46, 204, 113)),
-                BorderThickness = new Thickness(1),
-                FontWeight = FontWeights.Bold,
-                FontSize = 9.2,
-                Cursor = Cursors.Hand,
-                ToolTip = "Zapisz wyrysowane sektory ognia jako wielokąty KML/KMZ dla ATAK"
-            };
-            btnExportKmz.Click += (s, e) => ExportStandaloneRangeSectorsKmzDialog();
+            var btnExportKmz = MakeActionButton("📦 Zapisz .KMZ (ATAK)…", false, ExportStandaloneRangeSectorsKmzDialog);
+            btnExportKmz.Height = 24;
+            btnExportKmz.Margin = new Thickness(3, 0, 0, 0);
+            btnExportKmz.FontSize = 9.5;
+            btnExportKmz.ToolTip = "Zapisz wyrysowane sektory ognia jako wielokąty KML/KMZ dla ATAK";
             kmzActionGrid.Children.Add(btnExportKmz);
             sp.Children.Add(kmzActionGrid);
 
@@ -306,24 +280,14 @@ namespace FieldTakHub.Builder.Services
             foreach (string hex in swatchHexes)
             {
                 string h = hex;
-                var swBtn = new Button
-                {
-                    Width = 18,
-                    Height = 20,
-                    Margin = new Thickness(1, 0, 1, 0),
-                    Background = TacticalConfigPanel.BrushFromHex(h, Colors.Cyan),
-                    BorderBrush = new SolidColorBrush(Color.FromArgb(180, 255, 255, 255)),
-                    BorderThickness = new Thickness(1),
-                    Cursor = Cursors.Hand,
-                    ToolTip = "Kolor sektora: " + h
-                };
-                swBtn.Click += (s, e) =>
+                var swBtn = MapEditorUi.ColorSwatch(h, "Kolor sektora: " + h, _ =>
                 {
                     if (_selectedRangeSector == null) return;
                     _selectedRangeSector.ColorHex = h;
                     RebuildRangeSectorsListUi(); if (_lastLegendContainerGrid != null) UpdateRangeSectorsInLegendBox(_lastLegendContainerGrid);
                     RefreshRangeSectorsNow();
-                };
+                }, size: 18);
+                swBtn.Margin = new Thickness(2, 0, 2, 0);
                 colorPalette.Children.Add(swBtn);
             }
             Grid.SetColumn(colorPalette, 2);
@@ -621,101 +585,66 @@ namespace FieldTakHub.Builder.Services
                 _rangeSectorEditorBox.Visibility = Visibility.Visible;
 
             foreach (var sec in _weaponRangeSectors.ToList())
+                _rangeSectorsListContainer.Children.Add(BuildRangeSectorCard(sec));
+        }
+
+        /// <summary>Karta sektora w tym samym układzie co karty obiektów: [👁 widoczność] [● kolor] [nazwa i zasięg] [− usuń].</summary>
+        private static Border BuildRangeSectorCard(TacticalRangeSectorItem sec)
+        {
+            var card = MapEditorUi.Card(sec, ReferenceEquals(sec, _selectedRangeSector));
+            card.Cursor = Cursors.Hand;
+            card.PreviewMouseLeftButtonDown += (s, e) => SelectRangeSector(sec);
+
+            var visible = MapEditorUi.Toggle("👁", sec.IsVisible, "Pokaż ten sektor na mapie (wł./wył.)", on =>
             {
-                bool isSel = ReferenceEquals(sec, _selectedRangeSector);
-                var rowBorder = new Border
-                {
-                    Background = isSel ? new SolidColorBrush(Color.FromRgb(14, 38, 46)) : new SolidColorBrush(Color.FromRgb(7, 17, 21)),
-                    BorderBrush = isSel ? TacticalConfigPanel.BrushAccent : new SolidColorBrush(Color.FromRgb(22, 56, 68)),
-                    BorderThickness = new Thickness(1),
-                    CornerRadius = new CornerRadius(4),
-                    Padding = new Thickness(6, 4, 6, 4),
-                    Margin = new Thickness(0, 0, 0, 4),
-                    Cursor = Cursors.Hand
-                };
+                sec.IsVisible = on;
+                RefreshRangeSectorsNow(forceFullRebuild: true);
+            });
 
-                var g = new Grid();
-                g.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-                g.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-                g.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-                g.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            var swatch = MapEditorUi.ColorSwatch(sec.ColorHex, RangeSectorColorTooltip(sec.ColorHex), button =>
+            {
+                string picked = TacticalConfigPanel.ShowRgbColorPickerDialog(_hostWindow, $"Kolor — {sec.Name}", sec.ColorHex);
+                if (string.IsNullOrEmpty(picked)) return;
+                sec.ColorHex = picked;
+                MapEditorUi.SetSwatchColor(button, picked, RangeSectorColorTooltip(picked));
+                if (_lastLegendContainerGrid != null) UpdateRangeSectorsInLegendBox(_lastLegendContainerGrid);
+                RefreshRangeSectorsNow();
+            });
 
-                var chk = new CheckBox
-                {
-                    IsChecked = sec.IsVisible,
-                    VerticalAlignment = VerticalAlignment.Center,
-                    Margin = new Thickness(0, 0, 6, 0)
-                };
-                chk.Checked += (s, e) => { sec.IsVisible = true; RefreshRangeSectorsNow(forceFullRebuild: true); };
-                chk.Unchecked += (s, e) => { sec.IsVisible = false; RefreshRangeSectorsNow(forceFullRebuild: true); };
-                Grid.SetColumn(chk, 0);
-                g.Children.Add(chk);
+            double effR = sec.GetEffectiveRadiusMeters();
+            string dhTag = Math.Abs(sec.ElevationDeltaMeters) > 0.1 ? $"  ·  ΔH {sec.ElevationDeltaMeters:+0.#;-0.#} m" : "";
+            var info = new TextBlock { FontSize = 10, TextTrimming = TextTrimming.CharacterEllipsis, VerticalAlignment = VerticalAlignment.Center };
+            info.Inlines.Add(new System.Windows.Documents.Run(sec.Name) { Foreground = Brushes.White, FontWeight = FontWeights.Bold });
+            info.Inlines.Add(new System.Windows.Documents.Run($"   {sec.BaseRadiusMeters:0} m ➔ {effR:0.0} m{dhTag}") { Foreground = TacticalConfigPanel.BrushMutedText });
 
-                var swatch = new Border
-                {
-                    Width = 12,
-                    Height = 12,
-                    CornerRadius = new CornerRadius(2),
-                    Background = TacticalConfigPanel.BrushFromHex(sec.ColorHex, Colors.Cyan),
-                    VerticalAlignment = VerticalAlignment.Center,
-                    Margin = new Thickness(0, 0, 6, 0)
-                };
-                Grid.SetColumn(swatch, 1);
-                g.Children.Add(swatch);
+            var delete = MapEditorUi.DeleteButton("Usuń ten sektor z mapy", () =>
+            {
+                _weaponRangeSectors.Remove(sec);
+                if (ReferenceEquals(_selectedRangeSector, sec))
+                    _selectedRangeSector = _weaponRangeSectors.FirstOrDefault();
+                RebuildRangeSectorsListUi(); if (_lastLegendContainerGrid != null) UpdateRangeSectorsInLegendBox(_lastLegendContainerGrid);
+                PopulateRangeSectorEditorFromSelected();
+                RefreshRangeSectorsNow(forceFullRebuild: true);
+            });
 
-                double effR = sec.GetEffectiveRadiusMeters();
-                string dhTag = Math.Abs(sec.ElevationDeltaMeters) > 0.1
-                    ? $" | ΔH:{sec.ElevationDeltaMeters:+0.#;-0.#}m"
-                    : "";
-                var infoTb = new TextBlock
-                {
-                    Text = $"{sec.Name}  [{sec.BaseRadiusMeters:0}m ➔ {effR:0.0}m{dhTag}]",
-                    Foreground = Brushes.White,
-                    FontSize = 10,
-                    FontWeight = isSel ? FontWeights.Bold : FontWeights.Normal,
-                    VerticalAlignment = VerticalAlignment.Center,
-                    TextTrimming = TextTrimming.CharacterEllipsis
-                };
-                Grid.SetColumn(infoTb, 2);
-                g.Children.Add(infoTb);
+            card.Child = MapEditorUi.HeaderRow(visible, swatch, Array.Empty<UIElement>(), info, delete);
+            return card;
+        }
 
-                var btnDel = new Button
-                {
-                    Content = "−",
-                    Width = 20,
-                    Height = 18,
-                    Padding = new Thickness(0),
-                    Background = new SolidColorBrush(Color.FromRgb(185, 45, 45)),
-                    Foreground = Brushes.White,
-                    BorderThickness = new Thickness(0),
-                    FontWeight = FontWeights.Bold,
-                    FontSize = 11,
-                    Cursor = Cursors.Hand
-                };
-                btnDel.Click += (s, e) =>
-                {
-                    e.Handled = true;
-                    _weaponRangeSectors.Remove(sec);
-                    if (ReferenceEquals(_selectedRangeSector, sec))
-                        _selectedRangeSector = _weaponRangeSectors.FirstOrDefault();
-                    RebuildRangeSectorsListUi(); if (_lastLegendContainerGrid != null) UpdateRangeSectorsInLegendBox(_lastLegendContainerGrid);
-                    PopulateRangeSectorEditorFromSelected();
-                    RefreshRangeSectorsNow(forceFullRebuild: true);
-                };
-                Grid.SetColumn(btnDel, 3);
-                g.Children.Add(btnDel);
+        private static string RangeSectorColorTooltip(string hex) => $"Kolor sektora {(hex ?? "").ToUpperInvariant()} — kliknij, aby zmienić";
 
-                rowBorder.MouseLeftButtonDown += (s, e) =>
-                {
-                    _selectedRangeSector = sec;
-                    RebuildRangeSectorsListUi(); if (_lastLegendContainerGrid != null) UpdateRangeSectorsInLegendBox(_lastLegendContainerGrid);
-                    PopulateRangeSectorEditorFromSelected();
-                    RefreshRangeSectorsNow();
-                };
-
-                rowBorder.Child = g;
-                _rangeSectorsListContainer.Children.Add(rowBorder);
+        /// <summary>Zaznacza sektor do edycji (ramka karty i pola edytora) — bez przebudowy listy, tak jak przy obiektach.</summary>
+        private static void SelectRangeSector(TacticalRangeSectorItem sec)
+        {
+            if (ReferenceEquals(_selectedRangeSector, sec) || !_weaponRangeSectors.Contains(sec)) return;
+            _selectedRangeSector = sec;
+            if (_rangeSectorsListContainer != null)
+            {
+                foreach (var card in _rangeSectorsListContainer.Children.OfType<Border>())
+                    MapEditorUi.SetCardSelected(card, ReferenceEquals(card.Tag, _selectedRangeSector));
             }
+            PopulateRangeSectorEditorFromSelected();
+            RefreshRangeSectorsNow();
         }
 
         private static void PopulateRangeSectorEditorFromSelected()

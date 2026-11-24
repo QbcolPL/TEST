@@ -262,18 +262,6 @@ namespace FieldTakHub.Builder.Services
             UpdateOfflineTileEstimateUI();
         }
 
-        private static Border CreateRedMinusDeleteButton(string tooltip, Action onClick)
-        {
-            var border = new Border
-            {
-                Width = 24, Height = 22, CornerRadius = new CornerRadius(5), Background = TacticalConfigPanel.BrushRedMinus,
-                BorderBrush = Brushes.White, BorderThickness = new Thickness(1), Cursor = Cursors.Hand, ToolTip = tooltip, Margin = new Thickness(4, 0, 0, 0),
-                Child = new TextBlock { Text = "−", Foreground = Brushes.White, FontSize = 15, FontWeight = FontWeights.Bold, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, -2, 0, 0) }
-            };
-            border.MouseLeftButtonDown += (s, e) => { e.Handled = true; onClick(); };
-            return border;
-        }
-
         private static void RebuildFactionCheckboxesUI()
         {
             if (_factionsCheckboxesWrap == null) return;
@@ -284,7 +272,7 @@ namespace FieldTakHub.Builder.Services
             {
                 string fName = fac.Name;
                 var badgeStack = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
-                badgeStack.Children.Add(new Border { Width = 10, Height = 10, CornerRadius = new CornerRadius(2), Background = TacticalConfigPanel.BrushFromHex(fac.ColorHex, Color.FromRgb(38, 132, 255)), BorderBrush = Brushes.White, BorderThickness = new Thickness(0.8), Margin = new Thickness(0, 0, 5, 0) });
+                badgeStack.Children.Add(new Border { Width = 10, Height = 10, CornerRadius = new CornerRadius(5), Background = TacticalConfigPanel.BrushFromHex(fac.ColorHex, Color.FromRgb(38, 132, 255)), BorderBrush = Brushes.White, BorderThickness = new Thickness(0.8), Margin = new Thickness(0, 0, 5, 0) });
                 badgeStack.Children.Add(new TextBlock { Text = fName, Foreground = Brushes.White, FontSize = 10, FontWeight = FontWeights.Bold });
                 var chk = new CheckBox { Content = badgeStack, IsChecked = _selectedMapFactions.Contains(fName), Margin = new Thickness(0, 2, 12, 2), VerticalContentAlignment = VerticalAlignment.Center, Cursor = Cursors.Hand };
                 chk.Checked += (s, e) => { _selectedMapFactions.Add(fName); if (!_isRebuildingMapControls) TacticalConfigPanel.MarkDirty(); RedrawVectorsOnly(); };
@@ -711,7 +699,7 @@ namespace FieldTakHub.Builder.Services
                 };
                 sec3.Children.Add(TacticalConfigPanel.FieldBox("Wybierz symbol taktyczny / wektor militarny NATO (36 wzor\u00F3w wektorowych):", natoCombo));
 
-                var mapColorSwatch = new Border { Width = 14, Height = 14, CornerRadius = new CornerRadius(3), Background = TacticalConfigPanel.BrushFromHex(_selectedObjectColorHex, Color.FromRgb(38, 132, 255)), BorderBrush = Brushes.White, BorderThickness = new Thickness(1), Margin = new Thickness(0, 0, 7, 0), VerticalAlignment = VerticalAlignment.Center };
+                var mapColorSwatch = new Border { Width = 14, Height = 14, CornerRadius = new CornerRadius(7), Background = TacticalConfigPanel.BrushFromHex(_selectedObjectColorHex, Color.FromRgb(38, 132, 255)), BorderBrush = Brushes.White, BorderThickness = new Thickness(1), Margin = new Thickness(0, 0, 7, 0), VerticalAlignment = VerticalAlignment.Center };
                 var mapColorText = new TextBlock { Text = $"Kolor nowego obiektu / symbolu: Paleta RGB ({_selectedObjectColorHex.ToUpperInvariant()})", Foreground = Brushes.White, FontSize = 10, FontWeight = FontWeights.Bold, VerticalAlignment = VerticalAlignment.Center };
                 var mapColorStack = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Center };
                 mapColorStack.Children.Add(mapColorSwatch); mapColorStack.Children.Add(mapColorText);
@@ -753,18 +741,8 @@ namespace FieldTakHub.Builder.Services
                 btnImportVector.Margin = new Thickness(0, 0, 4, 0);
                 btnImportVector.ToolTip = "Otwiera plik .KMZ (ZIP), .KML lub .GPX i zamienia wielokąty, ślady GPS oraz punkty na edytowalne obiekty na mapie";
 
-                var btnClearObjects = MakeActionButton("🧹 Wyczyść listę", false, () =>
-                {
-                    if (_mapObjects.Count == 0) return;
-                    _mapObjects.Clear();
-                    _activeDraftPoly = null;
-                    _inspectedObject = null;
-                    TacticalConfigPanel.MarkDirty();
-                    UpdateSelectedMarkerInspectorUI();
-                    RefreshObjectsListUI(win);
-                    RedrawVectorsOnly();
-                    UpdateOfflineTileEstimateUI();
-                });
+                var btnClearObjects = MakeActionButton("🧹 Wyczyść listę", false, () => ConfirmAndClearAllObjects(win));
+                btnClearObjects.ToolTip = "Usuń z mapy wszystkie obiekty (z potwierdzeniem)";
                 btnClearObjects.Height = 27;
                 btnClearObjects.Margin = new Thickness(4, 0, 0, 0);
 
@@ -774,8 +752,8 @@ namespace FieldTakHub.Builder.Services
                 vectorIoBar.Children.Add(btnClearObjects);
                 sec3.Children.Add(vectorIoBar);
 
-                sec3.Children.Add(new TextBlock { Text = "Naniesione i zaimportowane obiekty (🔄 Typ = zmień AO/Sektor/Trasę, ✂️ Uprość = redukuj ślad GPS):", Foreground = TacticalConfigPanel.BrushMutedText, FontSize = 9.2, Margin = new Thickness(0, 0, 0, 3) });
-                var objListBorder = new Border { Background = TacticalConfigPanel.BrushInputBg, BorderBrush = TacticalConfigPanel.BrushInputBorder, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(4), MinHeight = 68, MaxHeight = 245, Padding = new Thickness(6) };
+                sec3.Children.Add(new TextBlock { Text = "Obiekty na mapie. W każdej karcie: Aa = etykieta na mapie, ● = kolor, 📍 = pokaż na mapie, − = usuń; dla AO, sektorów i tras także typ i upraszczanie kształtu.", Foreground = TacticalConfigPanel.BrushMutedText, FontSize = 9.2, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 3) });
+                var objListBorder = new Border { Background = TacticalConfigPanel.BrushInputBg, BorderBrush = TacticalConfigPanel.BrushInputBorder, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(4), MinHeight = 68, MaxHeight = 380, Padding = new Thickness(6) };
                 var objListScroll = new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
                 _objectsListStack = new StackPanel();
                 objListScroll.Content = _objectsListStack; objListBorder.Child = objListScroll;
@@ -1501,12 +1479,7 @@ namespace FieldTakHub.Builder.Services
         {
             if (obj == null) return "";
             if (!string.IsNullOrWhiteSpace(obj.LegendDescription)) return obj.LegendDescription;
-            if (obj.Kind == "AO") return "Granica Terenu Gry (strefa poza gr\u0105)";
-            if (obj.Kind == "Sector") return "Sektor / Strefa taktyczna";
-            if (obj.Kind == "Route") return "Trasa / Linia rozgraniczenia";
-            if (obj.Kind == "Dot") return "Punkt orientacyjny";
-            var natoDef = NatoSymbols.FirstOrDefault(n => n.Code == obj.SymbolCode) ?? NatoSymbols[0];
-            return natoDef.NatoMeaning;
+            return StandardLegendDescription(obj);
         }
 
         private static void HandleMapClickToolAction(Window win, Point clickPt)
@@ -1572,289 +1545,6 @@ namespace FieldTakHub.Builder.Services
             TacticalConfigPanel.MarkDirty();
             UpdateSelectedMarkerInspectorUI();
             RefreshObjectsListUI(win);
-        }
-
-        private static string FormatObjectSizeLabel(TacticalMapObjectItem obj)
-        {
-            double m = obj.SizeMultiplier > 0.1 ? obj.SizeMultiplier : 1.0;
-            return obj.Kind == "Dot" ? $"{Math.Round(_dotMarkerSizePx * m):0} px ({m:0.1}x)" : $"{m:0.2}x";
-        }
-
-        private static void RefreshObjectsListUI(Window win)
-        {
-            if (_objectsListStack == null) return;
-            _objectsListStack.Children.Clear();
-            if (_mapObjects.Count == 0)
-            {
-                _objectsListStack.Children.Add(new TextBlock { Text = "Brak naniesionych obiekt\u00F3w \u2014 kliknij na mapie lub wczytaj plik .KMZ / .GPX", Foreground = TacticalConfigPanel.BrushMutedText, FontSize = 9.5, HorizontalAlignment = HorizontalAlignment.Center, Margin = new Thickness(0, 8, 0, 8) });
-                return;
-            }
-
-            foreach (var obj in _mapObjects.ToList())
-            {
-                var captured = obj;
-                if (captured.SizeMultiplier <= 0.1) captured.SizeMultiplier = 1.0;
-                if (string.IsNullOrWhiteSpace(captured.LegendDescription))
-                    captured.LegendDescription = GetDefaultLegendDescriptionForObject(captured);
-
-                bool isMultiPt = captured.Kind == "AO" || captured.Kind == "Sector" || captured.Kind == "Route";
-
-                var itemCard = new Border
-                {
-                    Background = TacticalConfigPanel.BrushItemBg,
-                    BorderBrush = (_inspectedObject == captured) ? TacticalConfigPanel.BrushAccent : TacticalConfigPanel.BrushTileBorder,
-                    BorderThickness = new Thickness((_inspectedObject == captured) ? 1.5 : 1.0),
-                    CornerRadius = new CornerRadius(5),
-                    Padding = new Thickness(6, 5, 6, 5),
-                    Margin = new Thickness(0, 0, 0, 5)
-                };
-
-                var itemStack = new StackPanel();
-                var topRow = new Grid { Margin = new Thickness(0, 0, 0, 3) };
-                topRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(20) });
-                topRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(22) });
-                topRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(24) });
-                topRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(36) });
-                topRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-                topRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-                topRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(26) });
-
-                var chkShowLbl = new CheckBox { IsChecked = captured.ShowLabel, VerticalAlignment = VerticalAlignment.Center, HorizontalAlignment = HorizontalAlignment.Center, Cursor = Cursors.Hand, ToolTip = "Poka\u017C / ukryj etykiet\u0119 tekstow\u0105 tego punktu na mapie" };
-                chkShowLbl.Checked += (s, e) => { captured.ShowLabel = true; if (!_isRebuildingMapControls) TacticalConfigPanel.MarkDirty(); RedrawVectorsOnly(); };
-                chkShowLbl.Unchecked += (s, e) => { captured.ShowLabel = false; if (!_isRebuildingMapControls) TacticalConfigPanel.MarkDirty(); RedrawVectorsOnly(); };
-                Grid.SetColumn(chkShowLbl, 0); topRow.Children.Add(chkShowLbl);
-
-                var btnCol = new Button { Width = 18, Height = 18, Background = TacticalConfigPanel.BrushFromHex(captured.ColorHex, Color.FromRgb(38, 132, 255)), BorderBrush = Brushes.White, BorderThickness = new Thickness(1), Cursor = Cursors.Hand, ToolTip = "Zmie\u0144 kolor tego punktu/obiektu (Paleta RGB)" };
-                var visualBadgeHost = new Border { VerticalAlignment = VerticalAlignment.Center, HorizontalAlignment = HorizontalAlignment.Center };
-                void RebuildItemIconBadge()
-                {
-                    string codeForBadge = captured.Kind == "Dot" ? "DOT" : (isMultiPt ? captured.Kind : captured.SymbolCode);
-                    visualBadgeHost.Child = CreateMiniSymbolVectorBadge(codeForBadge, captured.ColorHex);
-                }
-                RebuildItemIconBadge();
-
-                btnCol.Click += (s, e) =>
-                {
-                    string picked = TacticalConfigPanel.ShowRgbColorPickerDialog(win, $"Kolor \u2014 {captured.Name}", captured.ColorHex);
-                    if (!string.IsNullOrEmpty(picked))
-                    {
-                        captured.ColorHex = picked;
-                        btnCol.Background = TacticalConfigPanel.BrushFromHex(picked, Color.FromRgb(38, 132, 255));
-                        RebuildItemIconBadge();
-                        TacticalConfigPanel.MarkDirty();
-                        RedrawVectorsOnly();
-                    }
-                };
-                Grid.SetColumn(btnCol, 1); topRow.Children.Add(btnCol);
-
-                var btnInspect = new Button { Content = "\uD83D\uDCCD", Width = 22, Height = 20, Padding = new Thickness(0), Background = TacticalConfigPanel.BrushInputBg, Foreground = TacticalConfigPanel.BrushAccent, BorderBrush = TacticalConfigPanel.BrushAccent, BorderThickness = new Thickness(1), FontSize = 10, Cursor = Cursors.Hand, ToolTip = "Wy\u015Brodkuj widok / poka\u017C wsp\u00F3\u0142rz\u0119dne MGRS i Sektor tego obiektu" };
-                btnInspect.Click += (s, e) =>
-                {
-                    _inspectedObject = captured;
-                    _inspectedVertexIndex = 0;
-                    if (captured.Points.Count > 0)
-                    {
-                        _centerLat = captured.Points.Average(p => p.Lat);
-                        _centerLon = captured.Points.Average(p => p.Lon);
-                        _ = RenderMapTilesAsync();
-                    }
-                    UpdateSelectedMarkerInspectorUI();
-                    RefreshObjectsListUI(win);
-                    RedrawVectorsOnly();
-                };
-                Grid.SetColumn(btnInspect, 2); topRow.Children.Add(btnInspect);
-
-                Grid.SetColumn(visualBadgeHost, 3); topRow.Children.Add(visualBadgeHost);
-
-                var editNameBox = new TextBox
-                {
-                    Text = captured.Name,
-                    Height = 23,
-                    FontSize = 10.5,
-                    FontWeight = FontWeights.Bold,
-                    Padding = new Thickness(5, 0, 5, 0),
-                    VerticalContentAlignment = VerticalAlignment.Center,
-                    Background = TacticalConfigPanel.BrushInputBg,
-                    Foreground = Brushes.White,
-                    BorderBrush = TacticalConfigPanel.BrushAccent,
-                    BorderThickness = new Thickness(1),
-                    ToolTip = "Wpisz lub zmie\u0144 nazw\u0119 punktu / obiektu (wy\u015Bwietlan\u0105 na mapie oraz w legendzie)"
-                };
-                editNameBox.TextChanged += (s, e) =>
-                {
-                    captured.Name = editNameBox.Text;
-                    if (!_isRebuildingMapControls) TacticalConfigPanel.MarkDirty();
-                    UpdateSelectedMarkerInspectorUI();
-                    RedrawVectorsOnly();
-                };
-                Grid.SetColumn(editNameBox, 4); topRow.Children.Add(editNameBox);
-
-                if (_newlyAddedObjectToFocus == captured)
-                {
-                    _newlyAddedObjectToFocus = null;
-                    editNameBox.Loaded += (_, __) =>
-                    {
-                        editNameBox.Focus();
-                        editNameBox.SelectAll();
-                    };
-                }
-
-                if (isMultiPt)
-                {
-                    var polyToolsStack = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(3, 0, 0, 0) };
-                    var btnCycleKind = new Button
-                    {
-                        Content = "\uD83D\uDD04 Typ",
-                        Height = 21,
-                        Padding = new Thickness(4, 0, 4, 0),
-                        Background = TacticalConfigPanel.BrushInputBg,
-                        Foreground = TacticalConfigPanel.BrushAccent,
-                        BorderBrush = TacticalConfigPanel.BrushAccent,
-                        BorderThickness = new Thickness(1),
-                        FontSize = 8.5,
-                        FontWeight = FontWeights.Bold,
-                        Cursor = Cursors.Hand,
-                        ToolTip = "Prze\u0142\u0105cz typ geometrii: Trasa (Linia) \u2194 Granica Terenu Gry (AO) \u2194 Sektor (Strefa)"
-                    };
-                    btnCycleKind.Click += (s, e) =>
-                    {
-                        captured.Kind = captured.Kind == "Route" ? "AO" : (captured.Kind == "AO" ? "Sector" : "Route");
-                        captured.SymbolCode = captured.Kind;
-                        captured.LegendDescription = GetDefaultLegendDescriptionForObject(captured);
-                        TacticalConfigPanel.MarkDirty();
-                        RefreshObjectsListUI(win);
-                        RedrawVectorsOnly();
-                        UpdateOfflineTileEstimateUI();
-                    };
-                    polyToolsStack.Children.Add(btnCycleKind);
-
-                    if (captured.Points.Count > 5)
-                    {
-                        var btnSimplify = new Button
-                        {
-                            Content = "\u2702\uFE0F",
-                            Width = 22,
-                            Height = 21,
-                            Margin = new Thickness(2, 0, 0, 0),
-                            Background = TacticalConfigPanel.BrushInputBg,
-                            Foreground = Brushes.White,
-                            BorderBrush = TacticalConfigPanel.BrushInputBorder,
-                            BorderThickness = new Thickness(1),
-                            FontSize = 9,
-                            Cursor = Cursors.Hand,
-                            ToolTip = $"Upro\u015B\u0107 g\u0119sty \u015Blad GPS / wielok\u0105t (Teraz: {captured.Points.Count} wierzcho\u0142k\u00F3w)"
-                        };
-                        btnSimplify.Click += (s, e) =>
-                        {
-                            int before = captured.Points.Count;
-                            var simp = TacticalVectorFileIoEngine.SimplifyTrackPoints(captured.Points, 10.0);
-                            if (simp.Count >= (captured.Kind == "Route" ? 2 : 3))
-                            {
-                                captured.Points = simp;
-                                TacticalConfigPanel.MarkDirty();
-                                if (_statusText != null) _statusText.Text = $"\u2702\uFE0F Uproszczono geometri\u0119 '{captured.Name}': {before} -> {simp.Count} wierzcho\u0142k\u00F3w.";
-                                RefreshObjectsListUI(win);
-                                RedrawVectorsOnly();
-                            }
-                        };
-                        polyToolsStack.Children.Add(btnSimplify);
-                    }
-
-                    Grid.SetColumn(polyToolsStack, 5);
-                    topRow.Children.Add(polyToolsStack);
-                }
-
-                var btnMinusDel = CreateRedMinusDeleteButton($"Usu\u0144 obiekt: {captured.Name}", () =>
-                {
-                    _mapObjects.Remove(captured);
-                    if (_activeDraftPoly == captured) _activeDraftPoly = null;
-                    if (_inspectedObject == captured) _inspectedObject = null;
-                    TacticalConfigPanel.MarkDirty();
-                    UpdateSelectedMarkerInspectorUI();
-                    RefreshObjectsListUI(win);
-                    RedrawVectorsOnly();
-                    UpdateOfflineTileEstimateUI();
-                });
-                Grid.SetColumn(btnMinusDel, 6); topRow.Children.Add(btnMinusDel);
-                itemStack.Children.Add(topRow);
-
-                // Wiersz edycji opisu tego punktu w Legendzie
-                var legDescRow = new Grid { Margin = new Thickness(0, 0, 0, 3) };
-                legDescRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(68) });
-                legDescRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-                var legDescLbl = new TextBlock { Text = "W legendzie:", Foreground = TacticalConfigPanel.BrushMutedText, FontSize = 8.8, VerticalAlignment = VerticalAlignment.Center };
-                var editLegDescBox = new TextBox
-                {
-                    Text = captured.LegendDescription,
-                    Height = 20,
-                    FontSize = 9.2,
-                    Padding = new Thickness(4, 0, 4, 0),
-                    VerticalContentAlignment = VerticalAlignment.Center,
-                    Background = TacticalConfigPanel.BrushInputBg,
-                    Foreground = TacticalConfigPanel.BrushMutedText,
-                    BorderBrush = TacticalConfigPanel.BrushInputBorder,
-                    BorderThickness = new Thickness(1),
-                    ToolTip = "Edytuj opis tego punktu wy\u015Bwietlany w Legendzie na mapie"
-                };
-                editLegDescBox.TextChanged += (s, e) =>
-                {
-                    captured.LegendDescription = editLegDescBox.Text;
-                    if (!_isRebuildingMapControls) TacticalConfigPanel.MarkDirty();
-                    RedrawVectorsOnly();
-                };
-                Grid.SetColumn(legDescLbl, 0); Grid.SetColumn(editLegDescBox, 1);
-                legDescRow.Children.Add(legDescLbl); legDescRow.Children.Add(editLegDescBox);
-                itemStack.Children.Add(legDescRow);
-
-                var sliderRow = new Grid { Margin = new Thickness(0, 0, 0, captured.Kind == "Marker" ? 2 : 0) };
-                sliderRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(58) });
-                sliderRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-                sliderRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(68) });
-
-                var sizeTitle = new TextBlock { Text = "Wielko\u015B\u0107:", Foreground = TacticalConfigPanel.BrushMutedText, FontSize = 9, VerticalAlignment = VerticalAlignment.Center };
-                Grid.SetColumn(sizeTitle, 0); sliderRow.Children.Add(sizeTitle);
-
-                var sizeValTxt = new TextBlock { Text = FormatObjectSizeLabel(captured), Foreground = TacticalConfigPanel.BrushAccent, FontSize = 9, FontWeight = FontWeights.Bold, HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Center };
-                Grid.SetColumn(sizeValTxt, 2); sliderRow.Children.Add(sizeValTxt);
-
-                const double minMult = 0.35, maxMult = 2.60;
-                var sizeSlider = new Slider { Minimum = minMult, Maximum = maxMult, Value = Math.Clamp(captured.SizeMultiplier, minMult, maxMult), IsMoveToPointEnabled = true, SmallChange = 0.05, LargeChange = 0.2, Cursor = Cursors.Hand, VerticalAlignment = VerticalAlignment.Center };
-                void SetItemSlider(MouseEventArgs e) { if (sizeSlider.ActualWidth <= 8) return; sizeSlider.Value = minMult + Math.Clamp(e.GetPosition(sizeSlider).X / sizeSlider.ActualWidth, 0.0, 1.0) * (maxMult - minMult); }
-                sizeSlider.PreviewMouseLeftButtonDown += (s, e) => SetItemSlider(e);
-                sizeSlider.PreviewMouseMove += (s, e) => { if (e.LeftButton == MouseButtonState.Pressed) SetItemSlider(e); };
-                sizeSlider.ValueChanged += (s, e) => { captured.SizeMultiplier = Math.Round(e.NewValue, 2); sizeValTxt.Text = FormatObjectSizeLabel(captured); if (!_isRebuildingMapControls) TacticalConfigPanel.MarkDirty(); RedrawVectorsOnly(); };
-                Grid.SetColumn(sizeSlider, 1); sliderRow.Children.Add(sizeSlider);
-                itemStack.Children.Add(sliderRow);
-
-                if (captured.Kind == "Marker")
-                {
-                    var rotRow = new Grid();
-                    rotRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(58) });
-                    rotRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-                    rotRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(68) });
-
-                    var rotTitle = new TextBlock { Text = "Obr\u00F3t (\u21BB):", Foreground = TacticalConfigPanel.BrushMutedText, FontSize = 9, VerticalAlignment = VerticalAlignment.Center };
-                    Grid.SetColumn(rotTitle, 0); rotRow.Children.Add(rotTitle);
-
-                    var rotValTxt = new TextBlock { Text = $"{captured.RotationDeg:0}\u00B0", Foreground = TacticalConfigPanel.BrushAccent, FontSize = 9, FontWeight = FontWeights.Bold, HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Center };
-                    Grid.SetColumn(rotValTxt, 2); rotRow.Children.Add(rotValTxt);
-
-                    var rotSlider = new Slider { Minimum = 0.0, Maximum = 360.0, Value = Math.Clamp(captured.RotationDeg, 0.0, 360.0), IsMoveToPointEnabled = true, SmallChange = 5.0, LargeChange = 15.0, Cursor = Cursors.Hand, VerticalAlignment = VerticalAlignment.Center };
-                    void SetRotSlider(MouseEventArgs e) { if (rotSlider.ActualWidth <= 8) return; rotSlider.Value = Math.Round(Math.Clamp(e.GetPosition(rotSlider).X / rotSlider.ActualWidth, 0.0, 1.0) * 360.0); }
-                    rotSlider.PreviewMouseLeftButtonDown += (s, e) => SetRotSlider(e);
-                    rotSlider.PreviewMouseMove += (s, e) => { if (e.LeftButton == MouseButtonState.Pressed) SetRotSlider(e); };
-                    rotSlider.ValueChanged += (s, e) => { captured.RotationDeg = Math.Round(e.NewValue); rotValTxt.Text = $"{captured.RotationDeg:0}\u00B0"; if (!_isRebuildingMapControls) TacticalConfigPanel.MarkDirty(); RedrawVectorsOnly(); };
-                    Grid.SetColumn(rotSlider, 1); rotRow.Children.Add(rotSlider);
-                    itemStack.Children.Add(rotRow);
-                }
-
-                itemCard.Child = itemStack;
-                _objectsListStack.Children.Add(itemCard);
-            }
-        
-            
-        
-            RestyleAndAlignMapObjectsTable(_objectsListStack);
         }
 
         private static StackPanel CreateSectionCard(string title)
