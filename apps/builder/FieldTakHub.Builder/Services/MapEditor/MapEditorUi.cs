@@ -30,8 +30,13 @@ internal static class MapEditorUi
     // Jawne style przycisków. Generator map jest częścią głównego okna, a App.xaml nadaje każdemu przyciskowi
     // Padding 12,8, Margin 4 i MinHeight 34 — w 24-pikselowym przycisku usuwania nie mieścił się wtedy znak „−”,
     // a kółko koloru robiło się owalem. Własny szablon trzyma też kolor tła po najechaniu myszą.
-    private static readonly Style RoundButtonStyle = CreateFlatStyle(new CornerRadius(50));
-    private static readonly Style SquareButtonStyle = CreateFlatStyle(new CornerRadius(4));
+    private static readonly Style RoundButtonStyle = CreateFlatStyle(new CornerRadius(50), stretchContent: false);
+    private static readonly Style SquareButtonStyle = CreateFlatStyle(new CornerRadius(4), stretchContent: false);
+    private static readonly Style MenuRowStyle = CreateFlatStyle(new CornerRadius(4), stretchContent: true);
+
+    /// <summary>Tło pływających elementów nad mapą (pasek narzędzi, menu, podpowiedź).</summary>
+    public static readonly SolidColorBrush FloatingBackground = Frozen(Color.FromArgb(238, 8, 19, 22));
+    private static readonly SolidColorBrush DangerText = Frozen(Color.FromRgb(248, 113, 113));
 
     /// <summary>Karta jednego elementu listy. <paramref name="item"/> trafia do Tag — po nim odświeża się zaznaczenie.</summary>
     public static Border Card(object item, bool selected)
@@ -308,6 +313,140 @@ internal static class MapEditorUi
         return slider;
     }
 
+    /// <summary>Przycisk narzędzia na pasku nad mapą. Aktywne narzędzie ma wypełnione tło (<see cref="SetToolActive"/>).</summary>
+    public static Button ToolButton(string glyph, string tooltip, Action onClick)
+    {
+        var button = new Button
+        {
+            Style = SquareButtonStyle,
+            Width = 32,
+            Height = 28,
+            Margin = new Thickness(1, 0, 1, 0),
+            Content = glyph,
+            FontSize = 14,
+            Foreground = Brushes.White,
+            Background = Brushes.Transparent,
+            BorderBrush = Brushes.Transparent,
+            BorderThickness = new Thickness(1),
+            Cursor = Cursors.Hand,
+            ToolTip = tooltip,
+            VerticalAlignment = VerticalAlignment.Center
+        };
+        ToolTipService.SetInitialShowDelay(button, 250);
+        AddHoverBorder(button, TacticalConfigPanel.BrushAccent);
+        button.Click += (_, _) => onClick();
+        return button;
+    }
+
+    /// <summary>Zmienia tylko tło i kolor znaku — ramka należy do efektu najechania myszą.</summary>
+    public static void SetToolActive(Button button, bool active)
+    {
+        button.Background = active ? TacticalConfigPanel.BrushButtonAccent : Brushes.Transparent;
+        button.Foreground = active ? TacticalConfigPanel.BrushDarkFg : Brushes.White;
+    }
+
+    /// <summary>Kafelek z dowolną zawartością (np. symbolem NATO) do siatki wyboru.</summary>
+    public static Button TileButton(UIElement content, string tooltip, bool selected, Action onClick)
+    {
+        var button = new Button
+        {
+            Style = SquareButtonStyle,
+            Width = 40,
+            Height = 30,
+            Margin = new Thickness(1),
+            Content = content,
+            Background = selected ? SelectedCardBackground : Brushes.Transparent,
+            BorderBrush = selected ? TacticalConfigPanel.BrushAccent : Brushes.Transparent,
+            BorderThickness = new Thickness(1),
+            Cursor = Cursors.Hand,
+            ToolTip = tooltip
+        };
+        AddHoverBackground(button, HoverBackground);
+        button.Click += (_, _) => onClick();
+        return button;
+    }
+
+    /// <summary>Pozycja listy menu: znak, opis i opcjonalny skrót klawiszowy po prawej.</summary>
+    public static Button MenuItem(string glyph, string text, string? shortcut, Action onClick, bool danger = false)
+    {
+        var row = new Grid();
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(22) });
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+        var icon = new TextBlock
+        {
+            Text = glyph,
+            Foreground = danger ? DangerText : TacticalConfigPanel.BrushAccent,
+            FontSize = 12,
+            HorizontalAlignment = HorizontalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Center
+        };
+        var label = new TextBlock
+        {
+            Text = text,
+            Foreground = danger ? DangerText : Brushes.White,
+            FontSize = 11.5,
+            Margin = new Thickness(4, 0, 10, 0),
+            VerticalAlignment = VerticalAlignment.Center,
+            TextTrimming = TextTrimming.CharacterEllipsis
+        };
+        var keys = new TextBlock
+        {
+            Text = shortcut ?? "",
+            Foreground = TacticalConfigPanel.BrushMutedText,
+            FontSize = 10,
+            VerticalAlignment = VerticalAlignment.Center
+        };
+        Grid.SetColumn(icon, 0);
+        Grid.SetColumn(label, 1);
+        Grid.SetColumn(keys, 2);
+        row.Children.Add(icon);
+        row.Children.Add(label);
+        row.Children.Add(keys);
+
+        var button = new Button
+        {
+            Style = MenuRowStyle,
+            Height = 26,
+            Padding = new Thickness(4, 0, 8, 0),
+            Content = row,
+            Background = Brushes.Transparent,
+            BorderBrush = Brushes.Transparent,
+            BorderThickness = new Thickness(0),
+            Cursor = Cursors.Hand,
+            HorizontalAlignment = HorizontalAlignment.Stretch
+        };
+        AddHoverBackground(button, HoverBackground);
+        button.Click += (_, _) => onClick();
+        return button;
+    }
+
+    public static Border MenuSeparator() => new Border
+    {
+        Height = 1,
+        Margin = new Thickness(6, 4, 6, 4),
+        Background = TacticalConfigPanel.BrushTileBorder
+    };
+
+    /// <summary>Panel pływający nad mapą (menu obiektu, wybór symbolu). Kliknięcie w jego tło nie zamyka menu.</summary>
+    public static Border FloatingPanel(UIElement content, double width)
+    {
+        var panel = new Border
+        {
+            Width = width,
+            Background = FloatingBackground,
+            BorderBrush = TacticalConfigPanel.BrushAccent,
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(6),
+            Padding = new Thickness(4),
+            Child = content
+        };
+        panel.MouseLeftButtonDown += (_, e) => e.Handled = true;
+        panel.MouseRightButtonDown += (_, e) => e.Handled = true;
+        return panel;
+    }
+
     private static void AddHoverBorder(Control control, Brush hover)
     {
         Brush? normal = null;
@@ -322,10 +461,10 @@ internal static class MapEditorUi
         control.MouseLeave += (_, _) => { if (normal != null) control.Background = normal; normal = null; };
     }
 
-    private static Style CreateFlatStyle(CornerRadius radius)
+    private static Style CreateFlatStyle(CornerRadius radius, bool stretchContent)
     {
         var style = new Style(typeof(Button));
-        style.Setters.Add(new Setter(Control.TemplateProperty, CreateFlatTemplate(radius)));
+        style.Setters.Add(new Setter(Control.TemplateProperty, CreateFlatTemplate(radius, stretchContent)));
         style.Setters.Add(new Setter(Control.PaddingProperty, new Thickness(0)));
         style.Setters.Add(new Setter(FrameworkElement.MarginProperty, new Thickness(0)));
         style.Setters.Add(new Setter(FrameworkElement.MinHeightProperty, 0.0));
@@ -334,7 +473,7 @@ internal static class MapEditorUi
         return style;
     }
 
-    private static ControlTemplate CreateFlatTemplate(CornerRadius radius)
+    private static ControlTemplate CreateFlatTemplate(CornerRadius radius, bool stretchContent)
     {
         var border = new FrameworkElementFactory(typeof(Border));
         border.SetValue(Border.BackgroundProperty, new TemplateBindingExtension(Control.BackgroundProperty));
@@ -346,7 +485,7 @@ internal static class MapEditorUi
         var content = new FrameworkElementFactory(typeof(ContentPresenter));
         content.SetValue(ContentPresenter.ContentProperty, new TemplateBindingExtension(ContentControl.ContentProperty));
         content.SetValue(FrameworkElement.MarginProperty, new TemplateBindingExtension(Control.PaddingProperty));
-        content.SetValue(FrameworkElement.HorizontalAlignmentProperty, HorizontalAlignment.Center);
+        content.SetValue(FrameworkElement.HorizontalAlignmentProperty, stretchContent ? HorizontalAlignment.Stretch : HorizontalAlignment.Center);
         content.SetValue(FrameworkElement.VerticalAlignmentProperty, VerticalAlignment.Center);
         border.AppendChild(content);
 

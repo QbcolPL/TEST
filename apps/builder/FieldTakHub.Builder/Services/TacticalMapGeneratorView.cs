@@ -608,46 +608,14 @@ namespace FieldTakHub.Builder.Services
                 leftStack.Children.Add(WrapCard(BuildSection2GridAndColorsUI(win)));
 
                 var sec3 = CreateSectionCard("3. EDYTOR .KMZ / .GPX, ZNACZNIKI, ODCZYT MGRS & OBRACANIE (↻)");
-                void UpdateToolButtonsVisual()
+                sec3.Children.Add(new TextBlock
                 {
-                    void StyleTool(Button b, bool active)
-                    {
-                        if (b == null) return;
-                        b.Background = active ? TacticalConfigPanel.BrushButtonAccent : TacticalConfigPanel.BrushInputBg;
-                        b.Foreground = active ? TacticalConfigPanel.BrushDarkFg : Brushes.White;
-                        b.BorderBrush = active ? TacticalConfigPanel.BrushAccent : TacticalConfigPanel.BrushInputBorder;
-                    }
-                    StyleTool(_btnToolPan, _activeTool == "PAN");
-                    StyleTool(_btnToolMarker, _activeTool == "MARKER");
-                    StyleTool(_btnToolDot, _activeTool == "DOT");
-                    StyleTool(_btnToolAo, _activeTool == "AO");
-                    StyleTool(_btnToolSector, _activeTool == "SECTOR");
-                    StyleTool(_btnToolRoute, _activeTool == "ROUTE");
-                }
-
-                _btnToolPan = MakeActionButton("✋ Przesuwaj Mapę / Kliknij Marker = Współrzędne / Przeciągnij Wierzchołek", true, () => { _activeTool = "PAN"; _activeDraftPoly = null; _fastOverlayRenderer?.InvalidateVisual(); UpdateToolButtonsVisual(); });
-                _btnToolPan.Height = 30; _btnToolPan.Margin = new Thickness(0, 0, 0, 5);
-                sec3.Children.Add(_btnToolPan);
-
-                var toolsGrid = new UniformGrid { Columns = 2, Margin = new Thickness(0, 0, 0, 6) };
-                _btnToolMarker = MakeActionButton("➤ Kształt / Namiot / NATO", false, () => { _activeTool = "MARKER"; _activeDraftPoly = null; _fastOverlayRenderer?.InvalidateVisual(); UpdateToolButtonsVisual(); });
-                _btnToolDot = MakeActionButton("⚫ Kropka (Kolor RGB)", false, () => { _activeTool = "DOT"; _activeDraftPoly = null; _fastOverlayRenderer?.InvalidateVisual(); UpdateToolButtonsVisual(); });
-                _btnToolAo = MakeActionButton("🛡️ Teren Gry (Maska poza AO)", false, () => { _activeTool = "AO"; _activeDraftPoly = null; if (_objectNameInputBox != null) _objectNameInputBox.Text = "Granica Terenu Gry"; _fastOverlayRenderer?.InvalidateVisual(); UpdateToolButtonsVisual(); });
-                _btnToolSector = MakeActionButton("⬠ Sektor / Strefa (Wypełniony)", false, () => { _activeTool = "SECTOR"; _activeDraftPoly = null; if (_objectNameInputBox != null) _objectNameInputBox.Text = $"Sektor-{_mapObjects.Count + 1}"; _fastOverlayRenderer?.InvalidateVisual(); UpdateToolButtonsVisual(); });
-
-                _btnToolMarker.Height = 28; _btnToolMarker.Margin = new Thickness(0, 0, 3, 4);
-                _btnToolDot.Height = 28; _btnToolDot.Margin = new Thickness(3, 0, 0, 4);
-                _btnToolAo.Height = 28; _btnToolAo.Margin = new Thickness(0, 0, 3, 4);
-                _btnToolSector.Height = 28; _btnToolSector.Margin = new Thickness(3, 0, 0, 4);
-
-                toolsGrid.Children.Add(_btnToolMarker); toolsGrid.Children.Add(_btnToolDot);
-                toolsGrid.Children.Add(_btnToolAo); toolsGrid.Children.Add(_btnToolSector);
-                sec3.Children.Add(toolsGrid);
-
-                _btnToolRoute = MakeActionButton("〰 Rysuj Trasę / Linię (Przytrzymaj SHIFT = kąt co 45° / 90°)", false, () => { _activeTool = "ROUTE"; _activeDraftPoly = null; if (_objectNameInputBox != null) _objectNameInputBox.Text = $"Trasa-{_mapObjects.Count + 1}"; _fastOverlayRenderer?.InvalidateVisual(); UpdateToolButtonsVisual(); });
-                _btnToolRoute.Height = 26; _btnToolRoute.Margin = new Thickness(0, 0, 0, 6);
-                sec3.Children.Add(_btnToolRoute);
-                UpdateToolButtonsVisual();
+                    Text = "Rysujesz na mapie: narzędzia są na pasku nad mapą (V, N, K, T, S, A, L), a prawy klik w dowolnym miejscu mapy otwiera szybkie menu. Poniżej — symbol i kolor nowych obiektów oraz lista obiektów.",
+                    Foreground = TacticalConfigPanel.BrushMutedText,
+                    FontSize = 9.5,
+                    TextWrapping = TextWrapping.Wrap,
+                    Margin = new Thickness(0, 0, 0, 6)
+                });
 
                 var inspectorBorder = new Border { Background = TacticalConfigPanel.BrushInputBg, BorderBrush = TacticalConfigPanel.BrushAccent, BorderThickness = new Thickness(1.4), CornerRadius = new CornerRadius(6), Padding = new Thickness(8, 6, 8, 6), Margin = new Thickness(0, 0, 0, 6) };
                 var inspStack = new StackPanel();
@@ -689,12 +657,14 @@ namespace FieldTakHub.Builder.Services
                 };
                 TacticalConfigPanel.ApplyUnifiedComboBoxTheme(natoCombo, win);
                 natoCombo.ItemTemplate = CreateNatoSymbolVisualDataTemplate();
+                _natoSymbolCombo = natoCombo;
                 natoCombo.SelectionChanged += (s, e) =>
                 {
                     if (natoCombo.SelectedItem is NatoSymbolOption opt)
                     {
                         _selectedNatoSymbolCode = opt.Code;
                         if (!_isRebuildingMapControls) TacticalConfigPanel.MarkDirty();
+                        UpdateToolHint();
                     }
                 };
                 sec3.Children.Add(TacticalConfigPanel.FieldBox("Wybierz symbol taktyczny / wektor militarny NATO (36 wzor\u00F3w wektorowych):", natoCombo));
@@ -757,6 +727,7 @@ namespace FieldTakHub.Builder.Services
                 var objListScroll = new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
                 _objectsListStack = new StackPanel();
                 objListScroll.Content = _objectsListStack; objListBorder.Child = objListScroll;
+                _objectsListScroll = objListScroll;
                 sec3.Children.Add(objListBorder);
                 RefreshObjectsListUI(win);
                 leftStack.Children.Add(WrapCard(sec3));
@@ -881,6 +852,7 @@ namespace FieldTakHub.Builder.Services
             if (_selectedSheet == null) _selectedSheet = SheetFormats[0];
 
             var rootBorder = new Border { Background = TacticalConfigPanel.BrushCardBg, Tag = "INJECTED_MAP_OVERLAY" };
+            rootBorder.PreviewKeyDown += (s, e) => OnMapPreviewKeyDown(win, e);
             var mainGrid = new Grid();
             mainGrid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
             mainGrid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(32) });
@@ -923,6 +895,7 @@ namespace FieldTakHub.Builder.Services
             hudBorder.Child = _coordsBadge;
             topBadgesStack.Children.Add(hudBorder);
             _viewportHostGrid.Children.Add(topBadgesStack);
+            AttachMapInteractionLayer();
 
             _interactiveCanvas.MouseEnter += (s, e) => _isHoveringCanvas = true;
             _interactiveCanvas.MouseLeave += (s, e) => { _isHoveringCanvas = false; if (_activeDraftPoly != null) _fastOverlayRenderer?.InvalidateVisual(); };
@@ -949,24 +922,7 @@ namespace FieldTakHub.Builder.Services
                 }
             };
 
-            _interactiveCanvas.MouseRightButtonDown += (s, e) =>
-            {
-                if (_activeDraftPoly != null)
-                {
-                    _activeDraftPoly = null;
-                    RefreshObjectsListUI(win);
-                    RedrawVectorsOnly();
-                    UpdateOfflineTileEstimateUI();
-                    TacticalConfigPanel.MarkDirty();
-                    return;
-                }
-                var (w, h) = GetExactCanvasSize();
-                Point p = e.GetPosition(_interactiveCanvas);
-                var pt = ScreenToLatLon(p.X, p.Y, w, h);
-                if (_rulerStart == null || (_rulerStart != null && _rulerEnd != null)) { _rulerStart = pt; _rulerEnd = null; }
-                else _rulerEnd = pt;
-                _fastOverlayRenderer?.InvalidateVisual();
-            };
+            _interactiveCanvas.MouseRightButtonDown += (s, e) => OnMapRightButtonDown(win, e);
 
             _interactiveCanvas.MouseMove += (s, e) =>
             {
@@ -1034,6 +990,8 @@ namespace FieldTakHub.Builder.Services
 
                 if (_activeDraftPoly != null && _activeDraftPoly.Points.Count > 0)
                     _fastOverlayRenderer?.InvalidateVisual();
+                if (_activeTool == "MEASURE" && _rulerStart != null && _rulerEnd == null)
+                    _fastOverlayRenderer?.InvalidateVisual();
 
                 if (_isPanningMap && _activeTool == "PAN")
                 {
@@ -1078,15 +1036,14 @@ namespace FieldTakHub.Builder.Services
                 _interactiveCanvas.ReleaseMouseCapture();
 
                 Point endPt = e.GetPosition(_interactiveCanvas);
-                if ((endPt - _mouseDownPoint).Length < 5.0 && _activeTool != "PAN")
+                bool isClick = (endPt - _mouseDownPoint).Length < 5.0;
+                if (isClick && _activeTool != "PAN")
                 {
-                    HandleMapClickToolAction(win, _mouseDownPoint);
-                    UpdateSelectedMarkerInspectorUI();
-                    RedrawVectorsOnly();
-                    UpdateOfflineTileEstimateUI();
+                    HandleToolClick(win, _mouseDownPoint);
                 }
                 else
                 {
+                    if (isClick) HandleToolClick(win, _mouseDownPoint);
                     TacticalConfigPanel.MarkDirty();
                     RefreshTileCanvasesOnly();
                     RedrawVectorsOnly();
@@ -1482,18 +1439,21 @@ namespace FieldTakHub.Builder.Services
             return StandardLegendDescription(obj);
         }
 
-        private static void HandleMapClickToolAction(Window win, Point clickPt)
+        private static void HandleMapClickToolAction(Window win, Point clickPt) => PlaceWithTool(win, _activeTool, clickPt);
+
+        /// <summary>Stawia znacznik / kropkę albo dodaje punkt rysowanego kształtu narzędziem <paramref name="tool"/> (też z pierścienia menu).</summary>
+        private static void PlaceWithTool(Window win, string tool, Point clickPt)
         {
             var (w, h) = GetExactCanvasSize();
 
-            if (_activeTool == "MARKER" || _activeTool == "DOT")
+            if (tool == "MARKER" || tool == "DOT")
             {
                 var (clickLat, clickLon) = ScreenToLatLon(clickPt.X, clickPt.Y, w, h);
-                string symCode = _activeTool == "MARKER" ? _selectedNatoSymbolCode : "DOT";
-                string autoName = GetDefaultAutoObjectName(_activeTool, symCode);
+                string symCode = tool == "MARKER" ? _selectedNatoSymbolCode : "DOT";
+                string autoName = GetDefaultAutoObjectName(tool, symCode);
                 var item = new TacticalMapObjectItem
                 {
-                    Kind = _activeTool == "MARKER" ? "Marker" : "Dot",
+                    Kind = tool == "MARKER" ? "Marker" : "Dot",
                     SymbolCode = symCode,
                     Name = autoName,
                     ColorHex = _selectedObjectColorHex,
@@ -1508,12 +1468,12 @@ namespace FieldTakHub.Builder.Services
                 _inspectedVertexIndex = 0;
                 _newlyAddedObjectToFocus = item;
             }
-            else if (_activeTool == "AO" || _activeTool == "SECTOR" || _activeTool == "ROUTE")
+            else if (tool == "AO" || tool == "SECTOR" || tool == "ROUTE")
             {
-                string kind = _activeTool == "AO" ? "AO" : (_activeTool == "SECTOR" ? "Sector" : "Route");
+                string kind = tool == "AO" ? "AO" : (tool == "SECTOR" ? "Sector" : "Route");
                 if (_activeDraftPoly == null || _activeDraftPoly.Kind != kind)
                 {
-                    string autoPolyName = GetDefaultAutoObjectName(_activeTool, kind);
+                    string autoPolyName = GetDefaultAutoObjectName(tool, kind);
                     _activeDraftPoly = new TacticalMapObjectItem
                     {
                         Kind = kind,
@@ -1680,7 +1640,7 @@ namespace FieldTakHub.Builder.Services
             if (screenPts.Count >= 2)
             {
                 double cx = screenPts.Average(p => p.X), cy = screenPts.Average(p => p.Y);
-                var moveAllBadge = new Border { Width = 22, Height = 22, CornerRadius = new CornerRadius(11), Background = new SolidColorBrush(Color.FromArgb(225, 8, 19, 22)), BorderBrush = strokeBrush, BorderThickness = new Thickness(1.8), Cursor = Cursors.SizeAll, ToolTip = $"Przeciągnij tutaj (✥), aby przesunąć CAŁY obiekt: {obj.Name}", Child = new TextBlock { Text = "✥", Foreground = Brushes.White, FontSize = 12, FontWeight = FontWeights.Bold, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, -1, 0, 0) } };
+                var moveAllBadge = new Border { Width = 22, Height = 22, CornerRadius = new CornerRadius(11), Background = new SolidColorBrush(Color.FromArgb(225, 8, 19, 22)), BorderBrush = strokeBrush, BorderThickness = new Thickness(1.8), Cursor = Cursors.SizeAll, ToolTip = $"Przeciągnij tutaj (✥), aby przesunąć cały obiekt: {obj.Name}  |  Prawy klik = menu obiektu", Child = new TextBlock { Text = "✥", Foreground = Brushes.White, FontSize = 12, FontWeight = FontWeights.Bold, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, -1, 0, 0) } };
                 moveAllBadge.MouseLeftButtonDown += (s, e) =>
                 {
                     e.Handled = true; _inspectedObject = obj; _inspectedVertexIndex = 0; UpdateSelectedMarkerInspectorUI();
@@ -1690,6 +1650,7 @@ namespace FieldTakHub.Builder.Services
                     _wholeShapeOriginalPoints = obj.Points.ToList();
                     _interactiveCanvas.CaptureMouse();
                 };
+                moveAllBadge.MouseRightButtonDown += (s, e) => OnObjectRightClick(obj, e);
                 Canvas.SetLeft(moveAllBadge, cx - 11); Canvas.SetTop(moveAllBadge, cy - 11);
                 _interactiveCanvas.Children.Add(moveAllBadge);
             }
@@ -1703,7 +1664,7 @@ namespace FieldTakHub.Builder.Services
 
         private static void AttachCenteredMarkerDragHandler(UIElement el, TacticalMapObjectItem obj, Point exactMarkerAnchorScreenPt, string tooltipSuffix = "środek 1:1")
         {
-            if (el is FrameworkElement fe) { fe.Cursor = Cursors.Hand; fe.ToolTip = $"Kliknij LPM = Odczytaj współrzędne MGRS/WGS84 ({obj.Name})  |  Przeciągnij = Przesuń ({tooltipSuffix})"; }
+            if (el is FrameworkElement fe) { fe.Cursor = Cursors.Hand; fe.ToolTip = $"Kliknij = współrzędne MGRS/WGS84 ({obj.Name})  |  Przeciągnij = przesuń ({tooltipSuffix})  |  Prawy klik = menu obiektu"; }
             el.MouseLeftButtonDown += (s, e) =>
             {
                 e.Handled = true; _inspectedObject = obj; _inspectedVertexIndex = 0; UpdateSelectedMarkerInspectorUI();
@@ -1712,6 +1673,7 @@ namespace FieldTakHub.Builder.Services
                 _markerDragScreenOffset = new Point(mousePt.X - exactMarkerAnchorScreenPt.X, mousePt.Y - exactMarkerAnchorScreenPt.Y);
                 _interactiveCanvas.CaptureMouse(); RedrawVectorsOnly();
             };
+            el.MouseRightButtonDown += (s, e) => OnObjectRightClick(obj, e);
         }
 
         private static void DrawRotationDragHandleForMarker(Point anchorScreenPt, TacticalMapObjectItem obj, double scale, Brush strokeBrush)

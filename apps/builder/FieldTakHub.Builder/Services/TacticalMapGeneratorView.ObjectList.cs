@@ -21,6 +21,7 @@ namespace FieldTakHub.Builder.Services
         {
             if (_objectsListStack == null) return;
             _objectsListStack.Children.Clear();
+            _objectNameBoxes.Clear();
             if (_mapObjects.Count == 0)
             {
                 _objectsListStack.Children.Add(new TextBlock
@@ -86,6 +87,7 @@ namespace FieldTakHub.Builder.Services
             var locate = MapEditorUi.IconButton("📍", "Pokaż na mapie: wyśrodkuj widok i odczytaj współrzędne (MGRS, sektor)", () => SelectObjectFromList(obj, centerMap: true));
 
             var nameBox = MapEditorUi.TextField(obj.Name ?? "", "Nazwa obiektu — na mapie i w legendzie", emphasized: true);
+            _objectNameBoxes[obj] = nameBox;
             nameBox.TextChanged += (_, _) =>
             {
                 obj.Name = nameBox.Text;
@@ -95,12 +97,10 @@ namespace FieldTakHub.Builder.Services
             };
             if (ReferenceEquals(_newlyAddedObjectToFocus, obj))
             {
+                // Nowy obiekt: lista przewija się do jego karty, ale fokus zostaje na mapie, żeby działały skróty.
+                // Nazwę zmienia się klawiszem F2 albo z menu obiektu (prawy klik).
                 _newlyAddedObjectToFocus = null;
-                nameBox.Loaded += (_, _) =>
-                {
-                    nameBox.Focus();
-                    nameBox.SelectAll();
-                };
+                card.Loaded += (_, _) => _objectsListScroll?.ScrollToEnd();
             }
 
             var delete = MapEditorUi.DeleteButton("Usuń ten obiekt z mapy", () => DeleteMapObject(win, obj));

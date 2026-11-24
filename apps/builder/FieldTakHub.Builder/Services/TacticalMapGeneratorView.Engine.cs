@@ -301,7 +301,7 @@ namespace FieldTakHub.Builder.Services
         private static Canvas _tileCanvas, _lidarTileCanvas, _interactiveCanvas;
         private static FastTacticalOverlayRenderer _fastOverlayRenderer;
         private static Rectangle _dimmerRect;
-        private static Button _tabBuilderBtn, _tabMapBtn, _btnToolPan, _btnToolMarker, _btnToolDot, _btnToolAo, _btnToolSector, _btnToolRoute;
+        private static Button _tabBuilderBtn, _tabMapBtn;
         private static readonly List<Button> _scalePresetButtons = new List<Button>();
         private static TextBlock _statusText, _coordsBadge, _sheetInfoBadge, _offlineEstimateLabel, _offlineProgressLabel;
         private static ProgressBar _offlineProgressBar;
@@ -1564,15 +1564,17 @@ namespace FieldTakHub.Builder.Services
 
             RenderMetricSectorGridAndRulersOnContext(dc, w, h);
 
-            if (_rulerStart != null && _rulerEnd != null)
+            // Pomiar: z narzędziem „Pomiar” linia idzie za kursorem, dopóki nie kliknie się punktu końcowego.
+            (double Lat, double Lon)? rulerEnd = _rulerEnd;
+            if (rulerEnd == null && _rulerStart != null && _activeTool == "MEASURE" && _isHoveringCanvas)
+                rulerEnd = ScreenToLatLon(_currentHoverScreenPt.X, _currentHoverScreenPt.Y, w, h);
+            if (_rulerStart != null && rulerEnd != null)
             {
-                Point p1 = LatLonToScreen(_rulerStart.Value.Lat, _rulerStart.Value.Lon, w, h), p2 = LatLonToScreen(_rulerEnd.Value.Lat, _rulerEnd.Value.Lon, w, h);
+                Point p1 = LatLonToScreen(_rulerStart.Value.Lat, _rulerStart.Value.Lon, w, h), p2 = LatLonToScreen(rulerEnd.Value.Lat, rulerEnd.Value.Lon, w, h);
                 var rPen = new Pen(TacticalConfigPanel.BrushAccent, 2.2) { DashStyle = new DashStyle(new double[] { 4, 2 }, 0) }; rPen.Freeze();
                 dc.DrawLine(rPen, p1, p2);
-                double dLat = (_rulerEnd.Value.Lat - _rulerStart.Value.Lat) * Math.PI / 180.0, dLon = (_rulerEnd.Value.Lon - _rulerStart.Value.Lon) * Math.PI / 180.0;
-                double a = Math.Sin(dLat / 2) * Math.Sin(dLat / 2) + Math.Cos(_rulerStart.Value.Lat * Math.PI / 180.0) * Math.Cos(_rulerEnd.Value.Lat * Math.PI / 180.0) * Math.Sin(dLon / 2) * Math.Sin(dLon / 2);
-                double dist = 6371000.0 * 2.0 * Math.Atan2(Math.Sqrt(a), Math.Sqrt(1.0 - a));
-                DrawFastBadgeOnContext(dc, $"📏 {dist:0} m", (p1.X + p2.X) / 2, (p1.Y + p2.Y) / 2 - 14, TacticalConfigPanel.BrushAccent, 10.5 * _fontScaleMultiplier, 1.0, "RULER");
+                dc.DrawEllipse(TacticalConfigPanel.BrushAccent, null, p1, 3.5, 3.5);
+                DrawFastBadgeOnContext(dc, "📏 " + RulerLabel(_rulerStart.Value, rulerEnd.Value), (p1.X + p2.X) / 2, (p1.Y + p2.Y) / 2 - 14, TacticalConfigPanel.BrushAccent, 10.5 * _fontScaleMultiplier, 1.0, "RULER");
             }
         }
 

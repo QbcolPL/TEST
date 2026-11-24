@@ -135,7 +135,12 @@ namespace FieldTakHub.Builder.Services
             parentPanel.Children.Add(panel);
         }
 
-        private static void AddNewWeaponRangeSector()
+        private static void AddNewWeaponRangeSector() => AddWeaponRangeSectorCore(null);
+
+        /// <summary>Sektor ognia ze stanowiskiem w punkcie mapy (pierścień menu pod prawym przyciskiem).</summary>
+        private static void AddWeaponRangeSectorAt(Point canvasPt) => AddWeaponRangeSectorCore(canvasPt);
+
+        private static void AddWeaponRangeSectorCore(Point? canvasPt)
         {
             string[] defaultColors = new[] { "#1FE0C5", "#2ECC71", "#FAD02C", "#EB4034", "#A55EEA", "#FF7F50" };
             int idx = _weaponRangeSectors.Count + 1;
@@ -154,6 +159,14 @@ namespace FieldTakHub.Builder.Services
                 OffsetEastMeters = ((idx - 1) % 3 - 1) * 18.0,
                 OffsetNorthMeters = ((idx - 1) % 2 == 0 ? 12.0 : -12.0)
             };
+            if (canvasPt.HasValue)
+            {
+                var (cw, ch) = GetExactCanvasSize();
+                double mpp = GetExactMetersPerPixel();
+                if (mpp <= 0.0001 || double.IsNaN(mpp) || double.IsInfinity(mpp)) mpp = 1.0;
+                item.OffsetEastMeters = (canvasPt.Value.X - cw / 2.0) * mpp;
+                item.OffsetNorthMeters = (ch / 2.0 - canvasPt.Value.Y) * mpp;
+            }
 
             SyncSectorGeoAnchorFromOffsets(item);
             _weaponRangeSectors.Add(item);
