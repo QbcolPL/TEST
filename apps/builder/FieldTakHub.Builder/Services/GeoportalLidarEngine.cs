@@ -761,41 +761,16 @@ namespace FieldTakHub.Builder.Services
 
             void UpdateQrForUrl(string targetUrl)
             {
-                qrImage.Source = RenderFallbackQrBitmap(targetUrl);
-                _ = Task.Run(async () =>
+                // Prawdziwy kod QR generowany lokalnie. Wcześniej najpierw rysowała się nieskanowalna atrapa z hasha,
+                // a właściwy kod przychodził z zewnętrznej usługi QR – bez internetu zostawała sama atrapa.
+                try
                 {
-                    try
-                    {
-                        string cacheKey = $"QR_COFFEE_{targetUrl}";
-                        byte[] cached = GeoportalLidarEngine.TryReadDiskCache(cacheKey);
-                        if (cached == null)
-                        {
-                            string api = $"https://api.qrserver.com/v1/create-qr-code/?size=360x360&margin=8&data={Uri.EscapeDataString(targetUrl)}";
-                            cached = await GeoportalLidarEngine.FastHttp.GetByteArrayAsync(api);
-                            if (GeoportalLidarEngine.IsValidImageBytes(cached))
-                                GeoportalLidarEngine.SaveDiskCacheAsync(cacheKey, cached);
-                        }
-                        if (GeoportalLidarEngine.IsValidImageBytes(cached) && Application.Current != null)
-                        {
-                            await Application.Current.Dispatcher.InvokeAsync(() =>
-                            {
-                                try
-                                {
-                                    var bmp = new BitmapImage();
-                                    using var ms = new MemoryStream(cached);
-                                    bmp.BeginInit();
-                                    bmp.CacheOption = BitmapCacheOption.OnLoad;
-                                    bmp.StreamSource = ms;
-                                    bmp.EndInit();
-                                    bmp.Freeze();
-                                    qrImage.Source = bmp;
-                                }
-                                catch { }
-                            });
-                        }
-                    }
-                    catch { }
-                });
+                    qrImage.Source = QrService.CreateImageSource(string.IsNullOrWhiteSpace(targetUrl) ? "https://buycoffee.to/qbcol" : targetUrl);
+                }
+                catch
+                {
+                    qrImage.Source = null;
+                }
             }
 
             UpdateQrForUrl(activeUrl);
@@ -909,42 +884,6 @@ namespace FieldTakHub.Builder.Services
 
             dlg.Content = root;
             dlg.ShowDialog();
-        }
-
-        private static BitmapSource RenderFallbackQrBitmap(string payload)
-        {
-            const int sz = 300;
-            const int modules = 29;
-            double cell = (double)sz / modules;
-            byte[] hash = SHA256.HashData(Encoding.UTF8.GetBytes(payload ?? "https://buycoffee.to/qbcol"));
-
-            var dv = new DrawingVisual();
-            using (DrawingContext dc = dv.RenderOpen())
-            {
-                dc.DrawRectangle(Brushes.White, null, new Rect(0, 0, sz, sz));
-                bool IsFinder(int r, int c) => (r < 7 && c < 7) || (r < 7 && c >= modules - 7) || (r >= modules - 7 && c < 7);
-                void DrawFinder(int rOff, int cOff)
-                {
-                    for (int r = 0; r < 7; r++)
-                        for (int c = 0; c < 7; c++)
-                            if ((r == 0 || r == 6 || c == 0 || c == 6) || (r >= 2 && r <= 4 && c >= 2 && c <= 4))
-                                dc.DrawRectangle(Brushes.Black, null, new Rect((cOff + c) * cell, (rOff + r) * cell, cell + 0.4, cell + 0.4));
-                }
-                DrawFinder(0, 0); DrawFinder(0, modules - 7); DrawFinder(modules - 7, 0);
-                int bitIdx = 0;
-                for (int r = 0; r < modules; r++)
-                    for (int c = 0; c < modules; c++)
-                        if (!IsFinder(r, c) && r != 7 && c != 7)
-                        {
-                            if (((hash[(bitIdx / 8) % hash.Length] >> (bitIdx % 8)) & 1) == 1)
-                                dc.DrawRectangle(Brushes.Black, null, new Rect(c * cell, r * cell, cell + 0.4, cell + 0.4));
-                            bitIdx++;
-                        }
-            }
-            var rtb = new RenderTargetBitmap(sz, sz, 96, 96, PixelFormats.Pbgra32);
-            rtb.Render(dv);
-            rtb.Freeze();
-            return rtb;
         }
     }
 

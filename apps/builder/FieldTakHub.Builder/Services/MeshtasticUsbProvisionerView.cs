@@ -240,15 +240,29 @@ namespace FieldTakHub.Builder.Services
             return adminMs.ToArray();
         }
 
+        /// <summary>
+        /// Sprawdza klucz kanału przed programowaniem płytki. Zwraca opis problemu albo null, gdy klucz jest poprawny.
+        /// Meshtastic przyjmuje klucz 16 B (AES-128) lub 32 B (AES-256); pusty klucz oznacza kanał bez szyfrowania.
+        /// </summary>
+        internal static string? DescribePskProblem(string? base64Psk)
+        {
+            if (string.IsNullOrWhiteSpace(base64Psk))
+                return "Strona nie ma klucza PSK – płytka dostałaby kanał bez szyfrowania. Wygeneruj klucz w konfiguracji strony.";
+            byte[] bytes;
+            try { bytes = Convert.FromBase64String(base64Psk.Trim()); }
+            catch (FormatException) { return "Klucz PSK strony nie jest poprawnym Base64. Popraw albo wygeneruj klucz w konfiguracji strony."; }
+            if (bytes.Length != 16 && bytes.Length != 32)
+                return $"Klucz PSK ma {bytes.Length} B – Meshtastic wymaga 16 B (AES-128) lub 32 B (AES-256).";
+            return null;
+        }
+
         private static byte[] BuildSetPrimaryChannelAdmin(string channelName, string base64Psk)
         {
-            byte[] pskBytes;
-            try { pskBytes = Convert.FromBase64String(base64Psk.Trim()); }
-            catch
-            {
-                pskBytes = new byte[32];
-                RandomNumberGenerator.Fill(pskBytes);
-            }
+            // Wcześniej niepoprawny klucz był po cichu zastępowany losowym – płytka trafiała na kanał,
+            // którego klucza nie znał nikt w drużynie. Teraz klucz jest sprawdzany przed otwarciem portu.
+            string? pskProblem = DescribePskProblem(base64Psk);
+            if (pskProblem != null) throw new InvalidOperationException(pskProblem);
+            byte[] pskBytes = Convert.FromBase64String(base64Psk.Trim());
 
             using var settingsMs = new MemoryStream();
             WriteBytesField(settingsMs, 2, pskBytes);
@@ -376,6 +390,10 @@ namespace FieldTakHub.Builder.Services
                 string cleanPort = portName.Trim();
                 string devicePath = $@"\\.\{cleanPort}";
 
+                string? pskProblem = DescribePskProblem(fac.Psk);
+                if (pskProblem != null)
+                    return (false, "N/A", pskProblem + " Płytka nie została zaprogramowana.");
+
                 onProgressLog?.Invoke($"[{DateTime.Now:HH:mm:ss}] Otwieranie portu {cleanPort} (115200 8N1)...");
                 IntPtr hPort = CreateFileW(devicePath, GENERIC_READ | GENERIC_WRITE, 0, IntPtr.Zero, OPEN_EXISTING, 0, IntPtr.Zero);
                 if (hPort == IntPtr.Zero || hPort == new IntPtr(-1))
@@ -412,7 +430,12 @@ namespace FieldTakHub.Builder.Services
 
                     void SendRaw(byte[] bytes)
                     {
-                        WriteFile(hPort, bytes, (uint)bytes.Length, out uint _, IntPtr.Zero);
+                        // Wynik zapisu był ignorowany, więc zerwany kabel też kończył się „sukcesem”.
+                        if (!WriteFile(hPort, bytes, (uint)bytes.Length, out uint written, IntPtr.Zero) || written != (uint)bytes.Length)
+                        {
+                            int err = Marshal.GetLastWin32Error();
+                            throw new IOException($"zapis do portu {cleanPort} przerwany ({written}/{bytes.Length} B, kod Win32: {err})");
+                        }
                     }
 
                     onProgressLog?.Invoke($"[{DateTime.Now:HH:mm:ss}] Budzenie interfejsu Protobuf płytki Meshtastic (0x94 0xC3)...");
@@ -426,8 +449,20 @@ namespace FieldTakHub.Builder.Services
                     byte[] rxBuf = new byte[4096];
                     ReadFile(hPort, rxBuf, (uint)rxBuf.Length, out uint bytesRead, IntPtr.Zero);
                     uint nodeNum = bytesRead > 0 ? TryParseMyNodeNumFromBuffer(rxBuf, (int)bytesRead) : 0;
-                    string nodeHex = nodeNum != 0 ? $"!{nodeNum:x8}" : $"!usb_{cleanPort.ToLowerInvariant()}";
-                    onProgressLog?.Invoke($"[{DateTime.Now:HH:mm:ss}] Połączono z płytką ({nodeHex}, odebrano {bytesRead} B telemetrii).");
+                    if (bytesRead == 0)
+                    {
+                        return (false, "N/A",
+                            $"Płytka na porcie {cleanPort} nie odpowiedziała na zapytanie o konfigurację. Sprawdź kabel USB z transmisją danych, " +
+                            "wybrany port i czy na płytce działa firmware Meshtastic. Nic nie zostało zapisane.");
+                    }
+                    if (nodeNum == 0)
+                    {
+                        return (false, "N/A",
+                            $"Płytka na porcie {cleanPort} odpowiedziała ({bytesRead} B), ale nie udało się odczytać jej numeru węzła. " +
+                            "Bez niego polecenia administracyjne nie zostaną przyjęte, więc nic nie zostało zapisane. Zrestartuj płytkę i spróbuj ponownie.");
+                    }
+                    string nodeHex = $"!{nodeNum:x8}";
+                    onProgressLog?.Invoke($"[{DateTime.Now:HH:mm:ss}] Połączono z płytką ({nodeHex}, odebrano {bytesRead} B danych konfiguracji).");
 
                     onProgressLog?.Invoke($"[{DateTime.Now:HH:mm:ss}] Otwieranie transakcji AdminMessage (begin_edit_settings)...");
                     SendRaw(BuildAdminToRadioFrame(nodeNum, BuildBeginEditSettingsAdmin()));
@@ -453,12 +488,13 @@ namespace FieldTakHub.Builder.Services
                     SendRaw(BuildAdminToRadioFrame(nodeNum, BuildCommitEditSettingsAdmin()));
                     await Task.Delay(280);
 
-                    onProgressLog?.Invoke($"[{DateTime.Now:HH:mm:ss}] ✓ SUKCES! Płytka {nodeHex} na porcie {cleanPort} zaprogramowana jako {longName} [{shortName}] ({fac.Name}).");
-                    return (true, nodeHex, $"Zaprogramowano {longName} ({nodeHex})");
+                    onProgressLog?.Invoke($"[{DateTime.Now:HH:mm:ss}] ✓ Wysłano całą konfigurację do płytki {nodeHex} na porcie {cleanPort}: {longName} [{shortName}] ({fac.Name}). " +
+                        "Płytka zapisuje ją i restartuje się; potwierdź ustawienia w aplikacji Meshtastic.");
+                    return (true, nodeHex, $"Wysłano konfigurację {longName} ({nodeHex})");
                 }
                 catch (Exception ex)
                 {
-                    return (false, "ERR", $"Błąd zapisu USB: {ex.Message}");
+                    return (false, "ERR", $"Błąd zapisu USB: {ex.Message}. Konfiguracja mogła zostać zapisana tylko częściowo – powtórz programowanie.");
                 }
                 finally
                 {
@@ -698,7 +734,7 @@ namespace FieldTakHub.Builder.Services
                         ShortName = shortName,
                         ChannelName = _selectedFaction.ChannelName,
                         RegionPreset = $"{_selectedFaction.LoraRegion} / {_selectedFaction.LoraModemPreset}",
-                        Status = "✓ WGRANO"
+                        Status = "✓ WYSŁANO"
                     });
                     RebuildProvisionedHistoryTableUI();
 
@@ -710,7 +746,7 @@ namespace FieldTakHub.Builder.Services
                     }
 
                     if (_autoWatchStatusText != null)
-                        _autoWatchStatusText.Text = $"✓ GOTOWE ({longName} na {portName})! Możesz odpiąć płytkę i podpiąć następną.";
+                        _autoWatchStatusText.Text = $"✓ Wysłano konfigurację ({longName} na {portName}). Poczekaj na restart płytki, potem podepnij następną.";
                 }
                 else
                 {

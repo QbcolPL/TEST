@@ -2429,35 +2429,8 @@ private static void CaptureAndCollapseTopMenuBar(List<DependencyObject> allEleme
                     else if (sel.Contains("WGS84", StringComparison.OrdinalIgnoreCase) || sel.Contains("Dziesi\u0119tne", StringComparison.OrdinalIgnoreCase)) ActiveCoordinateSystem = "WGS84";
                 }
 
-                var flags = System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static;
-                var mExtract = typeof(OpordBuilderManager).GetMethod("GetExtractedMapData", flags)
-                            ?? typeof(OpordBuilderManager).GetMethod("ExtractMapData", flags);
-
-                if (mExtract != null && mExtract.GetParameters().Length == 0)
-                {
-                    var mapData = mExtract.Invoke(null, null);
-                    if (mapData != null)
-                    {
-                        var mt = mapData.GetType();
-                        bool hasAoProp = (bool)(mt.GetProperty("HasAoPolygon")?.GetValue(mapData) ?? false);
-                        double cLat = Convert.ToDouble(mt.GetProperty("CenterLat")?.GetValue(mapData) ?? 49.849444);
-                        double cLon = Convert.ToDouble(mt.GetProperty("CenterLon")?.GetValue(mapData) ?? 18.812667);
-
-                        int poisCount = 0;
-                        if (mt.GetProperty("Pois")?.GetValue(mapData) is System.Collections.IEnumerable poisEnum)
-                        {
-                            foreach (var _ in poisEnum) poisCount++;
-                        }
-
-                        if (hasAoProp || poisCount > 0)
-                        {
-                            foundAoOrPois = true;
-                            AoCenterLat = cLat;
-                            AoCenterLon = cLon;
-                        }
-                    }
-                }
-
+                // Usunięto martwą ścieżkę: refleksja szukała OpordBuilderManager.GetExtractedMapData/ExtractMapData,
+                // których nie ma w kodzie, więc zawsze zwracała null. Środek AO pochodzi z TryGetMarkedAoCenter powyżej.
                 if (!foundAoOrPois)
                 {
                     foreach (var canvas in all.OfType<Canvas>())

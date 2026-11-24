@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Plain HTTP is needed for Builder's LAN server and phone-to-phone hotspot sharing.
+     The app itself refuses http:// addresses outside private networks (NetRules.downloadUrlProblem). -->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

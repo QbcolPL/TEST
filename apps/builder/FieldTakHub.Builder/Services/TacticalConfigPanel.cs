@@ -1915,7 +1915,7 @@ namespace FieldTakHub.Builder.Services
             using (DrawingContext dc = visual.RenderOpen())
             {
                 dc.DrawRectangle(Brushes.White, null, new Rect(0, 0, sz, sz));
-                DrawDeterministicQrMatrix(dc, qrPayload, 35, 35, sz - 70);
+                QrService.DrawQr(dc, qrPayload ?? "FieldTakHub", 35, 35, sz - 70);
             }
             var rtb = new RenderTargetBitmap(sz, sz, 96, 96, PixelFormats.Pbgra32); rtb.Render(visual);
             var enc = new PngBitmapEncoder(); enc.Frames.Add(BitmapFrame.Create(rtb));
@@ -2115,7 +2115,8 @@ namespace FieldTakHub.Builder.Services
                     double qrBoxSize = (fac.PosterShowRadioTable && fac.PosterShowSteps) ? 450 : 540;
                     double qrBoxX = (width - qrBoxSize) / 2.0;
                     dc.DrawRoundedRectangle(Brushes.White, new Pen(BrushAccent, 4), new Rect(qrBoxX, curY, qrBoxSize, qrBoxSize), 16, 16);
-                    DrawDeterministicQrMatrix(dc, qrPayload, qrBoxX + 36, curY + 36, qrBoxSize - 72);
+                    // Prawdziwy, skanowalny kod QR (wcześniej atrapa: wzór z hasha SHA-256 udający QR).
+                    QrService.DrawQr(dc, qrPayload ?? "FieldTakHub", qrBoxX + 36, curY + 36, qrBoxSize - 72);
                     curY += qrBoxSize + 22;
                 }
 
@@ -2193,30 +2194,6 @@ namespace FieldTakHub.Builder.Services
         {
             var ft = new FormattedText(text ?? "", CultureInfo.InvariantCulture, FlowDirection.LeftToRight, new Typeface(new FontFamily("Segoe UI"), FontStyles.Normal, bold ? FontWeights.Bold : FontWeights.Normal, FontStretches.Normal), fontSize, brush, 1.0);
             dc.DrawText(ft, new Point(x, y));
-        }
-
-        private static void DrawDeterministicQrMatrix(DrawingContext dc, string payload, double startX, double startY, double size)
-        {
-            const int modules = 29; double cell = size / modules;
-            byte[] hash = SHA256.HashData(Encoding.UTF8.GetBytes(payload ?? "FieldTakHub"));
-            bool IsFinder(int r, int c) => (r < 7 && c < 7) || (r < 7 && c >= modules - 7) || (r >= modules - 7 && c < 7);
-            void DrawFinder(int rOff, int cOff)
-            {
-                for (int r = 0; r < 7; r++)
-                    for (int c = 0; c < 7; c++)
-                        if ((r == 0 || r == 6 || c == 0 || c == 6) || (r >= 2 && r <= 4 && c >= 2 && c <= 4))
-                            dc.DrawRectangle(Brushes.Black, null, new Rect(startX + (cOff + c) * cell, startY + (rOff + r) * cell, cell + 0.4, cell + 0.4));
-            }
-            DrawFinder(0, 0); DrawFinder(0, modules - 7); DrawFinder(modules - 7, 0);
-            int bitIdx = 0;
-            for (int r = 0; r < modules; r++)
-                for (int c = 0; c < modules; c++)
-                    if (!IsFinder(r, c) && r != 7 && c != 7)
-                    {
-                        if (((hash[(bitIdx / 8) % hash.Length] >> (bitIdx % 8)) & 1) == 1)
-                            dc.DrawRectangle(Brushes.Black, null, new Rect(startX + c * cell, startY + r * cell, cell + 0.4, cell + 0.4));
-                        bitIdx++;
-                    }
         }
 
         internal static void TryOpenFolderInExplorer(string folderPath)

@@ -1,5 +1,6 @@
 #pragma warning disable CS0414, CS0649, CS8600, CS8601, CS8602, CS8603, CS8604, CS8618, CS8619, CS8625
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.IO.Compression;
@@ -70,7 +71,8 @@ namespace FieldTakHub.Builder.Services
         private static TcpListener _pcHotspotListener;
         private static volatile bool _pcServerRunning;
         private static int _pcServerPort = 8766;
-        private static readonly Dictionary<string, string> ServedFtakPathsByFaction = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        // Czytany z wątków serwera HTTP, zapisywany z wątku UI przy budowie paczek – stąd ConcurrentDictionary.
+        private static readonly ConcurrentDictionary<string, string> ServedFtakPathsByFaction = new ConcurrentDictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         private static Window _lastWinRef;
 
         // =========================================================================
@@ -685,29 +687,24 @@ namespace FieldTakHub.Builder.Services
                     string reqLine = reader.ReadLine();
                     if (string.IsNullOrEmpty(reqLine)) return;
 
-                    string[] parts = reqLine.Split(' ');
-                    string path = parts.Length >= 2 ? Uri.UnescapeDataString(parts[1]) : "/";
+                    string path = LanHttp.DecodeRequestPath(reqLine);
 
-                    // Obsługa pobierania samego rozkazu OPORD przez Wi-Fi / LAN (/opord/<Strona>.json lub .html)
+                    // Sam rozkaz OPORD przez Wi-Fi / LAN: /opord/<Strona>.html lub .json.
+                    // Strona musi zgadzać się dokładnie – wcześniej „zawiera” i domyślne BLUFOR mieszały strony.
                     if (path.StartsWith("/opord/", StringComparison.OrdinalIgnoreCase))
                     {
-                        string facKey = "BLUFOR";
-                        foreach (var kv in ServedFtakPathsByFaction)
+                        string? requestedFaction = LanHttp.ResourceName(path, "/opord/", ".html", ".json");
+                        string? facKey = requestedFaction == null
+                            ? null
+                            : ServedFtakPathsByFaction.Keys.FirstOrDefault(k => string.Equals(k, requestedFaction, StringComparison.OrdinalIgnoreCase));
+                        if (facKey == null)
                         {
-                            if (path.Contains(kv.Key, StringComparison.OrdinalIgnoreCase))
-                            {
-                                facKey = kv.Key;
-                                break;
-                            }
+                            LanHttp.WritePlainResponse(stream, "404 Not Found", "Nieznana strona OPORD w adresie: " + path);
+                            return;
                         }
-                        var opModel = OpordBuilderManager.GetOrCreateModel(facKey);
-                        bool isJson = path.EndsWith(".json", StringComparison.OrdinalIgnoreCase);
-                        string payload = isJson
-                            ? JsonSerializer.Serialize(opModel, new JsonSerializerOptions { WriteIndented = true })
-                            : OpordBuilderManager.GeneratePrintableOpordHtml(_lastWinRef, facKey, opModel);
 
-                        byte[] opBytes = Encoding.UTF8.GetBytes(payload);
-                        string cType = isJson ? "application/json; charset=utf-8" : "text/html; charset=utf-8";
+                        bool isJson = path.EndsWith(".json", StringComparison.OrdinalIgnoreCase);
+                        var (opBytes, cType) = OpordBuilderManager.BuildOpordLanPayloadOnUiThread(_lastWinRef, facKey, isJson);
                         string opHdr =
                             "HTTP/1.1 200 OK\r\n" +
                             "Content-Type: " + cType + "\r\n" +
@@ -720,58 +717,42 @@ namespace FieldTakHub.Builder.Services
                         return;
                     }
 
-                    string targetFile = null;
-                    foreach (var kv in ServedFtakPathsByFaction)
+                    // Paczka tylko dla strony z adresu /deploy/<Strona>.ftak. Wcześniej przy braku dopasowania
+                    // serwer oddawał pierwszą dostępną paczkę – czyli cudzą, razem z jej kluczem PSK.
+                    string? targetFile = null;
+                    string? requestedPackage = LanHttp.ResourceName(path, "/deploy/", ".ftak");
+                    if (requestedPackage != null &&
+                        ServedFtakPathsByFaction.TryGetValue(requestedPackage, out var servedPath) &&
+                        File.Exists(servedPath))
                     {
-                        if (path.Contains(kv.Key, StringComparison.OrdinalIgnoreCase) && File.Exists(kv.Value))
-                        {
-                            targetFile = kv.Value;
-                            break;
-                        }
-                    }
-                    if (targetFile == null)
-                    {
-                        targetFile = ServedFtakPathsByFaction.Values.FirstOrDefault(File.Exists);
+                        targetFile = servedPath;
                     }
 
-                    if (targetFile != null && File.Exists(targetFile))
+                    if (targetFile == null)
                     {
-                        byte[] fileBytes = File.ReadAllBytes(targetFile);
-                        string fileName = Path.GetFileName(targetFile);
-                        string headers =
-                            "HTTP/1.1 200 OK\r\n" +
-                            "Content-Type: application/octet-stream\r\n" +
-                            "Content-Disposition: attachment; filename=\"" + fileName + "\"\r\n" +
-                            "Content-Length: " + fileBytes.Length + "\r\n" +
-                            "Connection: close\r\n\r\n";
-                        byte[] hdrBytes = Encoding.UTF8.GetBytes(headers);
-                        stream.Write(hdrBytes, 0, hdrBytes.Length);
-                        stream.Write(fileBytes, 0, fileBytes.Length);
-                        stream.Flush();
+                        LanHttp.WritePlainResponse(stream, "404 Not Found", "Brak paczki pod adresem: " + path);
+                        return;
                     }
+
+                    byte[] fileBytes = File.ReadAllBytes(targetFile);
+                    string fileName = Path.GetFileName(targetFile);
+                    string headers =
+                        "HTTP/1.1 200 OK\r\n" +
+                        "Content-Type: application/octet-stream\r\n" +
+                        "Content-Disposition: attachment; filename=\"" + fileName + "\"\r\n" +
+                        "Content-Length: " + fileBytes.Length + "\r\n" +
+                        "Connection: close\r\n\r\n";
+                    byte[] hdrBytes = Encoding.UTF8.GetBytes(headers);
+                    stream.Write(hdrBytes, 0, hdrBytes.Length);
+                    stream.Write(fileBytes, 0, fileBytes.Length);
+                    stream.Flush();
                 }
                 catch { }
             }
         }
 
-        private static string GetBestLocalLanIpAddress()
-        {
-            try
-            {
-                var host = Dns.GetHostEntry(Dns.GetHostName());
-                foreach (var ip in host.AddressList)
-                {
-                    if (ip.AddressFamily == AddressFamily.InterNetwork && !IPAddress.IsLoopback(ip))
-                    {
-                        string s = ip.ToString();
-                        if (s.StartsWith("192.168.") || s.StartsWith("10.") || s.StartsWith("172."))
-                            return s;
-                    }
-                }
-            }
-            catch { }
-            return "127.0.0.1";
-        }
+        // 127.0.0.1 zostaje tylko jako znacznik „brak sieci” – okno QR pokazuje wtedy ostrzeżenie.
+        private static string GetBestLocalLanIpAddress() => LanAddressHelper.GetBestLanIPv4() ?? "127.0.0.1";
 
         public static void ShowActiveFactionQrModal(
             Window owner,
@@ -940,6 +921,20 @@ namespace FieldTakHub.Builder.Services
             };
             root.Children.Add(payloadBox);
 
+            string? lanWarning = LanAddressHelper.DescribePhoneReachabilityProblem(serverBaseUrl);
+            if (lanWarning != null)
+            {
+                dlg.SizeToContent = SizeToContent.Height; // okno ma stałą wysokość – ostrzeżenie nie może wypchnąć przycisków
+                root.Children.Add(new TextBlock
+                {
+                    Text = lanWarning,
+                    Foreground = Brushes.OrangeRed,
+                    FontSize = 11,
+                    TextWrapping = TextWrapping.Wrap,
+                    Margin = new Thickness(0, 0, 0, 8)
+                });
+            }
+
             void LoadQrPayload(string dataStr, int modeIdx)
             {
                 payloadBox.Text = modeIdx == 0
@@ -955,36 +950,17 @@ namespace FieldTakHub.Builder.Services
                 btnModeOffline.Background = modeIdx == 2 ? TacticalConfigPanel.BrushButtonAccent : TacticalConfigPanel.BrushInputBg;
                 btnModeOffline.Foreground = modeIdx == 2 ? TacticalConfigPanel.BrushDarkFg : Brushes.White;
 
-                _ = Task.Run(async () =>
+                // Kod QR powstaje lokalnie. Wcześniej treść – w trybie offline razem z kluczem PSK strony –
+                // szła w adresie URL do zewnętrznej usługi QR w internecie, a bez internetu kod się nie pojawiał.
+                try
                 {
-                    try
-                    {
-                        string cacheKey = "QR_V3_" + dataStr;
-                        byte[] bytes = GeoportalLidarEngine.TryReadDiskCache(cacheKey);
-                        if (bytes == null)
-                        {
-                            string api = "https://api.qrserver.com/v1/create-qr-code/?size=420x420&margin=10&data=" + Uri.EscapeDataString(dataStr);
-                            bytes = await GeoportalLidarEngine.FastHttp.GetByteArrayAsync(api);
-                            if (GeoportalLidarEngine.IsValidImageBytes(bytes))
-                                GeoportalLidarEngine.SaveDiskCacheAsync(cacheKey, bytes);
-                        }
-                        if (GeoportalLidarEngine.IsValidImageBytes(bytes) && Application.Current != null)
-                        {
-                            await Application.Current.Dispatcher.InvokeAsync(() =>
-                            {
-                                var bmp = new BitmapImage();
-                                using var ms = new MemoryStream(bytes);
-                                bmp.BeginInit();
-                                bmp.CacheOption = BitmapCacheOption.OnLoad;
-                                bmp.StreamSource = ms;
-                                bmp.EndInit();
-                                bmp.Freeze();
-                                qrImg.Source = bmp;
-                            });
-                        }
-                    }
-                    catch { }
-                });
+                    qrImg.Source = QrService.CreateImageSource(dataStr);
+                }
+                catch (Exception ex)
+                {
+                    qrImg.Source = null;
+                    payloadBox.Text = BuilderI18n.T("⚠ Nie można utworzyć kodu QR: ", "⚠ Cannot create QR code: ") + ex.Message;
+                }
             }
 
             btnModeWifi.Click += (_, __) => LoadQrPayload(wifiDownloadUrl, 0);

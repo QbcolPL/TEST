@@ -1674,36 +1674,23 @@ namespace FieldTakHub.Builder.Services
                     string reqLine = reader.ReadLine();
                     if (string.IsNullOrEmpty(reqLine)) return;
 
-                    string[] parts = reqLine.Split(' ');
-                    string path = parts.Length >= 2 ? Uri.UnescapeDataString(parts[1]) : "/";
-
-                    string facName = _activeOpordFaction;
-                    foreach (var kv in ModelsByFaction)
-                    {
-                        if (path.Contains(kv.Key, StringComparison.OrdinalIgnoreCase))
-                        {
-                            facName = kv.Key;
-                            break;
-                        }
-                    }
-
-                    var model = GetOrCreateModel(facName);
+                    string path = LanHttp.DecodeRequestPath(reqLine);
+                    string? requestedFaction = LanHttp.ResourceName(path, "/opord/", ".html", ".json");
                     bool wantsJson = path.EndsWith(".json", StringComparison.OrdinalIgnoreCase);
 
-                    byte[] bodyBytes;
-                    string contentType;
-                    if (wantsJson)
+                    // Strona z adresu musi zgadzać się dokładnie (wcześniej „zawiera”, więc np. RED łapało REDFOR).
+                    // Słownik modeli i kontrolki WPF są czytane w wątku interfejsu, nie w wątku serwera.
+                    var dispatcher = Application.Current?.Dispatcher;
+                    string? facName = dispatcher == null || dispatcher.CheckAccess()
+                        ? ResolveOpordLanFaction(requestedFaction)
+                        : dispatcher.Invoke<string?>(() => ResolveOpordLanFaction(requestedFaction));
+                    if (string.IsNullOrWhiteSpace(facName))
                     {
-                        string json = JsonSerializer.Serialize(model, new JsonSerializerOptions { WriteIndented = true });
-                        bodyBytes = Encoding.UTF8.GetBytes(json);
-                        contentType = "application/json; charset=utf-8";
+                        LanHttp.WritePlainResponse(stream, "404 Not Found", "Nieznana strona OPORD w adresie: " + path);
+                        return;
                     }
-                    else
-                    {
-                        string html = GeneratePrintableOpordHtml(_lastActiveWindowRef, facName, model);
-                        bodyBytes = Encoding.UTF8.GetBytes(html);
-                        contentType = "text/html; charset=utf-8";
-                    }
+
+                    var (bodyBytes, contentType) = BuildOpordLanPayloadOnUiThread(_lastActiveWindowRef, facName, wantsJson);
 
                     string headers =
                         "HTTP/1.1 200 OK\r\n" +
@@ -1719,23 +1706,41 @@ namespace FieldTakHub.Builder.Services
             }
         }
 
-        private static string GetLocalLanIp()
+        // Wspólny wybór adresu LAN (hotspot Windows > Wi-Fi > Ethernet, bez kart wirtualnych).
+        private static string GetLocalLanIp() => LanAddressHelper.GetBestLanIPv4() ?? "127.0.0.1";
+
+        private static string? ResolveOpordLanFaction(string? requestedFaction)
         {
-            try
+            if (requestedFaction == null)
+                return string.IsNullOrWhiteSpace(_activeOpordFaction) ? null : _activeOpordFaction;
+            return ModelsByFaction.Keys.FirstOrDefault(k => string.Equals(k, requestedFaction, StringComparison.OrdinalIgnoreCase));
+        }
+
+        /// <summary>
+        /// Treść rozkazu OPORD dla serwerów LAN (:8766 i :8769), budowana w wątku interfejsu.
+        /// GeneratePrintableOpordHtml czyta kontrolki WPF (np. nazwę wydarzenia), a ModelsByFaction nie jest
+        /// bezpieczny wątkowo. Wywołane wprost z wątku serwera rzucało wyjątek, który pusty catch zamieniał
+        /// w zerwane połączenie – telefon po zeskanowaniu kodu nie dostawał rozkazu.
+        /// </summary>
+        internal static (byte[] Body, string ContentType) BuildOpordLanPayloadOnUiThread(Window? win, string factionName, bool asJson)
+        {
+            (byte[] Body, string ContentType) Build()
             {
-                var host = Dns.GetHostEntry(Dns.GetHostName());
-                foreach (var ip in host.AddressList)
+                var model = GetOrCreateModel(factionName);
+                if (asJson)
                 {
-                    if (ip.AddressFamily == AddressFamily.InterNetwork && !IPAddress.IsLoopback(ip))
-                    {
-                        string s = ip.ToString();
-                        if (s.StartsWith("192.168.") || s.StartsWith("10.") || s.StartsWith("172."))
-                            return s;
-                    }
+                    string json = JsonSerializer.Serialize(model, new JsonSerializerOptions { WriteIndented = true });
+                    return (Encoding.UTF8.GetBytes(json), "application/json; charset=utf-8");
                 }
+
+                string html = GeneratePrintableOpordHtml(win, factionName, model);
+                return (Encoding.UTF8.GetBytes(html), "text/html; charset=utf-8");
             }
-            catch { }
-            return "127.0.0.1";
+
+            var dispatcher = Application.Current?.Dispatcher;
+            return dispatcher == null || dispatcher.CheckAccess()
+                ? Build()
+                : dispatcher.Invoke<(byte[] Body, string ContentType)>(Build);
         }
 
         public static List<OpordDayPlanModel> GetSelectedDaysForExport(OpordParagraphModel m)

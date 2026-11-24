@@ -498,7 +498,7 @@
         <Border x:Name="AdvancedAtakPanel" Grid.Row="0" Grid.Column="1" Style="{StaticResource SectionCard}" Margin="6,0,0,10" Visibility="Collapsed">
           <StackPanel>
             <TextBlock Text="ATAK" FontSize="17" FontWeight="Bold"/>
-            <TextBlock Text="Funkcje profili i ustawień ATAK będą dostępne wkrótce." Foreground="{StaticResource AccentDim}" TextWrapping="Wrap" Margin="0,4,0,6"/>
+            <TextBlock Text="Zakres wersji ATAK zapisywany w manifeście paczki .ftak (pole target). Builder nie edytuje profili ATAK." Foreground="{StaticResource AccentDim}" TextWrapping="Wrap" Margin="0,4,0,6"/>
             <TextBlock Text="Docelowa wersja ATAK" Foreground="{StaticResource Muted}" Margin="0,4,0,10"/>
             <Grid>
               <Grid.ColumnDefinitions><ColumnDefinition Width="1*"/><ColumnDefinition Width="1*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
@@ -587,7 +587,7 @@
         </Border>
 
         <Border x:Name="AdvancedSecurityPanel" Grid.Row="4" Grid.Column="0" Style="{StaticResource Card}" Padding="14" Margin="0,0,6,10" Visibility="Collapsed">
-          <StackPanel><TextBlock Text="{DynamicResource Security}" FontSize="17" FontWeight="Bold"/><TextBlock Text="Generowanie certyfikatów TAK Server będzie dostępne wkrótce." Foreground="{StaticResource AccentDim}" TextWrapping="Wrap" Margin="0,4,0,7"/><TextBlock Margin="0,7,0,8"><Run Text="Fingerprint: "/><Run x:Name="FingerprintRun"/></TextBlock><WrapPanel><Button Content="{DynamicResource ExportKey}" Click="ExportKey_Click" Style="{StaticResource IconActionButton}" Margin="0,0,7,0"/><Button Content="{DynamicResource ImportKey}" Click="ImportKey_Click" Style="{StaticResource IconActionButton}" Margin="0,0,7,0"/><Button Content="{DynamicResource CheckUpdates}" Click="CheckUpdates_Click" Style="{StaticResource IconActionButton}"/></WrapPanel></StackPanel>
+          <StackPanel><TextBlock Text="{DynamicResource Security}" FontSize="17" FontWeight="Bold"/><TextBlock Text="Klucz Ed25519, którym Builder podpisuje paczki. Builder nie tworzy certyfikatów TAK Server – użyj certyfikatów albo linku enrollmentu z własnego serwera (np. OpenTAK)." Foreground="{StaticResource AccentDim}" TextWrapping="Wrap" Margin="0,4,0,7"/><TextBlock Margin="0,7,0,8"><Run Text="Fingerprint: "/><Run x:Name="FingerprintRun"/></TextBlock><WrapPanel><Button Content="{DynamicResource ExportKey}" Click="ExportKey_Click" Style="{StaticResource IconActionButton}" Margin="0,0,7,0"/><Button Content="{DynamicResource ImportKey}" Click="ImportKey_Click" Style="{StaticResource IconActionButton}" Margin="0,0,7,0"/><Button Content="{DynamicResource CheckUpdates}" Click="CheckUpdates_Click" Style="{StaticResource IconActionButton}"/></WrapPanel></StackPanel>
         </Border>
 
         <Border x:Name="AdvancedSettingsPanel" Grid.Row="4" Grid.Column="1" Style="{StaticResource SectionCard}" Margin="6,0,0,10" Visibility="Collapsed">

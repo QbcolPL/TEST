@@ -138,9 +138,9 @@
   <sys:String x:Key="UI_NavMeshtastic">Meshtastic</sys:String>
   <sys:String x:Key="UI_NavMeshtasticHelp">Konfiguracja radia i sieci</sys:String>
   <sys:String x:Key="UI_NavAtak">ATAK</sys:String>
-  <sys:String x:Key="UI_NavAtakHelp">Profile i ustawienia · dostępne wkrótce</sys:String>
-  <sys:String x:Key="UI_NavCerts">Certyfikaty TAK Server</sys:String>
-  <sys:String x:Key="UI_NavCertsHelp">Funkcja dostępna wkrótce · certyfikaty TAK Server</sys:String>
+  <sys:String x:Key="UI_NavAtakHelp">Zakres wersji ATAK dla paczki</sys:String>
+  <sys:String x:Key="UI_NavCerts">Klucz podpisu paczek</sys:String>
+  <sys:String x:Key="UI_NavCertsHelp">Odcisk, eksport i import klucza Ed25519</sys:String>
   <sys:String x:Key="UI_NavSettings">Ustawienia</sys:String>
   <sys:String x:Key="UI_NavSettingsHelp">Preferencje aplikacji</sys:String>
   <sys:String x:Key="UI_AtakDescription">Konfiguracja i preferencje</sys:String>

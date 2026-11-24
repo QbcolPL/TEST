@@ -187,11 +187,9 @@ public sealed class DistributionServer : IDisposable
         return 0;
     }
 
-    private static string GetLanIp()
-    {
-        try { using var socket = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp); socket.Connect("8.8.8.8",65530); if (socket.LocalEndPoint is IPEndPoint ep && !IPAddress.IsLoopback(ep.Address)) return ep.Address.ToString(); } catch { }
-        return Dns.GetHostEntry(Dns.GetHostName()).AddressList.FirstOrDefault(a=>a.AddressFamily==AddressFamily.InterNetwork&&!IPAddress.IsLoopback(a))?.ToString() ?? "127.0.0.1";
-    }
+    // Wspólny wybór adresu LAN (hotspot Windows > Wi-Fi > Ethernet, bez kart wirtualnych i VPN).
+    // Dawna wersja brała kartę z trasą do 8.8.8.8 – przy hotspocie lub VPN był to adres nieosiągalny dla telefonu.
+    private static string GetLanIp() => LanAddressHelper.GetBestLanIPv4() ?? "127.0.0.1";
 
     public void Dispose()=>Stop();
 }

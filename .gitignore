@@ -36,3 +36,6 @@ release/
 # OS
 .DS_Store
 Thumbs.db
+
+# Lokalna paczka poprawek z audytu - nie wysylac do repozytorium
+_fth_patch/

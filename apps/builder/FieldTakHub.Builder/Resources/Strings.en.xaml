@@ -138,9 +138,9 @@
   <sys:String x:Key="UI_NavMeshtastic">Meshtastic</sys:String>
   <sys:String x:Key="UI_NavMeshtasticHelp">Radio and network configuration</sys:String>
   <sys:String x:Key="UI_NavAtak">ATAK</sys:String>
-  <sys:String x:Key="UI_NavAtakHelp">Profiles and settings · coming soon</sys:String>
-  <sys:String x:Key="UI_NavCerts">TAK Server Certificates</sys:String>
-  <sys:String x:Key="UI_NavCertsHelp">Coming soon · TAK Server certificates</sys:String>
+  <sys:String x:Key="UI_NavAtakHelp">ATAK version range for the package</sys:String>
+  <sys:String x:Key="UI_NavCerts">Package signing key</sys:String>
+  <sys:String x:Key="UI_NavCertsHelp">Ed25519 key fingerprint, export and import</sys:String>
   <sys:String x:Key="UI_NavSettings">Settings</sys:String>
   <sys:String x:Key="UI_NavSettingsHelp">Application preferences</sys:String>
   <sys:String x:Key="UI_AtakDescription">Configuration and preferences</sys:String>

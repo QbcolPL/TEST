@@ -1475,29 +1475,29 @@ namespace FieldTakHub.Builder.Services
             };
             root.Children.Add(urlBox);
 
-            _ = Task.Run(async () =>
+            string? lanWarning = LanAddressHelper.DescribePhoneReachabilityProblem(htmlUrl);
+            if (lanWarning != null)
             {
-                try
+                dlg.SizeToContent = SizeToContent.Height; // okno ma stałą wysokość – ostrzeżenie nie może wypchnąć przycisków
+                root.Children.Add(new TextBlock
                 {
-                    string api = "https://api.qrserver.com/v1/create-qr-code/?size=400x400&margin=10&data=" + Uri.EscapeDataString(htmlUrl);
-                    byte[] bytes = await GeoportalLidarEngine.FastHttp.GetByteArrayAsync(api);
-                    if (GeoportalLidarEngine.IsValidImageBytes(bytes) && Application.Current != null)
-                    {
-                        await Application.Current.Dispatcher.InvokeAsync(() =>
-                        {
-                            var bmp = new BitmapImage();
-                            using var ms = new MemoryStream(bytes);
-                            bmp.BeginInit();
-                            bmp.CacheOption = BitmapCacheOption.OnLoad;
-                            bmp.StreamSource = ms;
-                            bmp.EndInit();
-                            bmp.Freeze();
-                            qrImg.Source = bmp;
-                        });
-                    }
-                }
-                catch { }
-            });
+                    Text = lanWarning,
+                    Foreground = Brushes.OrangeRed,
+                    FontSize = 11,
+                    TextWrapping = TextWrapping.Wrap,
+                    Margin = new Thickness(0, 0, 0, 8)
+                });
+            }
+
+            // Kod QR generowany lokalnie – bez wysyłania adresu do zewnętrznej usługi QR i bez wymogu internetu.
+            try
+            {
+                qrImg.Source = QrService.CreateImageSource(htmlUrl);
+            }
+            catch (Exception ex)
+            {
+                urlBox.Text = BuilderI18n.T("⚠ Nie można utworzyć kodu QR: ", "⚠ Cannot create QR code: ") + ex.Message;
+            }
 
             var btns = new UniformGrid { Columns = 2 };
             var btnCopyLink = new Button
