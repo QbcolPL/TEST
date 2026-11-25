@@ -266,6 +266,7 @@ namespace FieldTakHub.Builder.Services
                     ["showNatoSymbolsInLegend"] = true,
                     ["selectedFactions"] = new JsonArray { "BLUFOR", "OPFOR" },
                     ["objects"] = new JsonArray(),
+                    ["rangeSectors"] = new JsonArray(),
                     ["searchQuery"] = "",
                     ["selectedObjectColorHex"] = "#2684FF",
                     ["selectedNatoSymbolCode"] = "INFANTRY",

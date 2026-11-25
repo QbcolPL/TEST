@@ -59,6 +59,27 @@ internal static class MapEditorUi
         card.BorderBrush = selected ? TacticalConfigPanel.BrushAccent : TacticalConfigPanel.BrushTileBorder;
     }
 
+    /// <summary>
+    /// Zwarty wiersz wspólnej listy obiektów (jedna linia, bez pól edycji). Wygląd zaznaczenia jak w karcie
+    /// (<see cref="SetCardSelected"/>); <paramref name="isSelected"/> mówi, czy po zjechaniu myszą przywrócić zaznaczenie.
+    /// </summary>
+    public static Border ListRow(object item, bool selected, Func<bool> isSelected)
+    {
+        var row = new Border
+        {
+            Tag = item,
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(5),
+            Padding = new Thickness(5, 2, 5, 2),
+            Margin = new Thickness(0, 0, 0, 3),
+            Cursor = Cursors.Hand
+        };
+        SetCardSelected(row, selected);
+        row.MouseEnter += (_, _) => { if (!isSelected()) row.Background = HoverBackground; };
+        row.MouseLeave += (_, _) => SetCardSelected(row, isSelected());
+        return row;
+    }
+
     /// <summary>Wiersz nagłówka karty: [przełącznik] [● kolor] [ikony…] [treść] [− usuń].</summary>
     public static Grid HeaderRow(UIElement? toggle, UIElement swatch, IReadOnlyList<UIElement> icons, UIElement main, UIElement delete)
     {

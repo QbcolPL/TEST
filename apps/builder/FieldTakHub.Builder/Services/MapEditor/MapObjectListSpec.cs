@@ -119,3 +119,57 @@ internal static class MapObjectCardSpec
     public static string FormatPointCount(int count) =>
         count.ToString(CultureInfo.InvariantCulture) + (count == 1 ? " punkt" : (count % 10 >= 2 && count % 10 <= 4 && (count % 100 < 10 || count % 100 >= 20) ? " punkty" : " punktów"));
 }
+
+/// <summary>
+/// Teksty wspólnej listy „wszystko na mapie” (obiekty i sektory ognia): liczności z polską odmianą
+/// i krótki opis w wierszu obok nazwy.
+/// </summary>
+internal static class MapListText
+{
+    /// <summary>„1 obiekt”, „3 obiekty”, „12 obiektów”, „22 obiekty”.</summary>
+    public static string Plural(int count, string one, string few, string many)
+    {
+        int lastDigit = Math.Abs(count) % 10, lastTwo = Math.Abs(count) % 100;
+        string word = count == 1 ? one : (lastDigit >= 2 && lastDigit <= 4 && (lastTwo < 10 || lastTwo >= 20) ? few : many);
+        return count.ToString(CultureInfo.InvariantCulture) + " " + word;
+    }
+
+    /// <summary>„3 obiekty · 1 sektor ognia” (pomija zerowe części; pusty tekst, gdy nie ma nic).</summary>
+    public static string CountList(int objects, int fireSectors)
+    {
+        var parts = new List<string>();
+        if (objects > 0) parts.Add(Plural(objects, "obiekt", "obiekty", "obiektów"));
+        if (fireSectors > 0) parts.Add(Plural(fireSectors, "sektor ognia", "sektory ognia", "sektorów ognia"));
+        return string.Join(" · ", parts);
+    }
+
+    /// <summary>Nagłówek listy, np. „Na mapie: 3 obiekty · 1 sektor ognia”.</summary>
+    public static string CountSummary(int objects, int fireSectors)
+    {
+        string list = CountList(objects, fireSectors);
+        return list.Length == 0 ? "Na mapie nie ma jeszcze obiektów" : "Na mapie: " + list;
+    }
+
+    /// <summary>Opis obiektu w wierszu: symbol znacznika, „Kropka” albo rodzaj kształtu z liczbą punktów.</summary>
+    public static string ObjectInfo(string? kind, string? natoSymbolLabel, int pointCount)
+    {
+        if (MapObjectKinds.IsMultiPoint(kind))
+            return MapObjectKinds.DisplayName(kind) + " · " + MapObjectCardSpec.FormatPointCount(pointCount);
+        if (kind == MapObjectKinds.Dot) return MapObjectKinds.DisplayName(kind);
+        return string.IsNullOrWhiteSpace(natoSymbolLabel) ? MapObjectKinds.DisplayName(kind) : natoSymbolLabel!.Trim();
+    }
+
+    /// <summary>Opis sektora ognia w wierszu: zasięg (płaski ➔ efektywny), kierunek i szerokość, przewaga wysokości.</summary>
+    public static string FireSectorInfo(double baseRadiusM, double effectiveRadiusM, double azimuthDeg, double spreadDeg, double elevationDeltaM)
+    {
+        var inv = CultureInfo.InvariantCulture;
+        string range = Math.Abs(effectiveRadiusM - baseRadiusM) < 0.05
+            ? baseRadiusM.ToString("0", inv) + " m"
+            : baseRadiusM.ToString("0", inv) + " ➔ " + effectiveRadiusM.ToString("0.0", inv) + " m";
+        string shape = spreadDeg >= 359.5
+            ? "okrąg"
+            : "az. " + MapObjectCardSpec.FormatRotation(azimuthDeg) + " · " + Math.Round(spreadDeg).ToString("0", inv) + "°";
+        string height = Math.Abs(elevationDeltaM) >= 0.1 ? " · ΔH " + elevationDeltaM.ToString("+0.#;-0.#", inv) + " m" : "";
+        return range + " · " + shape + height;
+    }
+}

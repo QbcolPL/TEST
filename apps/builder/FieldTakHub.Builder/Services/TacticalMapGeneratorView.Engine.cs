@@ -655,7 +655,7 @@ namespace FieldTakHub.Builder.Services
             subGridRow.Children.Add(TacticalConfigPanel.FieldBox("Opisy kratek:", TacticalConfigPanel.ComboCtrl(new[] { "MGRS + \u0106wiartki/Keypad", "Tylko g\u0142\u00F3wne linie MGRS", "Brak opis\u00F3w wewn\u0105trz" }, _gridLabelsMode, win, v => { _gridLabelsMode = v; RedrawVectorsOnly(); })));
             sec2.Children.Add(subGridRow);
             AttachWgs84ConfigPanelToParent(sec2);
-            AttachWeaponRangeSectorsPanelToParent(sec2);
+            // Sektory ognia są na wspólnej liście obiektów w sekcji 3 (dodawanie, import i eksport .KMZ — tam).
 
             // PANEL DODATKOWEJ PODZIALKI SEKTOROWEJ (POZIOMO: A, B, C... | PIONOWO: 1, 2, 3...)
             var sectorBox = new Border
@@ -1599,7 +1599,9 @@ namespace FieldTakHub.Builder.Services
                 var pts = new JsonArray(); foreach (var p in o.Points) pts.Add(new JsonObject { ["lat"] = p.Lat, ["lon"] = p.Lon });
                 arr.Add(new JsonObject { ["kind"] = o.Kind, ["symbol"] = o.SymbolCode, ["name"] = o.Name, ["legendDesc"] = o.LegendDescription ?? "", ["color"] = o.ColorHex, ["showLabel"] = o.ShowLabel, ["sizeMultiplier"] = o.SizeMultiplier, ["rotationDeg"] = o.RotationDeg, ["points"] = pts });
             }
-            root["objects"] = arr; ExportExtraMapUiState(root); return root;
+            root["objects"] = arr;
+            root[MapEditor.RangeSectorJson.Key] = MapEditor.RangeSectorJson.ToJsonArray(_weaponRangeSectors);
+            ExportExtraMapUiState(root); return root;
         }
 
         public static void ImportMapStateFromJson(JsonObject root)
@@ -1660,6 +1662,9 @@ namespace FieldTakHub.Builder.Services
                 if (root["objects"] is JsonArray arr)
                 {
                     _mapObjects.Clear();
+                    _activeDraftPoly = null;
+                    _inspectedObject = null;
+                    _draggedObject = null;
                     foreach (var node in arr.OfType<JsonObject>())
                     {
                         bool shLbl = !bool.TryParse(node["showLabel"]?.ToString(), out bool parsedLbl) || parsedLbl;
@@ -1674,6 +1679,16 @@ namespace FieldTakHub.Builder.Services
                     }
                 }
 
+                // Sektory ognia (od etapu 2 zapisywane razem z mapą; starsze projekty nie mają tego klucza — wtedy bez zmian).
+                if (root[MapEditor.RangeSectorJson.Key] is JsonArray sectorArr)
+                {
+                    _weaponRangeSectors.Clear();
+                    _weaponRangeSectors.AddRange(MapEditor.RangeSectorJson.FromJsonArray(sectorArr));
+                    _selectedRangeSector = _weaponRangeSectors.FirstOrDefault();
+                    PopulateRangeSectorEditorFromSelected();
+                    if (_lastLegendContainerGrid != null) UpdateRangeSectorsInLegendBox(_lastLegendContainerGrid);
+                }
+
                 GlyphCache.Clear(); BrightenedTileCache.Clear(); ImportExtraMapUiState(root);
                 if (_fmtComboBox != null) _fmtComboBox.SelectedItem = _selectedSheet;
                 if (_oriComboBox != null) _oriComboBox.SelectedItem = _sheetOrientation;
@@ -1682,6 +1697,8 @@ namespace FieldTakHub.Builder.Services
                 RebuildFactionCheckboxesUI(); ApplyScaleDenominator(_targetScaleDenominator);
             }
             catch { }
+            // Wczytany projekt to nowy dokument: Ctrl+Z nie cofa do stanu sprzed wczytania.
+            ResetUndoHistory();
         }
     }
 }

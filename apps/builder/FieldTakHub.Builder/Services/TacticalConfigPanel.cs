@@ -229,11 +229,15 @@ namespace FieldTakHub.Builder.Services
         private static readonly List<FactionProfileModel> _factions = new List<FactionProfileModel>();
         private static List<string> _cachedSessionPaths;
 
+        /// <summary>Zmiana treści projektu (ta sama chwila co autozapis) — generator map liczy z niej kroki cofania (Ctrl+Z).</summary>
+        internal static event Action ContentChanged;
+
         public static void MarkDirty()
         {
             if (_isRestoringSession || !_isSessionInitialized) return;
             IsWorkspaceDirty = true;
             TriggerDebouncedAutoSave();
+            ContentChanged?.Invoke();
         }
 
         private static void TriggerDebouncedAutoSave()

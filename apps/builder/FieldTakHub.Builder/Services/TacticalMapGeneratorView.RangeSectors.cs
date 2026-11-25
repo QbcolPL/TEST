@@ -89,7 +89,6 @@ namespace FieldTakHub.Builder.Services
         private static bool _suppressRangeSectorUiEvents = false;
         private static readonly HttpClient _demHttpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(8) };
 
-        private static StackPanel _rangeSectorsListContainer;
         private static Border _rangeSectorEditorBox;
         private static TextBox _rsNameBox;
         private static ComboBox _rsWeaponPresetCombo;
@@ -128,13 +127,6 @@ namespace FieldTakHub.Builder.Services
             UpdateRangeSectorsInLegendBox(legContainer);
         }
 
-        private static void AttachWeaponRangeSectorsPanelToParent(Panel parentPanel)
-        {
-            if (parentPanel == null) return;
-            var panel = BuildWeaponRangeSectorsPanel();
-            parentPanel.Children.Add(panel);
-        }
-
         private static void AddNewWeaponRangeSector() => AddWeaponRangeSectorCore(null);
 
         /// <summary>Sektor ognia ze stanowiskiem w punkcie mapy (pierścień menu pod prawym przyciskiem).</summary>
@@ -170,9 +162,17 @@ namespace FieldTakHub.Builder.Services
 
             SyncSectorGeoAnchorFromOffsets(item);
             _weaponRangeSectors.Add(item);
+
+            // Nowy sektor od razu jest zaznaczony na wspólnej liście, a jego edytor — w panelu szczegółów pod nią.
+            bool objectWasInspected = _inspectedObject != null;
+            _inspectedObject = null;
             _selectedRangeSector = item;
-            RebuildRangeSectorsListUi(); if (_lastLegendContainerGrid != null) UpdateRangeSectorsInLegendBox(_lastLegendContainerGrid);
+            _listSelection = item;
             PopulateRangeSectorEditorFromSelected();
+            UpdateSelectedMarkerInspectorUI();
+            if (_hostWindow != null) RefreshObjectsListUI(_hostWindow);
+            ShowMapStatus($"Dodano sektor ognia „{item.Name}” — przeciągnij go na mapie; ustawienia są pod listą obiektów.");
+            if (objectWasInspected) RedrawVectorsOnly();
             RefreshRangeSectorsNow(forceFullRebuild: true);
         }
 
@@ -189,76 +189,35 @@ namespace FieldTakHub.Builder.Services
             }
             UpdateBallisticSummaryBanner();
             if (_lastLegendContainerGrid != null) UpdateRangeSectorsInLegendBox(_lastLegendContainerGrid);
+            // Opis w wierszu listy (zasięg, kierunek, kąt) nadąża za suwakami edytora.
+            if (_selectedRangeSector != null) UpdateListRow(_selectedRangeSector);
+            UpdateRangeSectorDetailsHeader();
             try { TacticalConfigPanel.MarkDirty(); } catch { }
         }
 
-        private static Border BuildWeaponRangeSectorsPanel()
+        /// <summary>Przerysowuje tylko sektory ognia (np. obrys zaznaczonego) — bez zdejmowania innych elementów mapy.</summary>
+        private static void RedrawRangeSectorsOnly()
         {
-            var card = new Border
-            {
-                Background = new SolidColorBrush(Color.FromRgb(8, 20, 25)),
-                BorderBrush = new SolidColorBrush(Color.FromRgb(22, 62, 74)),
-                BorderThickness = new Thickness(1.1),
-                CornerRadius = new CornerRadius(6),
-                Padding = new Thickness(10, 8, 10, 10),
-                Margin = new Thickness(0, 6, 0, 8)
-            };
+            var (cw, ch) = GetExactCanvasSize();
+            if (cw > 20 && ch > 20) RenderAllWeaponRangeSectorsOnSheet(cw, ch);
+        }
 
-            var sp = new StackPanel();
+        /// <summary>Stanowisko strzelca w stopniach (bez zmiany sektora — także dla sektora bez kotwicy geograficznej).</summary>
+        private static (double Lat, double Lon) RangeSectorShooterPosition(TacticalRangeSectorItem sec)
+        {
+            if (sec.HasGeoAnchor) return (sec.ShooterLat, sec.ShooterLon);
+            double latRad = _centerLat * Math.PI / 180.0;
+            double mPerDegLat = 111132.92 - 559.82 * Math.Cos(2.0 * latRad) + 1.175 * Math.Cos(4.0 * latRad);
+            double mPerDegLon = Math.Max(1000.0, 111412.84 * Math.Cos(latRad) - 93.5 * Math.Cos(3.0 * latRad));
+            return (_centerLat + sec.OffsetNorthMeters / mPerDegLat, _centerLon + sec.OffsetEastMeters / mPerDegLon);
+        }
 
-            var hdrGrid = new Grid { Margin = new Thickness(0, 0, 0, 6) };
-            hdrGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-            hdrGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-
-            var titleTb = new TextBlock
-            {
-                Text = "🎯 ZASIĘG REPLIK & SEKTORY OGNIA (PIZZA + ΔH)",
-                Foreground = TacticalConfigPanel.BrushAccent,
-                FontWeight = FontWeights.Bold,
-                FontSize = 10.5,
-                VerticalAlignment = VerticalAlignment.Center
-            };
-            Grid.SetColumn(titleTb, 0);
-            hdrGrid.Children.Add(titleTb);
-
-            // Te same przyciski co w pozostałych sekcjach generatora (MakeActionButton): główny — wypełniony, pozostałe — obrysowane.
-            var btnAdd = MakeActionButton("+ Dodaj sektor / okrąg", true, AddNewWeaponRangeSector);
-            btnAdd.Height = 24;
-            btnAdd.Padding = new Thickness(8, 0, 8, 0);
-            btnAdd.FontSize = 9.5;
-            btnAdd.ToolTip = "Dodaj na środek mapy sektor ognia / okrąg zasięgu (przesuwany i obracany myszką)";
-            Grid.SetColumn(btnAdd, 1);
-            hdrGrid.Children.Add(btnAdd);
-            sp.Children.Add(hdrGrid);
-            var kmzActionGrid = new UniformGrid { Columns = 2, Margin = new Thickness(0, 0, 0, 6) };
-            var btnImportKmz = MakeActionButton("📂 Wczytaj z .KMZ / .KML", false, ImportStandaloneRangeSectorsKmzDialog);
-            btnImportKmz.Height = 24;
-            btnImportKmz.Margin = new Thickness(0, 0, 3, 0);
-            btnImportKmz.FontSize = 9.5;
-            btnImportKmz.ToolTip = "Wczytaj wyrysowane wcześniej sektory ognia z pliku .KMZ lub .KML (obsługiwany jest także główny przycisk importu KMZ Generatora Map)";
-            kmzActionGrid.Children.Add(btnImportKmz);
-
-            var btnExportKmz = MakeActionButton("📦 Zapisz .KMZ (ATAK)…", false, ExportStandaloneRangeSectorsKmzDialog);
-            btnExportKmz.Height = 24;
-            btnExportKmz.Margin = new Thickness(3, 0, 0, 0);
-            btnExportKmz.FontSize = 9.5;
-            btnExportKmz.ToolTip = "Zapisz wyrysowane sektory ognia jako wielokąty KML/KMZ dla ATAK";
-            kmzActionGrid.Children.Add(btnExportKmz);
-            sp.Children.Add(kmzActionGrid);
-
-            sp.Children.Add(new TextBlock
-            {
-                Text = "• Lewy przycisk myszy (na znaczniku 🎯 lub wycinku) = przesuwanie po mapie\n• Uchwyt ↻ (lub Prawy przycisk myszy / Scroll) = obracanie kierunku na mapie\n• Boczne uchwyty ◆ na krawędziach = zwężanie/rozszerzanie 'pizzy' myszką",
-                Foreground = TacticalConfigPanel.BrushMutedText,
-                FontSize = 8.8,
-                LineHeight = 13.0,
-                TextWrapping = TextWrapping.Wrap,
-                Margin = new Thickness(0, 0, 0, 6)
-            });
-
-            _rangeSectorsListContainer = new StackPanel { Margin = new Thickness(0, 0, 0, 4) };
-            sp.Children.Add(_rangeSectorsListContainer);
-
+        /// <summary>
+        /// Edytor sektora ognia (nazwa, kolor, broń, promień, azymut, kąt, ΔH, krycie). Jest jeden na cały panel: pokazuje go
+        /// panel szczegółów pod wspólną listą obiektów, gdy zaznaczony jest sektor ognia (wcześniej był to osobny panel w sekcji 2).
+        /// </summary>
+        private static Border BuildRangeSectorEditor()
+        {
             _rangeSectorEditorBox = new Border
             {
                 Background = new SolidColorBrush(Color.FromRgb(6, 15, 19)),
@@ -516,10 +475,7 @@ namespace FieldTakHub.Builder.Services
             edStack.Children.Add(_rsOpacitySlider);
 
             _rangeSectorEditorBox.Child = edStack;
-            sp.Children.Add(_rangeSectorEditorBox);
-
-            card.Child = sp;
-            return card;
+            return _rangeSectorEditorBox;
         }
 
         private static async Task FetchAutoDemElevationForSelectedSectorAsync(Button btn)
@@ -579,86 +535,18 @@ namespace FieldTakHub.Builder.Services
             }
         }
 
+        /// <summary>
+        /// Odświeża sektory ognia na wspólnej liście obiektów (nazwa zostaje z czasów osobnej listy sektorów: woła ją
+        /// edytor po każdej zmianie). Wiersze są uaktualniane w miejscu, więc pole nazwy w edytorze nie traci fokusu.
+        /// </summary>
         private static void RebuildRangeSectorsListUi()
         {
-            if (_rangeSectorsListContainer == null) return;
-            _rangeSectorsListContainer.Children.Clear();
-
-            if (_weaponRangeSectors.Count == 0)
-            {
-                if (_rangeSectorEditorBox != null)
-                    _rangeSectorEditorBox.Visibility = Visibility.Collapsed;
-                return;
-            }
-
             if (_selectedRangeSector == null || !_weaponRangeSectors.Contains(_selectedRangeSector))
-                _selectedRangeSector = _weaponRangeSectors[0];
-
-            if (_rangeSectorEditorBox != null)
-                _rangeSectorEditorBox.Visibility = Visibility.Visible;
-
-            foreach (var sec in _weaponRangeSectors.ToList())
-                _rangeSectorsListContainer.Children.Add(BuildRangeSectorCard(sec));
-        }
-
-        /// <summary>Karta sektora w tym samym układzie co karty obiektów: [👁 widoczność] [● kolor] [nazwa i zasięg] [− usuń].</summary>
-        private static Border BuildRangeSectorCard(TacticalRangeSectorItem sec)
-        {
-            var card = MapEditorUi.Card(sec, ReferenceEquals(sec, _selectedRangeSector));
-            card.Cursor = Cursors.Hand;
-            card.PreviewMouseLeftButtonDown += (s, e) => SelectRangeSector(sec);
-
-            var visible = MapEditorUi.Toggle("👁", sec.IsVisible, "Pokaż ten sektor na mapie (wł./wył.)", on =>
-            {
-                sec.IsVisible = on;
-                RefreshRangeSectorsNow(forceFullRebuild: true);
-            });
-
-            var swatch = MapEditorUi.ColorSwatch(sec.ColorHex, RangeSectorColorTooltip(sec.ColorHex), button =>
-            {
-                string picked = TacticalConfigPanel.ShowRgbColorPickerDialog(_hostWindow, $"Kolor — {sec.Name}", sec.ColorHex);
-                if (string.IsNullOrEmpty(picked)) return;
-                sec.ColorHex = picked;
-                MapEditorUi.SetSwatchColor(button, picked, RangeSectorColorTooltip(picked));
-                if (_lastLegendContainerGrid != null) UpdateRangeSectorsInLegendBox(_lastLegendContainerGrid);
-                RefreshRangeSectorsNow();
-            });
-
-            double effR = sec.GetEffectiveRadiusMeters();
-            string dhTag = Math.Abs(sec.ElevationDeltaMeters) > 0.1 ? $"  ·  ΔH {sec.ElevationDeltaMeters:+0.#;-0.#} m" : "";
-            var info = new TextBlock { FontSize = 10, TextTrimming = TextTrimming.CharacterEllipsis, VerticalAlignment = VerticalAlignment.Center };
-            info.Inlines.Add(new System.Windows.Documents.Run(sec.Name) { Foreground = Brushes.White, FontWeight = FontWeights.Bold });
-            info.Inlines.Add(new System.Windows.Documents.Run($"   {sec.BaseRadiusMeters:0} m ➔ {effR:0.0} m{dhTag}") { Foreground = TacticalConfigPanel.BrushMutedText });
-
-            var delete = MapEditorUi.DeleteButton("Usuń ten sektor z mapy", () =>
-            {
-                _weaponRangeSectors.Remove(sec);
-                if (ReferenceEquals(_selectedRangeSector, sec))
-                    _selectedRangeSector = _weaponRangeSectors.FirstOrDefault();
-                RebuildRangeSectorsListUi(); if (_lastLegendContainerGrid != null) UpdateRangeSectorsInLegendBox(_lastLegendContainerGrid);
-                PopulateRangeSectorEditorFromSelected();
-                RefreshRangeSectorsNow(forceFullRebuild: true);
-            });
-
-            card.Child = MapEditorUi.HeaderRow(visible, swatch, Array.Empty<UIElement>(), info, delete);
-            return card;
+                _selectedRangeSector = _weaponRangeSectors.FirstOrDefault();
+            RefreshRangeSectorRows();
         }
 
         private static string RangeSectorColorTooltip(string hex) => $"Kolor sektora {(hex ?? "").ToUpperInvariant()} — kliknij, aby zmienić";
-
-        /// <summary>Zaznacza sektor do edycji (ramka karty i pola edytora) — bez przebudowy listy, tak jak przy obiektach.</summary>
-        private static void SelectRangeSector(TacticalRangeSectorItem sec)
-        {
-            if (ReferenceEquals(_selectedRangeSector, sec) || !_weaponRangeSectors.Contains(sec)) return;
-            _selectedRangeSector = sec;
-            if (_rangeSectorsListContainer != null)
-            {
-                foreach (var card in _rangeSectorsListContainer.Children.OfType<Border>())
-                    MapEditorUi.SetCardSelected(card, ReferenceEquals(card.Tag, _selectedRangeSector));
-            }
-            PopulateRangeSectorEditorFromSelected();
-            RefreshRangeSectorsNow();
-        }
 
         private static void PopulateRangeSectorEditorFromSelected()
         {
@@ -992,7 +880,8 @@ namespace FieldTakHub.Builder.Services
 
             vis.SectorPath.Fill = fillBrush;
             vis.SectorPath.Stroke = strokeBrush;
-            vis.SectorPath.StrokeThickness = ReferenceEquals(sec, _selectedRangeSector) ? 2.2 : 1.6;
+            // Grubszy obrys ma sektor zaznaczony na wspólnej liście obiektów (i tylko on).
+            vis.SectorPath.StrokeThickness = ReferenceEquals(sec, _listSelection) ? 2.6 : 1.6;
             vis.SectorPath.Data = BuildSectorOrCircleGeometry(cx, cy, effRadiusPx, sec.AzimuthDeg, sec.SpreadAngleDeg, isClosedSlice: true);
 
             if (Math.Abs(sec.ElevationDeltaMeters) >= 0.5)
@@ -1142,8 +1031,7 @@ namespace FieldTakHub.Builder.Services
             el.MouseLeftButtonDown += (s, e) =>
             {
                 if (_interactiveCanvas == null) return;
-                _selectedRangeSector = sec;
-                PopulateRangeSectorEditorFromSelected();
+                SelectRangeSectorOnMap(sec);
 
                 isDraggingMove = true;
                 _isInteractingWithSectorOnMap = true;
@@ -1159,8 +1047,7 @@ namespace FieldTakHub.Builder.Services
             el.MouseRightButtonDown += (s, e) =>
             {
                 if (_interactiveCanvas == null) return;
-                _selectedRangeSector = sec;
-                PopulateRangeSectorEditorFromSelected();
+                SelectRangeSectorOnMap(sec);
 
                 isRightRotating = true;
                 _isInteractingWithSectorOnMap = true;
@@ -1219,6 +1106,7 @@ namespace FieldTakHub.Builder.Services
                 el.ReleaseMouseCapture();
                 RebuildRangeSectorsListUi(); if (_lastLegendContainerGrid != null) UpdateRangeSectorsInLegendBox(_lastLegendContainerGrid);
                 try { TacticalConfigPanel.MarkDirty(); } catch { }
+                FlushMapRedrawAfterSectorGesture();
                 e.Handled = true;
             };
 
@@ -1230,13 +1118,14 @@ namespace FieldTakHub.Builder.Services
                 el.ReleaseMouseCapture();
                 RebuildRangeSectorsListUi(); if (_lastLegendContainerGrid != null) UpdateRangeSectorsInLegendBox(_lastLegendContainerGrid);
                 try { TacticalConfigPanel.MarkDirty(); } catch { }
+                FlushMapRedrawAfterSectorGesture();
                 e.Handled = true;
             };
 
             // 3. Kolko myszy (Scroll) nad znacznikiem -> obrot o 5° (z Shift = zmiana kata pizzy, z Ctrl = zmiana promienia)
             el.MouseWheel += (s, e) =>
             {
-                _selectedRangeSector = sec;
+                SelectRangeSectorOnMap(sec);
                 double step = e.Delta > 0 ? 5.0 : -5.0;
 
                 if ((Keyboard.Modifiers & ModifierKeys.Shift) != 0)
@@ -1258,6 +1147,8 @@ namespace FieldTakHub.Builder.Services
                 double mpp = GetExactMetersPerPixel();
                 if (mpp <= 0.0001 || double.IsNaN(mpp) || double.IsInfinity(mpp)) mpp = 1.0;
                 UpdateSingleSectorVisualsInPlace(sec, cw, ch, mpp);
+                try { TacticalConfigPanel.MarkDirty(); } catch { }
+                FlushMapRedrawAfterSectorGesture();
                 e.Handled = true;
             };
         }
@@ -1269,8 +1160,7 @@ namespace FieldTakHub.Builder.Services
             handleEl.MouseLeftButtonDown += (s, e) =>
             {
                 if (_interactiveCanvas == null) return;
-                _selectedRangeSector = sec;
-                PopulateRangeSectorEditorFromSelected();
+                SelectRangeSectorOnMap(sec);
 
                 isRotating = true;
                 _isInteractingWithSectorOnMap = true;
@@ -1317,6 +1207,7 @@ namespace FieldTakHub.Builder.Services
                 handleEl.ReleaseMouseCapture();
                 RebuildRangeSectorsListUi(); if (_lastLegendContainerGrid != null) UpdateRangeSectorsInLegendBox(_lastLegendContainerGrid);
                 try { TacticalConfigPanel.MarkDirty(); } catch { }
+                FlushMapRedrawAfterSectorGesture();
                 e.Handled = true;
             };
         }
@@ -1328,8 +1219,7 @@ namespace FieldTakHub.Builder.Services
             wingEl.MouseLeftButtonDown += (s, e) =>
             {
                 if (_interactiveCanvas == null) return;
-                _selectedRangeSector = sec;
-                PopulateRangeSectorEditorFromSelected();
+                SelectRangeSectorOnMap(sec);
 
                 isSpreading = true;
                 _isInteractingWithSectorOnMap = true;
@@ -1372,6 +1262,7 @@ namespace FieldTakHub.Builder.Services
                 wingEl.ReleaseMouseCapture();
                 RebuildRangeSectorsListUi(); if (_lastLegendContainerGrid != null) UpdateRangeSectorsInLegendBox(_lastLegendContainerGrid);
                 try { TacticalConfigPanel.MarkDirty(); } catch { }
+                FlushMapRedrawAfterSectorGesture();
                 e.Handled = true;
             };
         }

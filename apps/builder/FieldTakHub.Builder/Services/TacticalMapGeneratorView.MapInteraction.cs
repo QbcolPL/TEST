@@ -42,9 +42,11 @@ namespace FieldTakHub.Builder.Services
             "Prawy klik na obiekcie lub jego krawędzi — menu obiektu\n" +
             "Enter albo prawy klik — zakończ rysowany kształt\n" +
             "Shift — kąt co 45° przy rysowaniu; kilka znaczników naraz\n\n" +
-            "Del — usuń zaznaczony obiekt,  Ctrl+D — duplikuj\n" +
-            "F2 — zmień nazwę,  F — pokaż zaznaczony obiekt\n" +
-            "Esc — anuluj / zakończ";
+            "Ctrl+Z — cofnij,  Ctrl+Y — ponów\n" +
+            "    (w trakcie rysowania Ctrl+Z usuwa ostatni punkt)\n" +
+            "Del — usuń zaznaczony element,  Ctrl+D — duplikuj\n" +
+            "F2 — zmień nazwę,  F — pokaż zaznaczony element\n" +
+            "Esc — anuluj / zakończ / odznacz";
 
         private static readonly Dictionary<string, Button> _mapToolButtons = new Dictionary<string, Button>();
         private static readonly Dictionary<TacticalMapObjectItem, TextBox> _objectNameBoxes = new Dictionary<TacticalMapObjectItem, TextBox>();
@@ -116,7 +118,15 @@ namespace FieldTakHub.Builder.Services
                 _mapToolButtons[def.Tool] = button;
                 row.Children.Add(button);
             }
-            row.Children.Add(new Border { Width = 1, Height = 18, Margin = new Thickness(4, 0, 4, 0), Background = TacticalConfigPanel.BrushTileBorder, VerticalAlignment = VerticalAlignment.Center });
+            row.Children.Add(ToolbarSeparator());
+            _undoButton = MapEditorUi.ToolButton("↶", "Cofnij (Ctrl+Z)", UndoMapEdit);
+            _redoButton = MapEditorUi.ToolButton("↷", "Ponów (Ctrl+Y)", RedoMapEdit);
+            ToolTipService.SetShowOnDisabled(_undoButton, true);
+            ToolTipService.SetShowOnDisabled(_redoButton, true);
+            row.Children.Add(_undoButton);
+            row.Children.Add(_redoButton);
+            RefreshUndoButtons();
+            row.Children.Add(ToolbarSeparator());
             var help = MapEditorUi.ToolButton("?", MapShortcutsHelp, ShowMapShortcutsPanel);
             help.FontWeight = FontWeights.Bold;
             ToolTipService.SetShowDuration(help, 60000);
@@ -135,6 +145,15 @@ namespace FieldTakHub.Builder.Services
                 Child = row
             };
         }
+
+        private static Border ToolbarSeparator() => new Border
+        {
+            Width = 1,
+            Height = 18,
+            Margin = new Thickness(4, 0, 4, 0),
+            Background = TacticalConfigPanel.BrushTileBorder,
+            VerticalAlignment = VerticalAlignment.Center
+        };
 
         private static void ShowMapShortcutsPanel()
         {
@@ -247,13 +266,7 @@ namespace FieldTakHub.Builder.Services
             switch (_activeTool)
             {
                 case "PAN":
-                    if (_inspectedObject != null)
-                    {
-                        _inspectedObject = null;
-                        UpdateSelectedMarkerInspectorUI();
-                        UpdateObjectCardSelection();
-                        RedrawVectorsOnly();
-                    }
+                    if (_inspectedObject != null || _listSelection != null) ClearListSelection();
                     return;
 
                 case "MEASURE":
@@ -601,7 +614,7 @@ namespace FieldTakHub.Builder.Services
                 var (lat, lon) = ObjectAnchor(obj);
                 CopyPointReport(string.IsNullOrWhiteSpace(obj.Name) ? "Obiekt" : obj.Name, lat, lon);
             });
-            Add("☰", "Pokaż na liście", null, () => RevealObjectCard(obj));
+            Add("☰", "Pokaż na liście", null, () => RevealListRow(obj));
             items.Children.Add(MapEditorUi.MenuSeparator());
             Add("−", "Usuń z mapy", "Del", () => DeleteMapObject(win, obj), danger: true);
 
@@ -626,18 +639,11 @@ namespace FieldTakHub.Builder.Services
             RedrawVectorsOnly();
         }
 
+        /// <summary>Zaznacza obiekt (jego karta trafia do panelu szczegółów) i ustawia kursor w polu nazwy.</summary>
         private static void FocusObjectNameBox(TacticalMapObjectItem obj)
         {
-            if (!_objectNameBoxes.TryGetValue(obj, out var box)) return;
-            box.BringIntoView();
-            box.Focus();
-            box.SelectAll();
-        }
-
-        private static void RevealObjectCard(TacticalMapObjectItem obj)
-        {
-            var card = _objectsListStack?.Children.OfType<Border>().FirstOrDefault(b => ReferenceEquals(b.Tag, obj));
-            card?.BringIntoView();
+            SelectObjectFromList(obj, centerMap: false);
+            if (_objectNameBoxes.TryGetValue(obj, out var box)) FocusTextBoxSoon(box);
         }
 
         /// <summary>Kopia obiektu przesunięta o kilkanaście pikseli w prawo i w dół, wstawiona zaraz za oryginałem.</summary>
@@ -702,10 +708,25 @@ namespace FieldTakHub.Builder.Services
                 return;
             }
 
+            // W polu tekstowym Ctrl+Z cofa pisanie w tym polu (zwykłe cofanie Windows), a nie zmiany na mapie.
             if (inText || inCombo || IsMapMenuOpen) return;
             var modifiers = Keyboard.Modifiers;
-            var selected = _inspectedObject != null && _mapObjects.Contains(_inspectedObject) ? _inspectedObject : null;
+            DropStaleListSelection();
+            SyncListSelectionWithMap();
+            var selected = _listSelection; // obiekt mapy albo sektor ognia — wspólne zaznaczenie listy i mapy
 
+            if (modifiers == ModifierKeys.Control && e.Key == Key.Z)
+            {
+                UndoMapEdit();
+                e.Handled = true;
+                return;
+            }
+            if ((modifiers == ModifierKeys.Control && e.Key == Key.Y) || (modifiers == (ModifierKeys.Control | ModifierKeys.Shift) && e.Key == Key.Z))
+            {
+                RedoMapEdit();
+                e.Handled = true;
+                return;
+            }
             if (e.Key == Key.Enter && _activeDraftPoly != null)
             {
                 FinishDraftShape(win);
@@ -714,26 +735,26 @@ namespace FieldTakHub.Builder.Services
             }
             if (e.Key == Key.Delete && selected != null)
             {
-                DeleteMapObject(win, selected);
+                DeleteListItem(win, selected);
                 e.Handled = true;
                 return;
             }
             if (modifiers == ModifierKeys.Control && e.Key == Key.D && selected != null)
             {
-                DuplicateMapObject(win, selected);
+                DuplicateListItem(win, selected);
                 e.Handled = true;
                 return;
             }
             if (modifiers != ModifierKeys.None) return;
             if (e.Key == Key.F2 && selected != null)
             {
-                FocusObjectNameBox(selected);
+                FocusListItemName(selected);
                 e.Handled = true;
                 return;
             }
             if (e.Key == Key.F && selected != null)
             {
-                SelectObjectFromList(selected, centerMap: true);
+                SelectListItem(selected, centerMap: true);
                 e.Handled = true;
                 return;
             }
@@ -770,12 +791,9 @@ namespace FieldTakHub.Builder.Services
                 _fastOverlayRenderer?.InvalidateVisual();
                 return true;
             }
-            if (_inspectedObject != null)
+            if (_inspectedObject != null || _listSelection != null)
             {
-                _inspectedObject = null;
-                UpdateSelectedMarkerInspectorUI();
-                UpdateObjectCardSelection();
-                RedrawVectorsOnly();
+                ClearListSelection();
                 return true;
             }
             return false;

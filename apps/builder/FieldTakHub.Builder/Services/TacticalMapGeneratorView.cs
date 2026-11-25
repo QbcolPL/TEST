@@ -190,9 +190,21 @@ namespace FieldTakHub.Builder.Services
 
         private static void UpdateSelectedMarkerInspectorUI()
         {
+            // Każde zaznaczenie obiektu na mapie przechodzi tędy — stąd też zaznaczenie wiersza na wspólnej liście.
+            SyncListSelectionWithMap();
             if (_inspectorTitleLabel == null || _inspectorMgrsLabel == null || _inspectorWgsUtmLabel == null) return;
             if (_inspectedObject == null || _inspectedObject.Points.Count == 0 || !_mapObjects.Contains(_inspectedObject))
             {
+                if (_listSelection is TacticalRangeSectorItem sector && _weaponRangeSectors.Contains(sector))
+                {
+                    var (sLat, sLon) = RangeSectorShooterPosition(sector);
+                    var (sw, sh) = GetExactCanvasSize();
+                    var (sMgrs, _, sKp, _, sWgs) = FormatTacticalPointCoordinates(sLat, sLon);
+                    _inspectorTitleLabel.Text = $"\uD83C\uDFAF {sector.Name}  [stanowisko sektora ognia]";
+                    _inspectorMgrsLabel.Text = $"{FormatSectorCoordinateForLatLon(sLat, sLon, sw, sh)}   \u2022   MGRS: {sMgrs}";
+                    _inspectorWgsUtmLabel.Text = $"{sKp}   \u2022   WGS84: {sWgs}";
+                    return;
+                }
                 _inspectorTitleLabel.Text = "\uD83D\uDCCD Kliknij dowolny znacznik lub wierzcho\u0142ek na mapie, aby odczyta\u0107 wsp\u00F3\u0142rz\u0119dne";
                 _inspectorMgrsLabel.Text = "Sektor: \u2014   |   MGRS: \u2014   |   Keypad / \u0106wiartka: \u2014";
                 _inspectorWgsUtmLabel.Text = "WGS84: \u2014   |   UTM: \u2014";
@@ -211,6 +223,12 @@ namespace FieldTakHub.Builder.Services
 
         private static void CopySelectedMarkerCoordsToClipboard()
         {
+            if ((_inspectedObject == null || _inspectedObject.Points.Count == 0) && _listSelection is TacticalRangeSectorItem sector && _weaponRangeSectors.Contains(sector))
+            {
+                var (sLat, sLon) = RangeSectorShooterPosition(sector);
+                CopyPointReport(string.IsNullOrWhiteSpace(sector.Name) ? "Sektor ognia" : sector.Name, sLat, sLon);
+                return;
+            }
             if (_inspectedObject == null || _inspectedObject.Points.Count == 0) return;
             try
             {
@@ -307,6 +325,7 @@ namespace FieldTakHub.Builder.Services
                     _originalWindowContent = currentContent;
                     win.Content = null;
                     _fullScreenOverlay = overlay;
+                    InitUndoTracking(overlay);
 
                     var masterGrid = new Grid { Tag = "FTH_MASTER_SHELL", Background = TacticalConfigPanel.BrushCardBg };
                     masterGrid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(0) });
@@ -607,10 +626,10 @@ namespace FieldTakHub.Builder.Services
 
                 leftStack.Children.Add(WrapCard(BuildSection2GridAndColorsUI(win)));
 
-                var sec3 = CreateSectionCard("3. EDYTOR .KMZ / .GPX, ZNACZNIKI, ODCZYT MGRS & OBRACANIE (↻)");
+                var sec3 = CreateSectionCard("3. OBIEKTY NA MAPIE I SEKTORY OGNIA · .KMZ / .GPX · ODCZYT MGRS");
                 sec3.Children.Add(new TextBlock
                 {
-                    Text = "Rysujesz na mapie: narzędzia są na pasku nad mapą (V, N, K, T, S, A, L), a prawy klik w dowolnym miejscu mapy otwiera szybkie menu. Poniżej — symbol i kolor nowych obiektów oraz lista obiektów.",
+                    Text = "Rysujesz na mapie: narzędzia są na pasku nad mapą (V, N, K, T, S, A, L), prawy klik otwiera szybkie menu, a Ctrl+Z / Ctrl+Y (↶ ↷) cofa i ponawia zmiany. Poniżej — symbol i kolor nowych obiektów oraz jedna lista wszystkiego, co jest na mapie.",
                     Foreground = TacticalConfigPanel.BrushMutedText,
                     FontSize = 9.5,
                     TextWrapping = TextWrapping.Wrap,
@@ -712,7 +731,7 @@ namespace FieldTakHub.Builder.Services
                 btnImportVector.ToolTip = "Otwiera plik .KMZ (ZIP), .KML lub .GPX i zamienia wielokąty, ślady GPS oraz punkty na edytowalne obiekty na mapie";
 
                 var btnClearObjects = MakeActionButton("🧹 Wyczyść listę", false, () => ConfirmAndClearAllObjects(win));
-                btnClearObjects.ToolTip = "Usuń z mapy wszystkie obiekty (z potwierdzeniem)";
+                btnClearObjects.ToolTip = "Usuń z mapy wszystko z listy — obiekty i sektory ognia (z potwierdzeniem; Ctrl+Z przywraca)";
                 btnClearObjects.Height = 27;
                 btnClearObjects.Margin = new Thickness(4, 0, 0, 0);
 
@@ -722,13 +741,60 @@ namespace FieldTakHub.Builder.Services
                 vectorIoBar.Children.Add(btnClearObjects);
                 sec3.Children.Add(vectorIoBar);
 
-                sec3.Children.Add(new TextBlock { Text = "Obiekty na mapie. W każdej karcie: Aa = etykieta na mapie, ● = kolor, 📍 = pokaż na mapie, − = usuń; dla AO, sektorów i tras także typ i upraszczanie kształtu.", Foreground = TacticalConfigPanel.BrushMutedText, FontSize = 9.2, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 3) });
-                var objListBorder = new Border { Background = TacticalConfigPanel.BrushInputBg, BorderBrush = TacticalConfigPanel.BrushInputBorder, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(4), MinHeight = 68, MaxHeight = 380, Padding = new Thickness(6) };
+                // Sektory ognia — na tej samej liście co obiekty (wcześniej osobny panel w sekcji 2).
+                var sectorBar = new Grid { Margin = new Thickness(0, 0, 0, 6) };
+                sectorBar.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1.1, GridUnitType.Star) });
+                sectorBar.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+                sectorBar.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+                var btnAddSector = MakeActionButton("🎯 + Sektor ognia", false, AddNewWeaponRangeSector);
+                btnAddSector.ToolTip = "Dodaj na środek mapy sektor ognia / okrąg zasięgu (przesuwany i obracany myszką). Też: prawy klik na mapie.";
+                var btnImportSectors = MakeActionButton("📂 Sektory z .KMZ", false, ImportStandaloneRangeSectorsKmzDialog);
+                btnImportSectors.ToolTip = "Wczytaj wyrysowane wcześniej sektory ognia z pliku .KMZ lub .KML (obsługuje je także „Wczytaj i edytuj .KMZ”)";
+                var btnExportSectors = MakeActionButton("📦 Sektory do .KMZ…", false, ExportStandaloneRangeSectorsKmzDialog);
+                btnExportSectors.ToolTip = "Zapisz sektory ognia jako wielokąty KML/KMZ dla ATAK";
+                var sectorButtons = new[] { btnAddSector, btnImportSectors, btnExportSectors };
+                for (int i = 0; i < sectorButtons.Length; i++)
+                {
+                    var b = sectorButtons[i];
+                    b.Height = 24;
+                    b.FontSize = 9.5;
+                    b.Padding = new Thickness(6, 0, 6, 0);
+                    b.Margin = new Thickness(i == 0 ? 0 : 3, 0, i == sectorButtons.Length - 1 ? 0 : 3, 0);
+                    Grid.SetColumn(b, i);
+                    sectorBar.Children.Add(b);
+                }
+                sec3.Children.Add(sectorBar);
+
+                // Jedna lista wszystkiego na mapie (zwarte wiersze) i pod nią szczegóły zaznaczonego elementu.
+                var listHeader = new Grid { Margin = new Thickness(0, 2, 0, 3) };
+                listHeader.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+                listHeader.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+                _mapItemsCountText = new TextBlock { Foreground = TacticalConfigPanel.BrushAccent, FontSize = 10, FontWeight = FontWeights.Bold, VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis };
+                listHeader.Children.Add(_mapItemsCountText);
+                var listHint = new TextBlock
+                {
+                    Text = "klik — szczegóły · dwuklik — pokaż na mapie",
+                    Foreground = TacticalConfigPanel.BrushMutedText,
+                    FontSize = 9,
+                    VerticalAlignment = VerticalAlignment.Center,
+                    ToolTip = "W wierszu: Aa — etykieta obiektu na mapie, 👁 — widoczność sektora ognia, ● — kolor, − — usuń.\nZaznaczony element ma pod listą pełne ustawienia; klik na mapie zaznacza go także tutaj.\nDel — usuń, Ctrl+D — duplikuj, F2 — nazwa, F — pokaż, Ctrl+Z / Ctrl+Y — cofnij / ponów."
+                };
+                Grid.SetColumn(listHint, 1);
+                listHeader.Children.Add(listHint);
+                sec3.Children.Add(listHeader);
+
+                var objListBorder = new Border { Background = TacticalConfigPanel.BrushInputBg, BorderBrush = TacticalConfigPanel.BrushInputBorder, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(4), MinHeight = 44, MaxHeight = 280, Padding = new Thickness(4) };
                 var objListScroll = new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
                 _objectsListStack = new StackPanel();
                 objListScroll.Content = _objectsListStack; objListBorder.Child = objListScroll;
                 _objectsListScroll = objListScroll;
                 sec3.Children.Add(objListBorder);
+
+                _mapItemDetailsHost = new Border { Margin = new Thickness(0, 6, 0, 0) };
+                sec3.Children.Add(_mapItemDetailsHost);
+                BuildRangeSectorEditor();
+                PopulateRangeSectorEditorFromSelected();
+                _detailsItem = null;
                 RefreshObjectsListUI(win);
                 leftStack.Children.Add(WrapCard(sec3));
 
@@ -1366,8 +1432,6 @@ namespace FieldTakHub.Builder.Services
             return b;
         }
 
-        private static TacticalMapObjectItem _newlyAddedObjectToFocus;
-
         private sealed class NatoSymbolVisualPresenter : Border
         {
             public NatoSymbolVisualPresenter()
@@ -1466,7 +1530,6 @@ namespace FieldTakHub.Builder.Services
                 _mapObjects.Add(item);
                 _inspectedObject = item;
                 _inspectedVertexIndex = 0;
-                _newlyAddedObjectToFocus = item;
             }
             else if (tool == "AO" || tool == "SECTOR" || tool == "ROUTE")
             {
@@ -1486,7 +1549,6 @@ namespace FieldTakHub.Builder.Services
                     };
                     _activeDraftPoly.LegendDescription = GetDefaultLegendDescriptionForObject(_activeDraftPoly);
                     _mapObjects.Add(_activeDraftPoly);
-                    _newlyAddedObjectToFocus = _activeDraftPoly;
                 }
 
                 Point effectivePt = clickPt;
