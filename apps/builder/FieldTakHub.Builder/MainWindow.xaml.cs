@@ -612,6 +612,9 @@ public partial class MainWindow : Window
         catch(Exception ex){ Error(ex); }
     }
 
+    // Karta „Ostatnie paczki .ftak”: folder ostatniej paczki (bez paczek — out\ obok folderu source).
+    private void OpenPackagesFolder_Click(object sender, RoutedEventArgs e) => PackageStatusView.OpenPackagesFolder(this);
+
     private void OpenProjectFolder_Click(object sender, RoutedEventArgs e)
     {
         try { EnsureCurrentStructure(log:false); OpenPath(CurrentProjectRoot()); }

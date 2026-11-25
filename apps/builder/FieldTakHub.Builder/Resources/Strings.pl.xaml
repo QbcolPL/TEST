@@ -122,7 +122,8 @@
   <sys:String x:Key="UI_Status">Status paczki</sys:String>
   <sys:String x:Key="UI_Ready">Gotowa do generowania</sys:String>
   <sys:String x:Key="UI_StatusHelp">Sprawdź elementy przed wygenerowaniem paczki.</sys:String>
-  <sys:String x:Key="UI_Generated">Generowany plik</sys:String>
+  <sys:String x:Key="UI_Generated">Ostatnie paczki .ftak</sys:String>
+  <sys:String x:Key="UI_OpenPackagesFolder">📂 Otwórz folder paczek</sys:String>
   <sys:String x:Key="UI_Qr">Kod QR</sys:String>
   <sys:String x:Key="UI_QrHelp">Zostanie wygenerowany po utworzeniu paczki</sys:String>
 

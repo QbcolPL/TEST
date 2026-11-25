@@ -47,7 +47,12 @@ namespace FieldTakHub.Builder.Services
             "    (w trakcie rysowania Ctrl+Z usuwa ostatni punkt)\n" +
             "Del — usuń zaznaczony element,  Ctrl+D — duplikuj\n" +
             "F2 — zmień nazwę,  F — pokaż zaznaczony element\n" +
-            "Esc — anuluj / zakończ / odznacz";
+            "Esc — anuluj / zakończ / odznacz\n\n" +
+            "Całe okno: Ctrl+S — zapisz projekt,  Alt+1…4 — moduły,\n" +
+            "F1 — wszystkie skróty programu";
+
+        /// <summary>Ściągawka skrótów generatora map — także w oknie skrótów całego programu (F1).</summary>
+        internal static string MapShortcutsHelpText => MapShortcutsHelp;
 
         private static readonly Dictionary<string, Button> _mapToolButtons = new Dictionary<string, Button>();
         private static readonly Dictionary<TacticalMapObjectItem, TextBox> _objectNameBoxes = new Dictionary<TacticalMapObjectItem, TextBox>();
@@ -71,11 +76,22 @@ namespace FieldTakHub.Builder.Services
             _interactiveCanvas.FocusVisualStyle = null;
             _interactiveCanvas.PreviewMouseDown += (_, _) => FocusMapCanvas();
 
+            // Pasek narzędzi i podpowiedź stoją w pasach nad i pod arkuszem (nie na nim) — nie zasłaniają opisów siatki.
             var toolbar = BuildMapToolbar();
             Panel.SetZIndex(toolbar, 900);
-            _viewportHostGrid.Children.Add(toolbar);
+            if (_mapTopBand != null)
+            {
+                toolbar.Margin = new Thickness(0);
+                Grid.SetColumn(toolbar, 0);
+                _mapTopBand.Children.Add(toolbar);
+            }
+            else
+            {
+                _viewportHostGrid.Children.Add(toolbar);
+            }
 
-            _toolHintText = new TextBlock { Foreground = TacticalConfigPanel.BrushMutedText, FontSize = 10.5, TextWrapping = TextWrapping.Wrap };
+            // Jedna linia: zmiana podpowiedzi nie zmienia wysokości pasa, więc arkusz nie „skacze” przy zmianie narzędzia.
+            _toolHintText = new TextBlock { Foreground = TacticalConfigPanel.BrushMutedText, FontSize = 10.5, TextWrapping = TextWrapping.NoWrap, TextTrimming = TextTrimming.CharacterEllipsis };
             var hint = new Border
             {
                 Background = MapEditorUi.FloatingBackground,
@@ -84,14 +100,24 @@ namespace FieldTakHub.Builder.Services
                 CornerRadius = new CornerRadius(5),
                 Padding = new Thickness(8, 3, 8, 3),
                 HorizontalAlignment = HorizontalAlignment.Left,
-                VerticalAlignment = VerticalAlignment.Bottom,
-                Margin = new Thickness(10, 0, 10, 10),
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(0),
                 MaxWidth = 760,
                 IsHitTestVisible = false,
                 Child = _toolHintText
             };
             Panel.SetZIndex(hint, 900);
-            _viewportHostGrid.Children.Add(hint);
+            if (_mapBottomBand != null)
+            {
+                Grid.SetColumn(hint, 0);
+                _mapBottomBand.Children.Add(hint);
+            }
+            else
+            {
+                hint.VerticalAlignment = VerticalAlignment.Bottom;
+                hint.Margin = new Thickness(10, 0, 10, 10);
+                _viewportHostGrid.Children.Add(hint);
+            }
 
             _mapMenuCanvas = new Canvas();
             _mapMenuLayer = new Grid { Visibility = Visibility.Collapsed, Background = Brushes.Transparent };
@@ -102,6 +128,7 @@ namespace FieldTakHub.Builder.Services
             _mapMenuLayer.MouseRightButtonDown += (_, e) => { e.Handled = true; CloseMapMenus(); };
             _mapMenuLayer.MouseWheel += (_, e) => { e.Handled = true; CloseMapMenus(); };
             Panel.SetZIndex(_mapMenuLayer, 1000);
+            Grid.SetRowSpan(_mapMenuLayer, Math.Max(1, _viewportHostGrid.RowDefinitions.Count)); // cały podgląd, także pasy
             _viewportHostGrid.Children.Add(_mapMenuLayer);
 
             RefreshToolButtonsVisual();

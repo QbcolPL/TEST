@@ -267,9 +267,11 @@ namespace FieldTakHub.Builder.Services
         private static void UpdateSheetViewportSize()
         {
             if (_viewportHostGrid == null || _sheetFrameBorder == null) return;
-            double hostW = _viewportHostGrid.ActualWidth > 300 ? _viewportHostGrid.ActualWidth : Math.Max(720, (_hostWindow?.ActualWidth ?? 1280) - 460);
-            double hostH = _viewportHostGrid.ActualHeight > 250 ? _viewportHostGrid.ActualHeight : Math.Max(540, (_hostWindow?.ActualHeight ?? 800) - 120);
-            double availW = Math.Max(260, hostW - 28), availH = Math.Max(260, hostH - 56);
+            // Arkusz mieści się w środkowym pasie podglądu — pasy narzędzi i współrzędnych go nie zasłaniają.
+            FrameworkElement area = (FrameworkElement)_sheetAreaHost ?? _viewportHostGrid;
+            double hostW = area.ActualWidth > 300 ? area.ActualWidth : Math.Max(720, (_hostWindow?.ActualWidth ?? 1280) - 460);
+            double hostH = area.ActualHeight > 200 ? area.ActualHeight : Math.Max(460, (_hostWindow?.ActualHeight ?? 800) - 200);
+            double availW = Math.Max(260, hostW - 24), availH = Math.Max(200, hostH - 16);
             var (wMm, hMm) = GetActiveSheetDimensionsMm();
             double aspect = wMm / hMm, targetW = availW, targetH = targetW / aspect;
             if (targetH > availH) { targetH = availH; targetW = targetH * aspect; }
@@ -936,6 +938,11 @@ namespace FieldTakHub.Builder.Services
             bodyGrid.Children.Add(leftColumn);
 
             _viewportHostGrid = new Grid { Background = TacticalConfigPanel.BrushInputBg, ClipToBounds = true };
+            // Pasy: narzędzia i opis arkusza | arkusz | podpowiedź i współrzędne. Wcześniej opisy leżały na arkuszu
+            // i zasłaniały górne opisy siatki.
+            _viewportHostGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            _viewportHostGrid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+            _viewportHostGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
             _sheetFrameBorder = new Border { Width = 820, Height = 580, Background = TacticalConfigPanel.BrushCardBg, BorderBrush = TacticalConfigPanel.BrushAccent, BorderThickness = new Thickness(1.5), HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center, ClipToBounds = true };
 
             _mapCompositeGrid = new Grid { ClipToBounds = true, Background = TacticalConfigPanel.BrushCardBg };
@@ -951,19 +958,34 @@ namespace FieldTakHub.Builder.Services
             _mapCompositeGrid.Children.Add(_fastOverlayRenderer);
             _mapCompositeGrid.Children.Add(_interactiveCanvas);
             _sheetFrameBorder.Child = _mapCompositeGrid;
-            _viewportHostGrid.Children.Add(_sheetFrameBorder);
+            _sheetAreaHost = new Grid { ClipToBounds = true };
+            _sheetAreaHost.Children.Add(_sheetFrameBorder);
+            Grid.SetRow(_sheetAreaHost, 1);
+            _viewportHostGrid.Children.Add(_sheetAreaHost);
 
-            var topBadgesStack = new StackPanel { VerticalAlignment = VerticalAlignment.Top, HorizontalAlignment = HorizontalAlignment.Center, Margin = new Thickness(0, 8, 0, 0), IsHitTestVisible = false };
-            var sheetBadgeBorder = new Border { Background = new SolidColorBrush(Color.FromArgb(225, 8, 19, 22)), BorderBrush = TacticalConfigPanel.BrushAccent, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(5), Padding = new Thickness(10, 3, 10, 3), HorizontalAlignment = HorizontalAlignment.Center, Margin = new Thickness(0, 0, 0, 4) };
-            _sheetInfoBadge = new TextBlock { Text = "Arkusz A4 Poziomo", Foreground = TacticalConfigPanel.BrushAccent, FontSize = 10.5, FontWeight = FontWeights.Bold };
+            // Górny pas: pasek narzędzi (kolumna 0, dokłada go AttachMapInteractionLayer) i opis arkusza.
+            _mapTopBand = new Grid { Margin = new Thickness(10, 8, 10, 4) };
+            _mapTopBand.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            _mapTopBand.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            var sheetBadgeBorder = new Border { Background = new SolidColorBrush(Color.FromArgb(225, 8, 19, 22)), BorderBrush = TacticalConfigPanel.BrushAccent, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(5), Padding = new Thickness(10, 3, 10, 3), HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(12, 0, 0, 0), IsHitTestVisible = false };
+            _sheetInfoBadge = new TextBlock { Text = "Arkusz A4 Poziomo", Foreground = TacticalConfigPanel.BrushAccent, FontSize = 10.5, FontWeight = FontWeights.Bold, TextTrimming = TextTrimming.CharacterEllipsis };
             sheetBadgeBorder.Child = _sheetInfoBadge;
-            topBadgesStack.Children.Add(sheetBadgeBorder);
+            Grid.SetColumn(sheetBadgeBorder, 1);
+            _mapTopBand.Children.Add(sheetBadgeBorder);
+            Grid.SetRow(_mapTopBand, 0);
+            _viewportHostGrid.Children.Add(_mapTopBand);
 
-            var hudBorder = new Border { Background = new SolidColorBrush(Color.FromArgb(215, 8, 19, 22)), BorderBrush = TacticalConfigPanel.BrushTileBorder, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(5), Padding = new Thickness(10, 3, 10, 3), HorizontalAlignment = HorizontalAlignment.Center };
+            // Dolny pas: podpowiedź narzędzia (kolumna 0, dokłada ją AttachMapInteractionLayer) i współrzędne kursora.
+            _mapBottomBand = new Grid { Margin = new Thickness(10, 4, 10, 8) };
+            _mapBottomBand.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            _mapBottomBand.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            var hudBorder = new Border { Background = new SolidColorBrush(Color.FromArgb(215, 8, 19, 22)), BorderBrush = TacticalConfigPanel.BrushTileBorder, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(5), Padding = new Thickness(10, 3, 10, 3), HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(12, 0, 0, 0), IsHitTestVisible = false };
             _coordsBadge = new TextBlock { Text = $"WGS84: {_centerLat:0.00000}, {_centerLon:0.00000}  |  Kliknij marker = Odczytaj współrzędne MGRS  |  ↻ = Obróć", Foreground = Brushes.White, FontSize = 10 };
             hudBorder.Child = _coordsBadge;
-            topBadgesStack.Children.Add(hudBorder);
-            _viewportHostGrid.Children.Add(topBadgesStack);
+            Grid.SetColumn(hudBorder, 1);
+            _mapBottomBand.Children.Add(hudBorder);
+            Grid.SetRow(_mapBottomBand, 2);
+            _viewportHostGrid.Children.Add(_mapBottomBand);
             AttachMapInteractionLayer();
 
             _interactiveCanvas.MouseEnter += (s, e) => _isHoveringCanvas = true;
@@ -1153,7 +1175,8 @@ namespace FieldTakHub.Builder.Services
                 _wheelZoomDebounceTimer.Start();
             };
 
-            _viewportHostGrid.SizeChanged += (s, e) =>
+            // Arkusz dopasowuje się do środkowego pasa (bez pasów narzędzi i współrzędnych).
+            _sheetAreaHost.SizeChanged += (s, e) =>
             {
                 UpdateSheetViewportSize();
                 _ = RenderMapTilesAsync();
@@ -2123,7 +2146,7 @@ namespace FieldTakHub.Builder.Services
             });
 
             string defaultTitle = $"MAPA TAKTYCZNA ({_selectedSheet.Name.Split('\u2014')[0].Trim()} | 1:{_targetScaleDenominator:N0})";
-            string secLegSuffix = (_enableSectorGridOverlay || _coordSystem.StartsWith("Sektorowa")) ? $" + Sektory A-Z/1-9 ({_sectorSizeMeters}m)" : "";
+            string secLegSuffix = (_enableSectorGridOverlay || IsSectorCoordMode()) ? $" + Sektory A-Z/1-9 ({_sectorSizeMeters}m)" : "";
             string defaultSub = (_coordSystem.StartsWith("MGRS") ? $"Siatka: MGRS ({_effectiveMgrsStepMeters} m) | {_subGridDivision}" : $"Siatka: {_coordSystem.Split(' ')[0]}") + secLegSuffix;
 
             var titleBox = (TextBox)TacticalConfigPanel.TextCtrl(string.IsNullOrWhiteSpace(_customLegendTitle) ? defaultTitle : _customLegendTitle, v => { });
@@ -2295,12 +2318,15 @@ namespace FieldTakHub.Builder.Services
             double maxInitX = Math.Max(8.0, viewW - Math.Min(elemW, viewW - 40.0) - 4.0);
             double maxInitY = Math.Max(8.0, viewH - Math.Min(elemH, viewH - 40.0) - 4.0);
 
+            // Domyślne miejsce przy narożniku omija pasy opisów siatki przy krawędziach (dopóki element nie został przesunięty).
+            double insetLeft = 14.0 + GridLabelReserve(MapEditor.GridEdges.Left), insetRight = 14.0 + GridLabelReserve(MapEditor.GridEdges.Right);
+            double insetTop = 14.0 + GridLabelReserve(MapEditor.GridEdges.Top), insetBottom = 14.0 + GridLabelReserve(MapEditor.GridEdges.Bottom);
             double x = validNormX
                 ? Math.Clamp(normX.GetValueOrDefault() * viewW, 4.0, maxInitX)
-                : (cornerPreset.StartsWith("Lewy") ? 14.0 : Math.Max(14.0, viewW - elemW - 14.0));
+                : (cornerPreset.StartsWith("Lewy") ? insetLeft : Math.Max(insetLeft, viewW - elemW - insetRight));
             double y = validNormY
                 ? Math.Clamp(normY.GetValueOrDefault() * viewH, 4.0, maxInitY)
-                : (cornerPreset.Contains("g\u00F3rny") ? 14.0 : Math.Max(14.0, viewH - elemH - 14.0));
+                : (cornerPreset.Contains("g\u00F3rny") ? insetTop : Math.Max(insetTop, viewH - elemH - insetBottom));
 
             Canvas.SetLeft(el, x);
             Canvas.SetTop(el, y);
@@ -2433,7 +2459,7 @@ namespace FieldTakHub.Builder.Services
                     TextWrapping = TextWrapping.Wrap
                 });
 
-                string secLegSuffix = (_enableSectorGridOverlay || _coordSystem.StartsWith("Sektorowa")) ? $" + Sektory A-Z/1-9 ({_sectorSizeMeters}m | {_sectorSubDivision.Split(' ')[0]})" : "";
+                string secLegSuffix = (_enableSectorGridOverlay || IsSectorCoordMode()) ? $" + Sektory A-Z/1-9 ({_sectorSizeMeters}m | {_sectorSubDivision.Split(' ')[0]})" : "";
                 string autoSub = (_coordSystem.StartsWith("MGRS") ? $"Siatka: MGRS ({_effectiveMgrsStepMeters} m) | {_subGridDivision}" : GetWgs84LegendSubtitleSummary()) + secLegSuffix;
                 string displaySub = string.IsNullOrWhiteSpace(_customLegendSubtitle) ? autoSub : _customLegendSubtitle;
                 ls.Children.Add(new TextBlock { Text = displaySub, Foreground = TacticalConfigPanel.BrushMutedText, FontSize = 8.5, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 1, 0, 4) });

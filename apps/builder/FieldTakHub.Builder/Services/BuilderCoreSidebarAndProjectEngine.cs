@@ -16,6 +16,7 @@ using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
+using FieldTakHub.Builder.Services.Shell;
 using Microsoft.Win32;
 
 namespace FieldTakHub.Builder.Services
@@ -71,6 +72,7 @@ namespace FieldTakHub.Builder.Services
         private static Button _projBtnSourceDir;
         private static Button _supportCreatorBtn;
         private static Button _langSwitchBtn;
+        private static Button _shortcutsBtn;
 
         private static TextBlock _sidebarTitleBlock;
         private static TextBlock _sidebarSubtitleBlock;
@@ -104,6 +106,7 @@ namespace FieldTakHub.Builder.Services
                 };
                 win.ContentRendered += (_, __) => EnsureRootDockSidebar(win);
                 win.LayoutUpdated += (_, __) => EnforceRootSidebarColumnBounds(win);
+                BuilderShell.Attach(win);
             }
 
             EnsureRootDockSidebar(win);
@@ -298,7 +301,7 @@ namespace FieldTakHub.Builder.Services
             {
                 Title = BuilderI18n.T("Nowy Projekt — Ostrzeżenie o niezapisanych danych", "New Project — Unsaved Data Warning"),
                 Width = 540,
-                Height = 250,
+                Height = 285,
                 WindowStartupLocation = WindowStartupLocation.CenterOwner,
                 Owner = owner,
                 Background = new SolidColorBrush(Color.FromRgb(10, 24, 30)),
@@ -329,8 +332,8 @@ namespace FieldTakHub.Builder.Services
             stack.Children.Add(new TextBlock
             {
                 Text = BuilderI18n.T(
-                    "Wszystkie niezapisane dane we wszystkich modułach:\n• Generator Paczek (.ftak) — strony konfliktu, klucze PSK, częstotliwości\n• Generator Map 1:1 — granica terenu AO, punkty POI, trasy i ustawienia siatki\n• Generator OPORD — rozkazy dzienne, pogoda METOC, tabela składu i kryptonimy\nzostaną bezpowrotnie utracone i wyzerowane do stanu początkowego.",
-                    "All unsaved data across all modules:\n• Package Builder (.ftak) — factions, PSK keys, radio channels\n• 1:1 Map Generator — AO boundary, POI markers, routes and grid settings\n• OPORD Builder — daily plans, METOC weather, squad roster and codewords\nwill be permanently lost and reset to initial zero-state."),
+                    "Wszystkie niezapisane dane we wszystkich modułach:\n• Generator Paczek (.ftak) — strony konfliktu, klucze PSK, częstotliwości\n• Generator Map 1:1 — granica terenu AO, punkty POI, trasy i ustawienia siatki\n• Generator OPORD — rozkazy dzienne, pogoda METOC, tabela składu i kryptonimy\nzostaną bezpowrotnie utracone i wyzerowane do stanu początkowego.\nPliki z folderu source\\maps nie są usuwane — trafią do folderu archiwum\\ obok source.",
+                    "All unsaved data across all modules:\n• Package Builder (.ftak) — factions, PSK keys, radio channels\n• 1:1 Map Generator — AO boundary, POI markers, routes and grid settings\n• OPORD Builder — daily plans, METOC weather, squad roster and codewords\nwill be permanently lost and reset to initial zero-state.\nFiles in source\\maps are not deleted — they are moved to the archiwum\\ folder next to source."),
                 Foreground = new SolidColorBrush(Color.FromRgb(215, 230, 238)),
                 FontSize = 11.5,
                 LineHeight = 17,
@@ -408,8 +411,8 @@ namespace FieldTakHub.Builder.Services
 
             if (userAction == 1)
             {
-                // Użytkownik wybrał "Zapisz obecny i utwórz nowy" — jeśli anuluje okno zapisu, przerywamy reset
-                bool savedOk = SaveProjectInteractiveWithResult(win);
+                // Użytkownik wybrał "Zapisz obecny i utwórz nowy" — do bieżącego pliku (bez pliku: okno zapisu); anulowanie przerywa reset
+                bool savedOk = SaveProjectQuick(win);
                 if (!savedOk) return;
             }
 
@@ -419,20 +422,9 @@ namespace FieldTakHub.Builder.Services
             // 1. Zapisz czysty stan zerowy (obejmujący zarówno Factions jak i puste mapState)
             string zeroPath = WriteCleanZeroStateDraftFile();
 
-            // 2. Wyczyść pliki tymczasowe mapy (GPX / KML / map_state.json) w source\maps
-            try
-            {
-                string sourceDir = TacticalConfigPanel.GetPrimarySourceDirectory(win);
-                string mapsDir = Path.Combine(sourceDir, "maps");
-                if (Directory.Exists(mapsDir))
-                {
-                    foreach (string mf in Directory.GetFiles(mapsDir, "*.*", SearchOption.AllDirectories))
-                    {
-                        try { File.Delete(mf); } catch { }
-                    }
-                }
-            }
-            catch { }
+            // 2. Mapy poprzedniego projektu z source\maps — do archiwum obok folderu source, nie do kosza:
+            //    mogą to być ręcznie dodane mapy offline, a usunięcie byłoby nieodwracalne.
+            ArchiveSourceMapsFolder(win);
 
             // 3. Zresetuj całkowicie Generator OPORD (pamięć, pliki opord_*.json oraz widok UI)
             OpordBuilderManager.ResetAllOpordsToZeroState(win);
@@ -461,17 +453,15 @@ namespace FieldTakHub.Builder.Services
 
             ResetMainWindowTextBoxesToZeroState(win);
 
-            if (_activeProjectFileLabel != null)
-            {
-                _activeProjectFileLabel.Text = BuilderI18n.T("Projekt: Nowy (Stan zerowy)", "Project: New (Zero-State)");
-            }
-
             // 5. Odśwież aktualnie otwarty moduł (np. jeśli użytkownik był na Mapie lub OPORD, od razu zobaczy wyzerowany ekran)
             SwitchActiveModule(win, _currentModule);
+            BuilderShell.MarkProjectReplaced();
         }
 
         public static void OpenProjectInteractive(Window win)
         {
+            if (!SaveOrDiscardBeforeReplacing(win)) return;
+
             var dlg = new OpenFileDialog
             {
                 Title = BuilderI18n.T("Otwórz projekt Field TAK Hub (.fthproj / .json)", "Open Field TAK Hub Project (.fthproj / .json)"),
@@ -505,10 +495,7 @@ namespace FieldTakHub.Builder.Services
                 SetPendingSidebarProjectPath("");
             }
 
-            if (_activeProjectFileLabel != null)
-            {
-                _activeProjectFileLabel.Text = BuilderI18n.T("Projekt: ", "Project: ") + Path.GetFileName(dlg.FileName);
-            }
+            RefreshProjectLabel();
 
             if (_currentModule == BuilderActiveModule.MapGenerator && _originalMapTabButton != null)
             {
@@ -524,6 +511,7 @@ namespace FieldTakHub.Builder.Services
             CollapseObsoleteBuilderModeSelector(updatedDescendants);
             RemoveDuplicateInnerSidebars(win, updatedDescendants);
             BuilderI18n.ApplyLanguageToVisualTree(win);
+            BuilderShell.MarkProjectReplaced();
         }
 
         private static void SetPendingSidebarProjectPath(string value)
@@ -587,6 +575,148 @@ namespace FieldTakHub.Builder.Services
             SaveProjectInteractiveWithResult(win);
         }
 
+        /// <summary>
+        /// Ctrl+S i przycisk „Zapisz projekt”: zapis do bieżącego pliku .fthproj bez pytania o nazwę.
+        /// Projekt bez pliku (albo plik zniknął z dysku) — zwykłe okno „Zapisz jako”.
+        /// </summary>
+        public static bool SaveProjectQuick(Window win)
+        {
+            string path = CurrentProjectFilePath;
+            if (string.IsNullOrWhiteSpace(path) || !File.Exists(path) || IsInternalDraftPath(path))
+                return SaveProjectInteractiveWithResult(win);
+
+            try { OpordBuilderManager.SaveAllOpordsToDisk(win); } catch { }
+            if (!TacticalConfigPanel.SaveDraftProjectToFile(win, path))
+            {
+                MessageBox.Show(win,
+                    BuilderI18n.T(
+                        "Nie udało się zapisać projektu do pliku:\n" + path + "\n\nZapisz go pod inną nazwą: Ctrl+Shift+S.",
+                        "Could not save the project to:\n" + path + "\n\nSave it under another name: Ctrl+Shift+S."),
+                    "Field TAK Hub Builder", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return false;
+            }
+            BuilderShell.MarkSaved();
+            return true;
+        }
+
+        /// <summary>
+        /// Przed otwarciem innego projektu: bieżący ma niezapisane zmiany — zapisać, porzucić czy zrezygnować.
+        /// Autozapis tu nie chroni: po otwarciu przechowuje już nowy projekt.
+        /// </summary>
+        private static bool SaveOrDiscardBeforeReplacing(Window win)
+        {
+            if (!BuilderShell.HasUnsavedChangesNow(win)) return true;
+            string name = string.IsNullOrWhiteSpace(CurrentProjectFilePath)
+                ? BuilderI18n.T("nowy projekt", "new project")
+                : Path.GetFileName(CurrentProjectFilePath);
+            var answer = MessageBox.Show(win,
+                BuilderI18n.T(
+                    "Projekt „" + name + "” ma niezapisane zmiany.\n\nZapisać je przed otwarciem innego projektu?",
+                    "The project “" + name + "” has unsaved changes.\n\nSave them before opening another project?"),
+                "Field TAK Hub Builder", MessageBoxButton.YesNoCancel, MessageBoxImage.Warning);
+            if (answer == MessageBoxResult.Cancel || answer == MessageBoxResult.None) return false;
+            return answer != MessageBoxResult.Yes || SaveProjectQuick(win);
+        }
+
+        /// <summary>Ctrl+Shift+S: zawsze pyta o plik.</summary>
+        public static bool SaveProjectAs(Window win) => SaveProjectInteractiveWithResult(win);
+
+        /// <summary>Po ponownym uruchomieniu: projekt z autozapisu sesji wraca do swojego pliku .fthproj.</summary>
+        internal static void RestoreProjectFilePath(string path)
+        {
+            if (string.IsNullOrWhiteSpace(path) || !File.Exists(path) || IsInternalDraftPath(path)) return;
+            CurrentProjectFilePath = path;
+            _hasUserLoadedProject = true;
+            TacticalConfigPanel.CurrentDraftProjectPath = path;
+            RefreshProjectLabel();
+        }
+
+        /// <summary>Robocze pliki Buildera w %LOCALAPPDATA%\FieldTakHub (stan zerowy) nie są plikiem projektu użytkownika.</summary>
+        private static bool IsInternalDraftPath(string path)
+        {
+            try
+            {
+                string appData = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "FieldTakHub");
+                string folder = Path.GetDirectoryName(Path.GetFullPath(path)) ?? "";
+                return string.Equals(Path.TrimEndingDirectorySeparator(folder), Path.TrimEndingDirectorySeparator(Path.GetFullPath(appData)), StringComparison.OrdinalIgnoreCase);
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        /// <summary>Nazwa projektu w pasku bocznym: plik, znacznik niezapisanych zmian (●) i podpowiedź z pełną ścieżką.</summary>
+        internal static void RefreshProjectLabel()
+        {
+            if (_activeProjectFileLabel == null) return;
+            bool english = BuilderShell.IsEnglish;
+            bool unsaved = BuilderShell.HasUnsavedChanges;
+            _activeProjectFileLabel.Text = ProjectTitleText.SidebarLabel(CurrentProjectFilePath, unsaved, english);
+            _activeProjectFileLabel.Foreground = unsaved ? BuilderShell.UnsavedBrush : TacticalConfigPanel.BrushAccent;
+            BuilderShell.SetLiveToolTip(_activeProjectFileLabel, ProjectTitleText.SidebarTooltip(CurrentProjectFilePath, unsaved, english));
+        }
+
+        /// <summary>
+        /// Przenosi pliki z source\maps do …\archiwum\maps_RRRRMMDD_GGMMSS obok folderu source (poza nim, więc nie trafiają
+        /// do kolejnych paczek). Plik, którego nie da się przenieść (np. otwarty w innym programie), zostaje na miejscu.
+        /// </summary>
+        private static string ArchiveSourceMapsFolder(Window win)
+        {
+            try
+            {
+                string sourceDir = TacticalConfigPanel.GetPrimarySourceDirectory(win);
+                string mapsDir = Path.Combine(sourceDir, "maps");
+                if (!Directory.Exists(mapsDir)) return "";
+                string[] files = Directory.GetFiles(mapsDir, "*.*", SearchOption.AllDirectories);
+                if (files.Length == 0) return "";
+
+                DateTime now = DateTime.Now;
+                string archiveDir = MapsArchive.FolderFor(sourceDir, now)
+                    ?? Path.Combine(
+                        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "FieldTakHub",
+                        MapsArchive.ArchiveFolderName, "maps_" + now.ToString("yyyyMMdd_HHmmss", CultureInfo.InvariantCulture));
+                foreach (string file in files)
+                {
+                    try
+                    {
+                        string target = Path.Combine(archiveDir, Path.GetRelativePath(mapsDir, file));
+                        Directory.CreateDirectory(Path.GetDirectoryName(target) ?? archiveDir);
+                        File.Move(file, target, false);
+                    }
+                    catch { }
+                }
+                return archiveDir;
+            }
+            catch
+            {
+                return "";
+            }
+        }
+
+        private const string ShortcutHintName = "FthShortcutHint";
+
+        /// <summary>Skrót klawiszowy wyszarzonym tekstem przy prawej krawędzi przycisku paska bocznego.</summary>
+        private static void AddShortcutHint(Button btn, string keys)
+        {
+            if (btn?.Content is not DockPanel row) return;
+            var hint = new TextBlock
+            {
+                Name = ShortcutHintName,
+                Tag = "DYNAMIC_NO_I18N",
+                Text = keys,
+                Foreground = new SolidColorBrush(Color.FromRgb(120, 155, 168)),
+                FontSize = 9.5,
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(6, 0, 0, 0)
+            };
+            DockPanel.SetDock(hint, Dock.Right);
+            // Przed etykietą: ostatnie dziecko DockPanelu wypełnia resztę miejsca, więc etykieta musi zostać na końcu.
+            row.Children.Insert(Math.Min(1, row.Children.Count), hint);
+        }
+
+        private static bool IsShortcutHint(TextBlock tb) => string.Equals(tb?.Name, ShortcutHintName, StringComparison.Ordinal);
+
         public static bool SaveProjectInteractiveWithResult(Window win)
         {
             try { TacticalConfigPanel.SaveSessionStateAuto(win); } catch { }
@@ -613,10 +743,7 @@ namespace FieldTakHub.Builder.Services
                     if (savedPath != beforePath || afterWrite > beforeWrite)
                     {
                         CurrentProjectFilePath = savedPath;
-                        if (_activeProjectFileLabel != null)
-                        {
-                            _activeProjectFileLabel.Text = BuilderI18n.T("Projekt: ", "Project: ") + Path.GetFileName(savedPath);
-                        }
+                        BuilderShell.MarkSaved();
                         return true;
                     }
                 }
@@ -701,10 +828,7 @@ namespace FieldTakHub.Builder.Services
                 File.WriteAllText(dlg.FileName, rootObj.ToJsonString(new JsonSerializerOptions { WriteIndented = true }), Encoding.UTF8);
                 TacticalConfigPanel.CurrentDraftProjectPath = dlg.FileName;
 
-                if (_activeProjectFileLabel != null)
-                {
-                    _activeProjectFileLabel.Text = BuilderI18n.T("Projekt: ", "Project: ") + Path.GetFileName(dlg.FileName);
-                }
+                BuilderShell.MarkSaved();
                 return true;
             }
 
@@ -1381,6 +1505,12 @@ private static void CaptureAndCollapseTopMenuBar(List<DependencyObject> allEleme
             _navBtnUsb = CreateSidebarNavButton(iconUsb, "Programator Płytek USB", () => SwitchActiveModule(win, BuilderActiveModule.UsbProgrammer));
             topStack.Children.Add(_navBtnUsb);
 
+            // Alt+1…4 — w tej samej kolejności co przyciski modułów (Ctrl+cyfra należy do zakładek generatora map).
+            AddShortcutHint(_navBtnPackages, ShellShortcuts.ModuleKeys(0));
+            AddShortcutHint(_navBtnMaps, ShellShortcuts.ModuleKeys(1));
+            AddShortcutHint(_navBtnOpord, ShellShortcuts.ModuleKeys(2));
+            AddShortcutHint(_navBtnUsb, ShellShortcuts.ModuleKeys(3));
+
             topStack.Children.Add(new Border
             {
                 Height = 1,
@@ -1400,9 +1530,7 @@ private static void CaptureAndCollapseTopMenuBar(List<DependencyObject> allEleme
 
             _activeProjectFileLabel = new TextBlock
             {
-                Text = string.IsNullOrEmpty(CurrentProjectFilePath)
-                    ? "Projekt: Nowy (Stan zerowy)"
-                    : ("Projekt: " + Path.GetFileName(CurrentProjectFilePath)),
+                Tag = "DYNAMIC_NO_I18N", // tekst i język ustawia RefreshProjectLabel
                 Foreground = TacticalConfigPanel.BrushAccent,
                 FontSize = 10.5,
                 FontWeight = FontWeights.SemiBold,
@@ -1410,6 +1538,7 @@ private static void CaptureAndCollapseTopMenuBar(List<DependencyObject> allEleme
                 Margin = new Thickness(4, 0, 4, 8)
             };
             topStack.Children.Add(_activeProjectFileLabel);
+            RefreshProjectLabel();
 
             _projBtnNew = CreateSidebarActionButton(
                 "M14,2H6A2,2 0 0,0 4,4V20A2,2 0 0,0 6,22H18A2,2 0 0,0 20,20V8L14,2M18,20H6V4H13V9H18V20M11,11V14H8V16H11V19H13V16H16V14H13V11H11Z",
@@ -1429,8 +1558,12 @@ private static void CaptureAndCollapseTopMenuBar(List<DependencyObject> allEleme
                 "M15,9H5V5H15M12,19A3,3 0 0,1 9,16A3,3 0 0,1 12,13A3,3 0 0,1 15,16A3,3 0 0,1 12,19M17,3H5C3.89,3 3,3.9 3,5V19A2,2 0 0,0 5,21H19A2,2 0 0,0 21,19V7L17,3Z",
                 "Zapisz projekt (.fthproj)",
                 "#2684FF",
-                () => SaveProjectInteractive(win));
+                () => SaveProjectQuick(win));
             topStack.Children.Add(_projBtnSave);
+
+            AddShortcutHint(_projBtnNew, ShellShortcuts.NewKeys);
+            AddShortcutHint(_projBtnOpen, ShellShortcuts.OpenKeys);
+            AddShortcutHint(_projBtnSave, ShellShortcuts.SaveKeys);
 
             _projBtnSourceDir = CreateSidebarActionButton(
                 "M10,4H4C2.89,4 2,4.89 2,6V18A2,2 0 0,0 4,20H20A2,2 0 0,0 22,18V8C22,6.89 21.1,6 20,6H12L10,4Z",
@@ -1449,6 +1582,14 @@ private static void CaptureAndCollapseTopMenuBar(List<DependencyObject> allEleme
             var bottomStack = new StackPanel { VerticalAlignment = VerticalAlignment.Bottom };
             DockPanel.SetDock(bottomStack, Dock.Bottom);
 
+            _shortcutsBtn = CreateSidebarActionButton(
+                "M2,6H22V18H2Z M5,9H7V11H5Z M9,9H11V11H9Z M13,9H15V11H13Z M17,9H19V11H17Z M7,14H17V16H7Z",
+                "Skróty klawiszowe",
+                "#8AA8A4",
+                () => BuilderShell.ShowShortcutSheet(win));
+            AddShortcutHint(_shortcutsBtn, ShellShortcuts.HelpKeys);
+            bottomStack.Children.Add(_shortcutsBtn);
+
             _supportCreatorBtn = CreateSidebarActionButton(
                 iconCoffee,
                 "☕ Wesprzyj twórcę",
@@ -1463,6 +1604,7 @@ private static void CaptureAndCollapseTopMenuBar(List<DependencyObject> allEleme
                 "#1FE0C5",
                 () => BuilderI18n.ToggleLanguage(win));
             bottomStack.Children.Add(_langSwitchBtn);
+            ApplyProjectButtonToolTips();
 
             _expandedSidebarContent.Children.Add(bottomStack);
             rootContainerGrid.Children.Add(_expandedSidebarContent);
@@ -1480,10 +1622,10 @@ private static void CaptureAndCollapseTopMenuBar(List<DependencyObject> allEleme
             expandArrowBtn.Margin = new Thickness(0, 0, 0, 14);
             _collapsedSidebarStrip.Children.Add(expandArrowBtn);
 
-            _miniBtnPackages = CreateCollapsedIconOnlyButton(iconPkg, "Generator Paczek (.ftak)", () => SwitchActiveModule(win, BuilderActiveModule.PackageGenerator));
-            _miniBtnMaps = CreateCollapsedIconOnlyButton(iconMap, "Generator Map 1:1", () => SwitchActiveModule(win, BuilderActiveModule.MapGenerator));
-            _miniBtnOpord = CreateCollapsedIconOnlyButton(iconOpord, "Generator OPORD", () => SwitchActiveModule(win, BuilderActiveModule.OpordGenerator));
-            _miniBtnUsb = CreateCollapsedIconOnlyButton(iconUsb, "Programator Płytek USB", () => SwitchActiveModule(win, BuilderActiveModule.UsbProgrammer));
+            _miniBtnPackages = CreateCollapsedIconOnlyButton(iconPkg, "Generator Paczek (.ftak) — Alt+1", () => SwitchActiveModule(win, BuilderActiveModule.PackageGenerator));
+            _miniBtnMaps = CreateCollapsedIconOnlyButton(iconMap, "Generator Map 1:1 — Alt+2", () => SwitchActiveModule(win, BuilderActiveModule.MapGenerator));
+            _miniBtnOpord = CreateCollapsedIconOnlyButton(iconOpord, "Generator OPORD — Alt+3", () => SwitchActiveModule(win, BuilderActiveModule.OpordGenerator));
+            _miniBtnUsb = CreateCollapsedIconOnlyButton(iconUsb, "Programator Płytek USB — Alt+4", () => SwitchActiveModule(win, BuilderActiveModule.UsbProgrammer));
             _miniBtnSupport = CreateCollapsedIconOnlyButton(iconCoffee, "☕ Wesprzyj twórcę", () => InvokeSupportCreatorAction(win));
 
             _collapsedSidebarStrip.Children.Add(_miniBtnPackages);
@@ -1670,6 +1812,7 @@ private static void CaptureAndCollapseTopMenuBar(List<DependencyObject> allEleme
 
             foreach (var tb in GetAllVisualDescendants(btn).OfType<TextBlock>())
             {
+                if (IsShortcutHint(tb)) continue; // skrót zostaje wyszarzony
                 tb.Foreground = isActive ? TacticalConfigPanel.BrushAccent : Brushes.White;
             }
         }
@@ -1692,19 +1835,29 @@ private static void CaptureAndCollapseTopMenuBar(List<DependencyObject> allEleme
             SetButtonLabel(_projBtnSourceDir, BuilderI18n.T("Folder wspólny Stron", "Source Folder (APK / Maps)"));
             SetButtonLabel(_supportCreatorBtn, BuilderI18n.T("☕ Wesprzyj twórcę", "☕ Support Creator"));
             SetButtonLabel(_langSwitchBtn, BuilderI18n.T("Język UI: Polski (PL -> ENG)", "UI Language: English (ENG -> PL)"));
+            SetButtonLabel(_shortcutsBtn, BuilderI18n.T("Skróty klawiszowe", "Keyboard shortcuts"));
 
-            if (_activeProjectFileLabel != null)
-            {
-                _activeProjectFileLabel.Text = string.IsNullOrEmpty(CurrentProjectFilePath)
-                    ? BuilderI18n.T("Projekt: Nowy (Stan zerowy)", "Project: New (Zero-State)")
-                    : (BuilderI18n.T("Projekt: ", "Project: ") + Path.GetFileName(CurrentProjectFilePath));
-            }
+            ApplyProjectButtonToolTips();
+            BuilderShell.RefreshIndicators();
+        }
+
+        /// <summary>Podpowiedzi przycisków projektu (obiekty ToolTip — zmieniają się z językiem).</summary>
+        private static void ApplyProjectButtonToolTips()
+        {
+            BuilderShell.SetLiveToolTip(_projBtnSave, BuilderI18n.T(
+                "Ctrl+S — zapisz do bieżącego pliku .fthproj (projekt bez pliku: wybór nazwy)\nCtrl+Shift+S — zapisz jako nowy plik",
+                "Ctrl+S — save to the current .fthproj file (a project without a file asks for a name)\nCtrl+Shift+S — save as a new file"));
+            BuilderShell.SetLiveToolTip(_projBtnOpen, BuilderI18n.T("Otwórz projekt .fthproj — Ctrl+O", "Open a .fthproj project — Ctrl+O"));
+            BuilderShell.SetLiveToolTip(_projBtnNew, BuilderI18n.T(
+                "Nowy projekt — Ctrl+N (najpierw zapytam, czy zapisać bieżący)",
+                "New project — Ctrl+N (you will be asked whether to save the current one first)"));
+            BuilderShell.SetLiveToolTip(_shortcutsBtn, BuilderI18n.T("Wszystkie skróty klawiszowe — F1", "All keyboard shortcuts — F1"));
         }
 
         private static void SetButtonLabel(Button btn, string text)
         {
             if (btn == null) return;
-            var tb = GetAllVisualDescendants(btn).OfType<TextBlock>().FirstOrDefault();
+            var tb = GetAllVisualDescendants(btn).OfType<TextBlock>().FirstOrDefault(t => !IsShortcutHint(t));
             if (tb != null) tb.Text = text;
         }
 

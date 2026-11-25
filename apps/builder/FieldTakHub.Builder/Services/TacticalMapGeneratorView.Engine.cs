@@ -298,6 +298,11 @@ namespace FieldTakHub.Builder.Services
         private static UIElement _originalWindowContent;
         private static Border _fullScreenOverlay, _sheetFrameBorder;
         private static Grid _viewportHostGrid, _mapCompositeGrid;
+        /// <summary>
+        /// Obszar podglądu dzieli się na trzy pasy: u góry narzędzia i opis arkusza, w środku arkusz, na dole podpowiedź
+        /// narzędzia i współrzędne kursora. Arkusz dostaje tylko środkowy pas, więc nic go nie zasłania.
+        /// </summary>
+        private static Grid _sheetAreaHost, _mapTopBand, _mapBottomBand;
         private static Canvas _tileCanvas, _lidarTileCanvas, _interactiveCanvas;
         private static FastTacticalOverlayRenderer _fastOverlayRenderer;
         private static Rectangle _dimmerRect;
@@ -335,6 +340,8 @@ namespace FieldTakHub.Builder.Services
         private static string _subGridDivision = "Co 33 m (Keypad 1-9)";
         private static string _gridLabelsMode = "MGRS + Ćwiartki/Keypad";
         private static string _labelBgStyle = "Kaseton (Kolor tła RGB)";
+        /// <summary>Krawędzie arkusza z opisami siatki (MGRS, listwy sektorów, WGS84) — zakładka Siatka.</summary>
+        private static MapEditor.GridEdges _gridLabelEdges = MapEditor.GridLabelEdges.Default;
         private static double _gridThicknessMultiplier = 1.0, _fontScaleMultiplier = 1.0;
         private static double _mainGridOpacity = 0.85, _subGridOpacity = 0.85, _subLabelBgOpacity = 0.82;
         private static double _mapBrightnessBoost = 0.0, _mapDimmerOpacity = 0.0, _lidarOpacity = 0.55;
@@ -444,7 +451,7 @@ namespace FieldTakHub.Builder.Services
 
         private static void RenderMetricSectorGridAndRulersOnContext(DrawingContext dc, double w, double h)
         {
-            if (!_enableSectorGridOverlay && !_coordSystem.StartsWith("Sektorowa")) return;
+            if (!_enableSectorGridOverlay && !IsSectorCoordMode()) return;
             if (_mainGridOpacity <= 0.02) return;
 
             double metersPerPixel = GetExactMetersPerPixel();
@@ -566,12 +573,18 @@ namespace FieldTakHub.Builder.Services
                 dc.DrawLine(secMainPen, new Point(0, sy), new Point(w, sy));
             }
 
+            // Listwy A, B, C / 1, 2, 3 stoją przy krawędziach wybranych w „Opisy przy krawędziach arkusza”.
+            var rulerEdges = _showSectorEdgeRulers ? _gridLabelEdges : MapEditor.GridEdges.None;
+            bool rulerTop = (rulerEdges & MapEditor.GridEdges.Top) != 0, rulerBottom = (rulerEdges & MapEditor.GridEdges.Bottom) != 0;
+            bool rulerLeft = (rulerEdges & MapEditor.GridEdges.Left) != 0, rulerRight = (rulerEdges & MapEditor.GridEdges.Right) != 0;
+
             // 3. Kody sektorow wewnatrz pol (A1, B1, C2...)
             if (_showSectorCornerCodes && sectorPx >= 34.0)
             {
                 double codeFontSz = Math.Clamp(9.8 * _fontScaleMultiplier, 7.5, 16.0);
-                double offsetTop = _showSectorEdgeRulers ? 22.0 : 4.0;
-                double offsetLeft = _showSectorEdgeRulers ? 26.0 : 6.0;
+                double offsetTop = rulerTop ? 22.0 : 4.0;
+                double offsetLeft = rulerLeft ? 26.0 : 6.0;
+                double reserveRight = rulerRight ? 22.0 : 0.0, reserveBottom = rulerBottom ? 19.0 : 0.0;
 
                 for (int r = 0; r < rows; r++)
                 {
@@ -585,7 +598,7 @@ namespace FieldTakHub.Builder.Services
                         string colLetStr = GetSectorColumnLetters(c);
                         double bx = x0 + (c == 0 ? offsetLeft : 6.0);
                         double by = y0 + (r == 0 ? offsetTop : 4.0);
-                        if (bx + 24 < w && by + 16 < h)
+                        if (bx + 24 < w - reserveRight && by + 16 < h - reserveBottom)
                         {
                             DrawFastBadgeOnContext(dc, colLetStr + rowNumStr, bx, by, secMainBrush, codeFontSz, _mainGridOpacity, $"SECCODE_{secHex}_{_mainGridOpacity:0.00}");
                         }
@@ -593,8 +606,8 @@ namespace FieldTakHub.Builder.Services
                 }
             }
 
-            // 4. Paski podzialki poziomej (A, B, C...) u gory oraz pionowej (1, 2, 3...) po lewej stronie arkusza mapy
-            if (_showSectorEdgeRulers)
+            // 4. Listwy podzialki: pozioma (A, B, C...) u gory i/lub na dole, pionowa (1, 2, 3...) po lewej i/lub prawej stronie arkusza
+            if (rulerEdges != MapEditor.GridEdges.None)
             {
                 const double topBarH = 19.0;
                 const double leftBarW = 22.0;
@@ -605,43 +618,58 @@ namespace FieldTakHub.Builder.Services
                 double rulerFontSz = Math.Clamp(9.5 * _fontScaleMultiplier, 7.5, 13.0);
                 string rulerCacheKey = $"SECRULER_TXT_{secHex}_{_mainGridOpacity:0.00}";
 
-                // Gorna listwa pozioma: A, B, C, D...
-                for (int c = 0; c < cols; c++)
+                // Listwy poziome: A, B, C, D... (gorna i/lub dolna)
+                foreach (bool atBottom in new[] { false, true })
                 {
-                    double x0 = c * sectorPx;
-                    if (x0 >= w) break;
-                    double segW = Math.Min(sectorPx, w - x0);
-                    if (segW < 12) continue;
+                    if (!(atBottom ? rulerBottom : rulerTop)) continue;
+                    double barY = atBottom ? Math.Max(0.0, h - topBarH) : 0.0;
+                    for (int c = 0; c < cols; c++)
+                    {
+                        double x0 = c * sectorPx;
+                        if (x0 >= w) break;
+                        double segW = Math.Min(sectorPx, w - x0);
+                        if (segW < 12) continue;
 
-                    dc.DrawRectangle((c % 2 == 0) ? barBgEven : barBgOdd, barBorderPen, new Rect(x0, 0, segW, topBarH));
-                    string colLet = GetSectorColumnLetters(c);
-                    var ft = GetCachedGlyph(colLet, rulerFontSz, secMainBrush, rulerCacheKey);
-                    double tx = x0 + (segW - ft.Width) / 2.0;
-                    double ty = (topBarH - ft.Height) / 2.0;
-                    if (tx >= x0 + 1)
-                        dc.DrawText(ft, new Point(tx, ty));
+                        dc.DrawRectangle((c % 2 == 0) ? barBgEven : barBgOdd, barBorderPen, new Rect(x0, barY, segW, topBarH));
+                        string colLet = GetSectorColumnLetters(c);
+                        var ft = GetCachedGlyph(colLet, rulerFontSz, secMainBrush, rulerCacheKey);
+                        double tx = x0 + (segW - ft.Width) / 2.0;
+                        double ty = barY + (topBarH - ft.Height) / 2.0;
+                        if (tx >= x0 + 1)
+                            dc.DrawText(ft, new Point(tx, ty));
+                    }
                 }
 
-                // Lewa listwa pionowa: 1, 2, 3, 4...
-                for (int r = 0; r < rows; r++)
+                // Listwy pionowe: 1, 2, 3, 4... (lewa i/lub prawa)
+                foreach (bool atRight in new[] { false, true })
                 {
-                    double y0 = r * sectorPx;
-                    if (y0 >= h) break;
-                    double segH = Math.Min(sectorPx, h - y0);
-                    if (segH < 12) continue;
+                    if (!(atRight ? rulerRight : rulerLeft)) continue;
+                    double barX = atRight ? Math.Max(0.0, w - leftBarW) : 0.0;
+                    for (int r = 0; r < rows; r++)
+                    {
+                        double y0 = r * sectorPx;
+                        if (y0 >= h) break;
+                        double segH = Math.Min(sectorPx, h - y0);
+                        if (segH < 12) continue;
 
-                    dc.DrawRectangle((r % 2 == 0) ? barBgEven : barBgOdd, barBorderPen, new Rect(0, y0, leftBarW, segH));
-                    string rowNum = (r + 1).ToString();
-                    var ft = GetCachedGlyph(rowNum, rulerFontSz, secMainBrush, rulerCacheKey);
-                    double tx = (leftBarW - ft.Width) / 2.0;
-                    double ty = y0 + (segH - ft.Height) / 2.0;
-                    if (ty >= y0 + 1)
-                        dc.DrawText(ft, new Point(tx, ty));
+                        dc.DrawRectangle((r % 2 == 0) ? barBgEven : barBgOdd, barBorderPen, new Rect(barX, y0, leftBarW, segH));
+                        string rowNum = (r + 1).ToString();
+                        var ft = GetCachedGlyph(rowNum, rulerFontSz, secMainBrush, rulerCacheKey);
+                        double tx = barX + (leftBarW - ft.Width) / 2.0;
+                        double ty = y0 + (segH - ft.Height) / 2.0;
+                        if (ty >= y0 + 1)
+                            dc.DrawText(ft, new Point(tx, ty));
+                    }
                 }
 
+                // Narozniki, w ktorych spotykaja sie dwie listwy
                 if (w > 80 && h > 80)
                 {
-                    dc.DrawRectangle(GetCachedRgbaBrush(240, 8, 22, 28), barBorderPen, new Rect(0, 0, leftBarW, topBarH));
+                    var cornerBrush = GetCachedRgbaBrush(240, 8, 22, 28);
+                    if (rulerTop && rulerLeft) dc.DrawRectangle(cornerBrush, barBorderPen, new Rect(0, 0, leftBarW, topBarH));
+                    if (rulerTop && rulerRight) dc.DrawRectangle(cornerBrush, barBorderPen, new Rect(w - leftBarW, 0, leftBarW, topBarH));
+                    if (rulerBottom && rulerLeft) dc.DrawRectangle(cornerBrush, barBorderPen, new Rect(0, h - topBarH, leftBarW, topBarH));
+                    if (rulerBottom && rulerRight) dc.DrawRectangle(cornerBrush, barBorderPen, new Rect(w - leftBarW, h - topBarH, leftBarW, topBarH));
                 }
             }
         }
@@ -819,7 +847,59 @@ namespace FieldTakHub.Builder.Services
             haloRow.Children.Add(TacticalConfigPanel.FieldBox("Obrys linii (Halo):", TacticalConfigPanel.ComboCtrl(new[] { "Pe\u0142ny czarny obrys", "P\u00F3\u0142przezroczysty obrys", "Brak obrysu" }, _gridHaloMode, win, v => { _gridHaloMode = v; _fastOverlayRenderer?.InvalidateVisual(); })));
             haloRow.Children.Add(TacticalConfigPanel.FieldBox("Styl opis\u00F3w i cyfr:", TacticalConfigPanel.ComboCtrl(new[] { "Kaseton (Kolor t\u0142a RGB)", "Tylko obrys Halo", "Czysty tekst" }, _labelBgStyle, win, v => { _labelBgStyle = v; _fastOverlayRenderer?.InvalidateVisual(); })));
             look.Children.Add(haloRow);
+            look.Children.Add(BuildGridLabelEdgesRow());
             return (sec2, look);
+        }
+
+        /// <summary>
+        /// „Opisy przy krawędziach arkusza”: cztery przełączniki, dowolne połączenie. Dotyczy numerów linii MGRS,
+        /// listew sektorów (A, B, C / 1, 2, 3) i stopni WGS84 — na ekranie i we wszystkim, co zapisuje mapę z edytora.
+        /// </summary>
+        private static UIElement BuildGridLabelEdgesRow()
+        {
+            var row = new UniformGrid { Columns = 4, Margin = new Thickness(0, 2, 0, 2) };
+            foreach (var option in MapEditor.GridLabelEdges.Options)
+            {
+                var edge = option.Edge;
+                var chk = new CheckBox
+                {
+                    Content = option.Glyph + " " + option.Label,
+                    IsChecked = (_gridLabelEdges & edge) != 0,
+                    Foreground = Brushes.White,
+                    FontSize = 10,
+                    Margin = new Thickness(0, 2, 4, 0),
+                    Cursor = Cursors.Hand,
+                    ToolTip = $"Numery linii siatki (MGRS), listwy sektorów i stopnie WGS84 przy {option.Where} krawędzi arkusza"
+                };
+                chk.Checked += (s, e) => SetGridLabelEdge(edge, true);
+                chk.Unchecked += (s, e) => SetGridLabelEdge(edge, false);
+                row.Children.Add(chk);
+            }
+            return TacticalConfigPanel.FieldBox("Opisy przy krawędziach arkusza (dowolne połączenie):", row);
+        }
+
+        /// <summary>Wybrana siatka sektorowa — pozycja „Siatka Sektorowa (A1, B2, C3...)” (nie zaczyna się od „Sektorowa”).</summary>
+        private static bool IsSectorCoordMode() => _coordSystem != null && _coordSystem.Contains("Sektorowa");
+
+        /// <summary>Szerokość pasa opisów siatki przy krawędzi arkusza (0 — przy tej krawędzi nie ma opisów).</summary>
+        private static double GridLabelReserve(MapEditor.GridEdges edge)
+        {
+            bool noGrid = string.IsNullOrEmpty(_coordSystem) || _coordSystem.StartsWith("Brak");
+            bool wgs84 = !noGrid && IsWgs84ModeActive();
+            bool sectorMode = !noGrid && IsSectorCoordMode();
+            bool visibleMain = _mainGridOpacity > 0.02;
+            bool mgrs = visibleMain && !noGrid && !wgs84 && !sectorMode;
+            bool sectorRulers = visibleMain && _showSectorEdgeRulers && (_enableSectorGridOverlay || sectorMode);
+            return MapEditor.GridLabelEdges.Reserve(_gridLabelEdges, edge, mgrs, sectorRulers, wgs84, _fontScaleMultiplier);
+        }
+
+        private static void SetGridLabelEdge(MapEditor.GridEdges edge, bool enabled)
+        {
+            var next = MapEditor.GridLabelEdges.With(_gridLabelEdges, edge, enabled);
+            if (next == _gridLabelEdges) return;
+            _gridLabelEdges = next;
+            if (!_isRebuildingMapControls) TacticalConfigPanel.MarkDirty();
+            RedrawVectorsOnly();
         }
 
         /// <summary>Jasność podkładu — zakładka „Mapa”, karta „Podkład mapy” (wcześniej w sekcji siatki).</summary>
@@ -1325,14 +1405,17 @@ namespace FieldTakHub.Builder.Services
             dc.DrawText(ft, new Point(x, y));
         }
 
-        private static void DrawCartographicLineLabelOnContext(DrawingContext dc, string text, double lineCoord, bool isVerticalLine, double canvasW, double canvasH, Brush fg, double fontSize, double opacity, string cachePrefix)
+        /// <summary>
+        /// Numer linii siatki przy krawędzi arkusza <paramref name="edge"/>. Opis, który wszedłby w narożnik zajęty przez
+        /// pas opisów sąsiedniej krawędzi (<paramref name="sideBand"/>, <paramref name="endBand"/>), jest pomijany.
+        /// </summary>
+        private static void DrawCartographicLineLabelOnContext(DrawingContext dc, string text, double lineCoord, MapEditor.GridEdges edge, double canvasW, double canvasH,
+            MapEditor.GridEdges enabledEdges, double sideBand, double endBand, Brush fg, double fontSize, double opacity, string cachePrefix)
         {
             if (string.IsNullOrEmpty(text) || opacity <= 0.02) return;
             var ft = GetCachedGlyph(text, fontSize, fg, cachePrefix);
-            double drawX = isVerticalLine ? (lineCoord - ft.Width / 2.0) : 6.0;
-            double drawY = isVerticalLine ? 6.0 : (lineCoord - ft.Height / 2.0);
-            if (isVerticalLine && (drawX < 2.0 || drawX + ft.Width > canvasW - 2.0)) return;
-            if (!isVerticalLine && (drawY < 2.0 || drawY + ft.Height > canvasH - 2.0)) return;
+            var (drawX, drawY) = MapEditor.GridLabelEdges.LabelOrigin(edge, lineCoord, ft.Width, ft.Height, canvasW, canvasH);
+            if (!MapEditor.GridLabelEdges.FitsAlongEdge(edge, drawX, drawY, ft.Width, ft.Height, canvasW, canvasH, enabledEdges, sideBand, endBand)) return;
 
             byte bgAlpha = (byte)Math.Clamp((int)Math.Round((_labelBgStyle.StartsWith("Kaseton") ? 225 : 165) * opacity), 0, 245);
             var bgBrush = GetCachedRgbaBrush(bgAlpha, 6, 14, 18);
@@ -1451,7 +1534,7 @@ namespace FieldTakHub.Builder.Services
                 var subHaloPen = GetCachedSolidPen($"SHP_{subHaloAlpha}", subHaloBrush, subThick + 1.2);
                 var subPen = new Pen(subLineBrush, subThick) { DashStyle = new DashStyle(new double[] { 4, 2 }, 0) }; subPen.Freeze();
 
-                if (_coordSystem.StartsWith("Sektorowa"))
+                if (IsSectorCoordMode())
                 {
                     // Renderowane przez metryczny silnik podzialki sektorowej RenderMetricSectorGridAndRulersOnContext
                 }
@@ -1544,17 +1627,25 @@ namespace FieldTakHub.Builder.Services
                         string mainCacheKey = $"MAIN_{_mainGridColorHex}_{_mainGridOpacity:0.00}";
                         double mainFontSz = 9.5 * _fontScaleMultiplier;
 
+                        // Pasy opisów przy krawędziach (zakładka Siatka → „Opisy przy krawędziach arkusza”); narożniki zostają wolne.
+                        var labelEdges = _gridLabelEdges;
+                        var bandProbe = GetCachedGlyph("000", mainFontSz, mainBrush, mainCacheKey);
+                        double sideBand = MapEditor.GridLabelEdges.Inset + bandProbe.Width + 12.0;
+                        double endBand = MapEditor.GridLabelEdges.Inset + bandProbe.Height + 6.0;
+                        bool labelTop = (labelEdges & MapEditor.GridEdges.Top) != 0, labelBottom = (labelEdges & MapEditor.GridEdges.Bottom) != 0;
+                        bool labelLeft = (labelEdges & MapEditor.GridEdges.Left) != 0, labelRight = (labelEdges & MapEditor.GridEdges.Right) != 0;
+
                         for (double east = firstEasting; east <= lastEasting; east += effectiveStepMeters)
                         {
                             Point pTop = UtmToScreenPt(east, lastNorthing), pBot = UtmToScreenPt(east, firstNorthing);
                             if (Math.Max(pTop.X, pBot.X) < -20 || Math.Min(pTop.X, pBot.X) > w + 20) continue;
                             if (useHalo) dc.DrawLine(mainHaloPen, pTop, pBot);
                             dc.DrawLine(mainPen, pTop, pBot);
-                            if (UtmGrid2DProjector.TryGetVerticalLineLabelPoint(pTop, pBot, 14.0, w, out double labelX))
-                            {
-                                int mgrsH = (((int)Math.Round(east / 100.0)) % 1000 + 1000) % 1000;
-                                DrawCartographicLineLabelOnContext(dc, $"{mgrsH:D3}", labelX, true, w, h, mainBrush, mainFontSz, _mainGridOpacity, mainCacheKey);
-                            }
+                            int mgrsE = (((int)Math.Round(east / 100.0)) % 1000 + 1000) % 1000;
+                            if (labelTop && UtmGrid2DProjector.TryGetVerticalLineLabelPoint(pTop, pBot, 14.0, w, out double topX))
+                                DrawCartographicLineLabelOnContext(dc, $"{mgrsE:D3}", topX, MapEditor.GridEdges.Top, w, h, labelEdges, sideBand, endBand, mainBrush, mainFontSz, _mainGridOpacity, mainCacheKey);
+                            if (labelBottom && UtmGrid2DProjector.TryGetVerticalLineLabelPoint(pTop, pBot, h - 14.0, w, out double bottomX))
+                                DrawCartographicLineLabelOnContext(dc, $"{mgrsE:D3}", bottomX, MapEditor.GridEdges.Bottom, w, h, labelEdges, sideBand, endBand, mainBrush, mainFontSz, _mainGridOpacity, mainCacheKey);
                         }
 
                         for (double north = firstNorthing; north <= lastNorthing; north += effectiveStepMeters)
@@ -1563,11 +1654,11 @@ namespace FieldTakHub.Builder.Services
                             if (Math.Max(pLeft.Y, pRight.Y) < -20 || Math.Min(pLeft.Y, pRight.Y) > h + 20) continue;
                             if (useHalo) dc.DrawLine(mainHaloPen, pLeft, pRight);
                             dc.DrawLine(mainPen, pLeft, pRight);
-                            if (UtmGrid2DProjector.TryGetHorizontalLineLabelPoint(pLeft, pRight, 18.0, h, out double labelY))
-                            {
-                                int mgrsH = (((int)Math.Round(north / 100.0)) % 1000 + 1000) % 1000;
-                                DrawCartographicLineLabelOnContext(dc, $"{mgrsH:D3}", labelY, false, w, h, mainBrush, mainFontSz, _mainGridOpacity, mainCacheKey);
-                            }
+                            int mgrsN = (((int)Math.Round(north / 100.0)) % 1000 + 1000) % 1000;
+                            if (labelLeft && UtmGrid2DProjector.TryGetHorizontalLineLabelPoint(pLeft, pRight, 18.0, h, out double leftY))
+                                DrawCartographicLineLabelOnContext(dc, $"{mgrsN:D3}", leftY, MapEditor.GridEdges.Left, w, h, labelEdges, sideBand, endBand, mainBrush, mainFontSz, _mainGridOpacity, mainCacheKey);
+                            if (labelRight && UtmGrid2DProjector.TryGetHorizontalLineLabelPoint(pLeft, pRight, w - 18.0, h, out double rightY))
+                                DrawCartographicLineLabelOnContext(dc, $"{mgrsN:D3}", rightY, MapEditor.GridEdges.Right, w, h, labelEdges, sideBand, endBand, mainBrush, mainFontSz, _mainGridOpacity, mainCacheKey);
                         }
                     }
                 }
@@ -1596,7 +1687,7 @@ namespace FieldTakHub.Builder.Services
                 ["centerLat"] = _centerLat, ["centerLon"] = _centerLon, ["zoom"] = _zoom, ["scale"] = _targetScaleDenominator,
                 ["orientation"] = _sheetOrientation, ["sheetFormat"] = _selectedSheet?.Name ?? "", ["sheetWidthMm"] = _selectedSheet?.WidthMm ?? 0, ["sheetHeightMm"] = _selectedSheet?.HeightMm ?? 0, ["layerId"] = _activeLayer?.Id ?? "google_hyb",
                 ["showLidar"] = _showLidarSingleWms, ["lidarOpacity"] = _lidarOpacity, ["coordSystem"] = _coordSystem, ["subGridDivision"] = _subGridDivision,
-                ["gridLabelsMode"] = _gridLabelsMode, ["labelBgStyle"] = _labelBgStyle, ["gridThickness"] = _gridThicknessMultiplier, ["fontScale"] = _fontScaleMultiplier,
+                ["gridLabelsMode"] = _gridLabelsMode, ["labelBgStyle"] = _labelBgStyle, [MapEditor.GridLabelEdges.JsonKey] = MapEditor.GridLabelEdges.Serialize(_gridLabelEdges), ["gridThickness"] = _gridThicknessMultiplier, ["fontScale"] = _fontScaleMultiplier,
                 ["mainGridOpacity"] = _mainGridOpacity, ["subGridOpacity"] = _subGridOpacity, ["subLabelBgOpacity"] = _subLabelBgOpacity,
                 ["mapBrightnessBoost"] = _mapBrightnessBoost, ["mapDimmerOpacity"] = _mapDimmerOpacity,
                 ["mainGridColorHex"] = _mainGridColorHex, ["subGridLineColorHex"] = _subGridLineColorHex, ["subLabelTextColorHex"] = _subLabelTextColorHex, ["subLabelBgColorHex"] = _subLabelBgColorHex,
@@ -1647,6 +1738,8 @@ namespace FieldTakHub.Builder.Services
                 if (root["subGridDivision"] != null) _subGridDivision = root["subGridDivision"].ToString();
                 if (root["gridLabelsMode"] != null) _gridLabelsMode = root["gridLabelsMode"].ToString();
                 if (root["labelBgStyle"] != null) _labelBgStyle = root["labelBgStyle"].ToString();
+                // Projekt bez tego ustawienia (zapisany wcześniej) — opisy przy wszystkich czterech krawędziach.
+                _gridLabelEdges = MapEditor.GridLabelEdges.Parse(root[MapEditor.GridLabelEdges.JsonKey]?.ToString(), MapEditor.GridLabelEdges.Default);
                 if (double.TryParse(root["gridThickness"]?.ToString(), NumberStyles.Any, CultureInfo.InvariantCulture, out double gt)) _gridThicknessMultiplier = gt;
                 if (double.TryParse(root["fontScale"]?.ToString(), NumberStyles.Any, CultureInfo.InvariantCulture, out double fs)) _fontScaleMultiplier = fs;
                 if (double.TryParse(root["mainGridOpacity"]?.ToString(), NumberStyles.Any, CultureInfo.InvariantCulture, out double mgo)) _mainGridOpacity = mgo;

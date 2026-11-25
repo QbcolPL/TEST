@@ -62,7 +62,11 @@ namespace FieldTakHub.Builder.Services
             ["Usuń"] = "Delete",
             ["Dodaj"] = "Add",
 
+            ["Skróty klawiszowe"] = "Keyboard shortcuts",
+
             // Generator Paczek (.ftak)
+            ["Ostatnie paczki .ftak"] = "Latest .ftak packages",
+            ["📂 Otwórz folder paczek"] = "📂 Open packages folder",
             ["➕ Dodaj stronę"] = "➕ Add Faction",
             ["🗑 Usuń stronę"] = "🗑 Remove Faction",
             ["🗑️ Usuń stronę"] = "🗑️ Remove Faction",

@@ -122,7 +122,8 @@
   <sys:String x:Key="UI_Status">Package status</sys:String>
   <sys:String x:Key="UI_Ready">Ready to generate</sys:String>
   <sys:String x:Key="UI_StatusHelp">Review the elements before generating the package.</sys:String>
-  <sys:String x:Key="UI_Generated">Generated file</sys:String>
+  <sys:String x:Key="UI_Generated">Latest .ftak packages</sys:String>
+  <sys:String x:Key="UI_OpenPackagesFolder">📂 Open packages folder</sys:String>
   <sys:String x:Key="UI_Qr">QR code</sys:String>
   <sys:String x:Key="UI_QrHelp">Generated after the package is created</sys:String>
 

@@ -22,6 +22,7 @@ using System.Windows.Markup;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
+using FieldTakHub.Builder.Services.Shell;
 using Microsoft.Win32;
 
 namespace FieldTakHub.Builder.Services
@@ -317,6 +318,13 @@ namespace FieldTakHub.Builder.Services
             return _factions.Select(f => (f.Name, f.ChannelName, f.ColorHex, f.Psk)).ToList();
         }
 
+        /// <summary>Strony konfliktu z adresem serwera TAK (pusty — tylko mesh) — karta „Status paczki”.</summary>
+        internal static List<FactionStatusEntry> GetFactionStatusEntries()
+        {
+            EnsureDefaultFactions();
+            return _factions.Select(f => new FactionStatusEntry(f.Name ?? "", f.OtsHost ?? "")).ToList();
+        }
+
         private static void EnsureDefaultFactions()
         {
             if (_factions.Count == 0)
@@ -576,6 +584,7 @@ namespace FieldTakHub.Builder.Services
             try
             {
                 var jsonObj = BuildFullWorkspaceStateJson(win ?? _mainHostWindow);
+                BuilderShell.WriteSessionExtras(jsonObj);
                 var paths = GetSessionStateFilePaths();
                 _ = Task.Run(() =>
                 {
@@ -606,6 +615,7 @@ namespace FieldTakHub.Builder.Services
             try
             {
                 var jsonObj = BuildFullWorkspaceStateJson(win ?? _mainHostWindow);
+                BuilderShell.WriteSessionExtras(jsonObj);
                 string payload = jsonObj.ToJsonString(IndentedJsonOptions);
                 foreach (string path in GetSessionStateFilePaths())
                 {
@@ -630,6 +640,7 @@ namespace FieldTakHub.Builder.Services
                     if (JsonNode.Parse(raw) is JsonObject node)
                     {
                         ApplyFullWorkspaceStateJson(win ?? _mainHostWindow, node);
+                        BuilderShell.ReadSessionExtras(node);
                         IsWorkspaceDirty = false;
                     }
                 }
@@ -657,8 +668,9 @@ namespace FieldTakHub.Builder.Services
                     Filter = "Projekt roboczy Field TAK Hub (*.fthproj;*.json)|*.fthproj;*.json",
                     InitialDirectory = initDir,
                     FileName = !string.IsNullOrWhiteSpace(CurrentDraftProjectPath)
+                               && !Path.GetFileName(CurrentDraftProjectPath).Equals("zero_state_workspace.fthproj", StringComparison.OrdinalIgnoreCase)
                         ? Path.GetFileName(CurrentDraftProjectPath)
-                        : $"{evName}_Wersja_Robocza.fthproj"
+                        : $"{evName}.fthproj"
                 };
                 if (!ShowDialogWithSidebarSupport(dlg, win)) return false;
 
@@ -672,6 +684,33 @@ namespace FieldTakHub.Builder.Services
                 return true;
             }
             catch { return false; }
+        }
+
+        /// <summary>
+        /// Ctrl+S: zapis projektu do znanego pliku bez okna wyboru. Najpierw do pliku tymczasowego obok,
+        /// potem podmiana — przerwany zapis nie zostawia uszkodzonego projektu.
+        /// </summary>
+        public static bool SaveDraftProjectToFile(Window win, string path)
+        {
+            if (string.IsNullOrWhiteSpace(path)) return false;
+            string tempPath = path + ".zapis.tmp";
+            try
+            {
+                _isSessionInitialized = true;
+                var root = BuildFullWorkspaceStateJson(win);
+                File.WriteAllText(tempPath, root.ToJsonString(IndentedJsonOptions), Encoding.UTF8);
+                File.Move(tempPath, path, true);
+                LastExportDirectory = Path.GetDirectoryName(path) ?? LastExportDirectory;
+                CurrentDraftProjectPath = path;
+                SaveSessionStateAuto(win);
+                IsWorkspaceDirty = false;
+                return true;
+            }
+            catch
+            {
+                try { if (File.Exists(tempPath)) File.Delete(tempPath); } catch { }
+                return false;
+            }
         }
 
         public static bool LoadDraftProjectDialog(Window win)
@@ -713,12 +752,21 @@ namespace FieldTakHub.Builder.Services
             SaveSessionStateAuto(win);
             if (_closeConfirmed) return;
 
+            // Wszystko jest w pliku projektu (albo nic się nie zmieniło) — zamykamy bez pytania.
+            if (!BuilderShell.HasUnsavedChangesNow(win))
+            {
+                _closeConfirmed = true;
+                return;
+            }
+
+            string projectPath = BuilderCoreSidebarAndProjectEngine.CurrentProjectFilePath;
+            string projectName = string.IsNullOrWhiteSpace(projectPath) ? "" : Path.GetFileName(projectPath);
             int choice = 0;
             var dlg = new Window
             {
-                Title = "Zamykanie Field TAK Hub Builder — Zapis stanu projektu",
-                Width = 490,
-                Height = 235,
+                Title = BuilderI18n.T("Zamykanie Field TAK Hub Builder", "Closing Field TAK Hub Builder"),
+                Width = 520,
+                SizeToContent = SizeToContent.Height,
                 WindowStartupLocation = WindowStartupLocation.CenterOwner,
                 Owner = win,
                 Background = BrushCardBg,
@@ -730,7 +778,7 @@ namespace FieldTakHub.Builder.Services
             var root = new StackPanel { Margin = new Thickness(18) };
             root.Children.Add(new TextBlock
             {
-                Text = "⚠️ Czy chcesz zapisać wersję roboczą projektu przed zamknięciem?",
+                Text = BuilderI18n.T("⚠️ Projekt ma niezapisane zmiany", "⚠️ The project has unsaved changes"),
                 Foreground = BrushAccent,
                 FontSize = 13.5,
                 FontWeight = FontWeights.Bold,
@@ -738,7 +786,13 @@ namespace FieldTakHub.Builder.Services
             });
             root.Children.Add(new TextBlock
             {
-                Text = "Bieżące ustawienia stron konfliktu (.ftak), tabela kanałów głosowych oraz stan Generatora Map zostały już automatycznie zapamiętane do kolejnego uruchomienia.\nMożesz dodatkowo zapisać kompletną kopię roboczą do pliku (.fthproj).",
+                Text = string.IsNullOrEmpty(projectName)
+                    ? BuilderI18n.T(
+                        "Projekt nie ma jeszcze pliku .fthproj. Builder przywróci bieżący stan przy następnym uruchomieniu (autozapis), ale tylko plik projektu możesz otworzyć na innym komputerze albo po pracy nad innym projektem.",
+                        "The project has no .fthproj file yet. The Builder restores the current state on the next start (autosave), but only a project file can be opened on another computer or after working on another project.")
+                    : BuilderI18n.T(
+                        "Zmiany od ostatniego zapisu nie są w pliku " + projectName + ". Builder przywróci bieżący stan przy następnym uruchomieniu (autozapis), ale sam plik projektu zostanie bez tych zmian.",
+                        "Changes since the last save are not in " + projectName + ". The Builder restores the current state on the next start (autosave), but the project file itself will not have them."),
                 Foreground = Brushes.White,
                 FontSize = 11,
                 TextWrapping = TextWrapping.Wrap,
@@ -752,7 +806,9 @@ namespace FieldTakHub.Builder.Services
 
             var btnSaveFile = new Button
             {
-                Content = "💾 Zapisz projekt (.fthproj) i wyjdź",
+                Content = string.IsNullOrEmpty(projectName)
+                    ? BuilderI18n.T("💾 Zapisz jako… i zamknij", "💾 Save as… and close")
+                    : BuilderI18n.T("💾 Zapisz i zamknij (Ctrl+S)", "💾 Save and close (Ctrl+S)"),
                 Height = 32,
                 Margin = new Thickness(0, 0, 6, 0),
                 Background = BrushButtonAccent,
@@ -764,7 +820,7 @@ namespace FieldTakHub.Builder.Services
             };
             var btnExitAuto = new Button
             {
-                Content = "⚡ Zamknij (auto-pamięć)",
+                Content = BuilderI18n.T("Zamknij bez zapisu", "Close without saving"),
                 Height = 32,
                 Margin = new Thickness(3, 0, 3, 0),
                 Background = BrushItemBg,
@@ -777,7 +833,8 @@ namespace FieldTakHub.Builder.Services
             };
             var btnCancel = new Button
             {
-                Content = "Anuluj",
+                Content = BuilderI18n.T("Anuluj", "Cancel"),
+                IsCancel = true,
                 Height = 32,
                 Margin = new Thickness(6, 0, 0, 0),
                 Background = BrushInputBg,
@@ -799,7 +856,7 @@ namespace FieldTakHub.Builder.Services
             dlg.ShowDialog();
 
             if (choice == 0) { e.Cancel = true; return; }
-            if (choice == 1 && !SaveDraftProjectDialog(win)) { e.Cancel = true; return; }
+            if (choice == 1 && !BuilderCoreSidebarAndProjectEngine.SaveProjectQuick(win)) { e.Cancel = true; return; }
             SaveSessionStateAuto(win);
             _closeConfirmed = true;
         }
@@ -2292,6 +2349,12 @@ namespace FieldTakHub.Builder.Services
             public string SourcePath = "";
             public int FileCount;
             public long TotalBytes, MapsBytes, PluginsBytes, ConfigBytes, TacticalBytes, OtherBytes;
+
+            /// <summary>Pliki folderu source (ścieżka względna, rozmiar) — karta „Status paczki”.</summary>
+            public List<SourceFileEntry> Files = new List<SourceFileEntry>();
+
+            /// <summary>Zbudowane paczki .ftak z folderu out\ obok source — karta „Ostatnie paczki .ftak”.</summary>
+            public List<BuiltPackageEntry> Packages = new List<BuiltPackageEntry>();
         }
 
         private static async Task<SourceStats> ForceSizeUpdateAsync(Window win)
@@ -2341,11 +2404,32 @@ namespace FieldTakHub.Builder.Services
                     string nameLower = fileName.ToLowerInvariant();
 
                     stats.FileCount++; stats.TotalBytes += len;
+                    stats.Files.Add(new SourceFileEntry(Path.GetRelativePath(sourceDir, file), len));
                     if (ext == ".apk" || rel.StartsWith("plugins/") || rel.StartsWith("wtyczki/")) stats.PluginsBytes += len;
                     else if (rel.StartsWith("maps/") || rel.StartsWith("mapy/") || rel.StartsWith("imagery/") || rel.StartsWith("tiles/") || ext == ".mbtiles" || ext == ".sqlite" || ext == ".sqlitedb" || ext == ".tif" || ext == ".tiff" || ext == ".geotiff" || ((ext == ".kmz" || ext == ".xml" || ext == ".pdf" || ext == ".png" || ext == ".jpg") && (nameLower.Contains("map") || nameLower.Contains("orto") || nameLower.Contains("lidar") || nameLower.Contains("topo") || nameLower.Contains("grg")))) stats.MapsBytes += len;
                     else if (rel.StartsWith("config/") || rel.StartsWith("certs/") || rel.StartsWith("cert/") || ext == ".json" || ext == ".pref" || ext == ".cfg" || ext == ".conf" || ext == ".ini" || ext == ".p12" || ext == ".pem" || ext == ".crt" || ext == ".cer" || ext == ".key" || nameLower == "server.txt") stats.ConfigBytes += len;
                     else if (rel.StartsWith("atak/") || rel.StartsWith("overlays/") || rel.StartsWith("factions/") || rel.StartsWith("data/") || ext == ".kml" || ext == ".kmz" || ext == ".gpx" || ext == ".cot" || ext == ".geojson" || ext == ".shp") stats.TacticalBytes += len;
                     else stats.OtherBytes += len;
+                }
+            }
+            catch { }
+
+            // Ten sam folder out\ co przy budowaniu paczek (BuildIsolatedFactionPackagesAsync): obok folderu source.
+            try
+            {
+                string outBaseDir = Path.GetDirectoryName(Path.TrimEndingDirectorySeparator(sourceDir)) ?? AppDomain.CurrentDomain.BaseDirectory;
+                string outRootDir = Path.Combine(outBaseDir, "out");
+                if (Directory.Exists(outRootDir))
+                {
+                    foreach (string package in Directory.EnumerateFiles(outRootDir, "*.ftak", SearchOption.AllDirectories))
+                    {
+                        try
+                        {
+                            var info = new FileInfo(package);
+                            stats.Packages.Add(new BuiltPackageEntry(info.FullName, info.Length, info.LastWriteTime));
+                        }
+                        catch { }
+                    }
                 }
             }
             catch { }
@@ -2365,10 +2449,25 @@ namespace FieldTakHub.Builder.Services
         private static void UpdatePreviewCardLabels(Window win, SourceStats stats)
         {
             if (win == null || stats == null) return;
+            PackageStatusView.Update(win, stats.Files, stats.Packages, GetFactionStatusEntries());
             try
             {
                 string[] rowLabels = { "Pliki paczki", "Mapy", "Pluginy", "Konfiguracja", "Dane taktyczne", "Pozostałe" };
                 string[] rowValues = { FormatBytes(stats.TotalBytes), FormatBytes(stats.MapsBytes), FormatBytes(stats.PluginsBytes), FormatBytes(stats.ConfigBytes), FormatBytes(stats.TacticalBytes), FormatBytes(stats.OtherBytes) };
+
+                // Karta „Podgląd zawartości” ma nazwane pola (MainWindow.xaml). Szukanie po napisach niżej trafiało wiersze „Mapy”
+                // i „Pluginy” w innych kartach (sekcja „2. Zawartość paczki”, dawna karta statusu), więc te dwa rozmiary nie docierały.
+                string[] namedValueFields = { "ContentFilesSizeText", "ContentMapsSizeText", "ContentPluginsSizeText", "ContentConfigSizeText", "ContentTacticalSizeText", "ContentOtherSizeText" };
+                int namedFound = 0;
+                for (int r = 0; r < namedValueFields.Length; r++)
+                {
+                    if (win.FindName(namedValueFields[r]) is TextBlock namedValue)
+                    {
+                        namedValue.Text = rowValues[r];
+                        namedFound++;
+                    }
+                }
+                if (namedFound == namedValueFields.Length) return;
 
                 if (_cachedPreviewValueLabels.Count == rowLabels.Length)
                 {

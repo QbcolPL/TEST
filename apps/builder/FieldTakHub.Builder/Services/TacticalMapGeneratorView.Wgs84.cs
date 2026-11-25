@@ -122,7 +122,7 @@ namespace FieldTakHub.Builder.Services
         private static void UpdateLegendSubtitleInPlace()
         {
             if (_interactiveCanvas == null || !string.IsNullOrWhiteSpace(_customLegendSubtitle)) return;
-            string secLegSuffix = (_enableSectorGridOverlay || (_coordSystem != null && _coordSystem.StartsWith("Sektorowa")))
+            string secLegSuffix = (_enableSectorGridOverlay || IsSectorCoordMode())
                 ? $" + Sektory A-Z/1-9 ({_sectorSizeMeters}m | {_sectorSubDivision.Split(' ')[0]})"
                 : "";
             string expectedSub = GetWgs84LegendSubtitleSummary() + secLegSuffix;
@@ -979,6 +979,10 @@ namespace FieldTakHub.Builder.Services
 
                 var edgeBadges = new List<UIElement>();
                 double lastTopLabelX = -999;
+                // Krawędzie z opisami: zakładka Siatka → „Opisy przy krawędziach arkusza” (wspólne z MGRS i sektorami).
+                var wgsLabelEdges = _gridLabelEdges;
+                bool wgsTop = (wgsLabelEdges & MapEditor.GridEdges.Top) != 0, wgsBottom = (wgsLabelEdges & MapEditor.GridEdges.Bottom) != 0;
+                bool wgsLeft = (wgsLabelEdges & MapEditor.GridEdges.Left) != 0, wgsRight = (wgsLabelEdges & MapEditor.GridEdges.Right) != 0;
 
                 foreach (double lon in lonLines)
                 {
@@ -990,15 +994,21 @@ namespace FieldTakHub.Builder.Services
                     {
                         lastTopLabelX = x;
                         string lblText = FormatWgs84Coordinate(lon, isLat: false, stepDegLon);
-                        var topBadge = CreateWgs84EdgeBadge(lblText, mainStroke);
-                        Canvas.SetLeft(topBadge, Math.Clamp(x - 34, 4, w - 76));
-                        Canvas.SetTop(topBadge, 4);
-                        edgeBadges.Add(topBadge);
+                        if (wgsTop)
+                        {
+                            var topBadge = CreateWgs84EdgeBadge(lblText, mainStroke);
+                            Canvas.SetLeft(topBadge, Math.Clamp(x - 34, 4, w - 76));
+                            Canvas.SetTop(topBadge, 4);
+                            edgeBadges.Add(topBadge);
+                        }
 
-                        var botBadge = CreateWgs84EdgeBadge(lblText, mainStroke);
-                        Canvas.SetLeft(botBadge, Math.Clamp(x - 34, 4, w - 76));
-                        Canvas.SetTop(botBadge, Math.Max(4, h - 20));
-                        edgeBadges.Add(botBadge);
+                        if (wgsBottom)
+                        {
+                            var botBadge = CreateWgs84EdgeBadge(lblText, mainStroke);
+                            Canvas.SetLeft(botBadge, Math.Clamp(x - 34, 4, w - 76));
+                            Canvas.SetTop(botBadge, Math.Max(4, h - 20));
+                            edgeBadges.Add(botBadge);
+                        }
                     }
                 }
 
@@ -1013,15 +1023,21 @@ namespace FieldTakHub.Builder.Services
                     {
                         lastLeftLabelY = y;
                         string lblText = FormatWgs84Coordinate(lat, isLat: true, stepDegLat);
-                        var leftBadge = CreateWgs84EdgeBadge(lblText, mainStroke);
-                        Canvas.SetLeft(leftBadge, 4);
-                        Canvas.SetTop(leftBadge, Math.Clamp(y - 8, 4, h - 20));
-                        edgeBadges.Add(leftBadge);
+                        if (wgsLeft)
+                        {
+                            var leftBadge = CreateWgs84EdgeBadge(lblText, mainStroke);
+                            Canvas.SetLeft(leftBadge, 4);
+                            Canvas.SetTop(leftBadge, Math.Clamp(y - 8, 4, h - 20));
+                            edgeBadges.Add(leftBadge);
+                        }
 
-                        var rightBadge = CreateWgs84EdgeBadge(lblText, mainStroke);
-                        Canvas.SetLeft(rightBadge, Math.Max(4, w - 78));
-                        Canvas.SetTop(rightBadge, Math.Clamp(y - 8, 4, h - 20));
-                        edgeBadges.Add(rightBadge);
+                        if (wgsRight)
+                        {
+                            var rightBadge = CreateWgs84EdgeBadge(lblText, mainStroke);
+                            Canvas.SetLeft(rightBadge, Math.Max(4, w - 78));
+                            Canvas.SetTop(rightBadge, Math.Clamp(y - 8, 4, h - 20));
+                            edgeBadges.Add(rightBadge);
+                        }
                     }
                 }
 

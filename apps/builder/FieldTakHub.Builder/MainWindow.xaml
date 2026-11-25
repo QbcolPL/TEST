@@ -328,7 +328,7 @@
         <RowDefinition Height="Auto"/>
         <RowDefinition Height="Auto"/>
         <RowDefinition Height="Auto"/>
-        <RowDefinition Height="66"/>
+        <RowDefinition Height="Auto"/>
       </Grid.RowDefinitions>
 
       <!-- package header -->
@@ -380,8 +380,10 @@
         </Grid>
       </Border>
 
-      <!-- section 2 -->
-      <Border Grid.Row="2" Style="{StaticResource SectionCard}">
+      <!-- section 2: ukryta (etap 4). Przełączniki kart niczego nie zmieniały w paczkach stron konfliktu, karty pokazywały
+           stałe wartości (ATAK v5.6.0.13, 3 pluginy, 2 pakiety, OpenTAKServer), a „Wybierz profil zalecany” nadpisywał nazwę
+           wydarzenia przykładem. Prawdziwą zawartość paczki pokazuje karta „Status paczki” w prawej kolumnie. -->
+      <Border Grid.Row="2" Style="{StaticResource SectionCard}" Visibility="Collapsed">
         <Grid>
           <Grid.RowDefinitions><RowDefinition Height="48"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
           <Grid Grid.Row="0">
@@ -606,8 +608,10 @@
         <TextBlock x:Name="AdvancedModeHint" Grid.Row="5" Grid.ColumnSpan="2" Foreground="{StaticResource Muted}" TextWrapping="Wrap" Margin="0,0,0,10"/>
       </Grid>
 
-      <!-- Bottom action bar -->
-      <Grid Grid.Row="6" Margin="0,0,0,0">
+      <!-- Bottom action bar: ukryty (etap 4). „Wyczyść wszystko” niczego nie czyścił (tylko sprawdzał foldery projektu,
+           co Builder i tak robi sam), a „Generuj paczkę” i „⌄” były zawsze zwinięte — paczki buduje pasek
+           „Generator paczek .ftak” nad stronami konfliktu. Przyciski zostają w drzewie dla starych procedur. -->
+      <Grid Grid.Row="6" Margin="0,0,0,0" Visibility="Collapsed">
         <Button Content="{DynamicResource UI_Clear}" Style="{StaticResource BaseButton}" Width="176" HorizontalAlignment="Left" Click="RepairFolders_Click"/>
         <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
           <Button Content="{DynamicResource UI_Generate}" Style="{StaticResource PrimaryButton}" MinWidth="220" Height="48" Click="Build_Click"/>
@@ -618,23 +622,16 @@
 
     <!-- RIGHT STATUS -->
     <StackPanel Grid.Column="2" Grid.Row="1" Margin="0,14,15,13">
-        <Border Style="{StaticResource SectionCard}" Padding="14" Margin="0,0,0,12">
+        <!-- Status paczki (etap 4): wiersze liczy PackageStatusView z zawartości folderu source i stron konfliktu
+             (wcześniej były tu stałe „✓ Skonfigurowany”, „3 pluginy”, „2 pakiety” — niezależnie od tego, co było w folderze). -->
+        <Border x:Name="PackageStatusCard" Style="{StaticResource SectionCard}" Padding="14" Margin="0,0,0,12">
           <StackPanel>
             <StackPanel Orientation="Horizontal"><Image Source="Assets/navicons/package.png" Width="28" Height="28" Margin="0,0,9,0"/><TextBlock Text="{DynamicResource UI_Status}" FontSize="17" FontWeight="SemiBold" VerticalAlignment="Center"/></StackPanel>
-            <TextBlock Text="✓" FontSize="55" Foreground="{StaticResource Good}" HorizontalAlignment="Center" Margin="0,10,0,0"/>
-            <TextBlock Text="{DynamicResource UI_Ready}" FontSize="18" FontWeight="Bold" HorizontalAlignment="Center"/>
-            <TextBlock Text="{DynamicResource UI_StatusHelp}" Foreground="{StaticResource Muted}" TextWrapping="Wrap" HorizontalAlignment="Center" TextAlignment="Center" Margin="0,4,0,12"/>
-            <TextBlock Text="{DynamicResource UI_StatusReadyHint}" Foreground="{StaticResource AccentDim}" TextWrapping="Wrap" Margin="0,0,0,8"/>
-            <Grid>
-              <Grid.RowDefinitions><RowDefinition Height="25"/><RowDefinition Height="25"/><RowDefinition Height="25"/><RowDefinition Height="25"/><RowDefinition Height="25"/><RowDefinition Height="25"/></Grid.RowDefinitions>
-              <Grid.ColumnDefinitions><ColumnDefinition Width="24"/><ColumnDefinition/><ColumnDefinition Width="95"/></Grid.ColumnDefinitions>
-              <TextBlock Text="✓" Foreground="{StaticResource Good}" FontSize="16"/><TextBlock Grid.Column="1" Text="ATAK"/><TextBlock Grid.Column="2" Text="{DynamicResource UI_Configured}" Foreground="{StaticResource Muted}" HorizontalAlignment="Right"/>
-              <TextBlock Grid.Row="1" Text="✓" Foreground="{StaticResource Good}" FontSize="16"/><TextBlock Grid.Row="1" Grid.Column="1" Text="Pluginy"/><TextBlock Grid.Row="1" Grid.Column="2" Text="{DynamicResource UI_3Plugins}" Foreground="{StaticResource Muted}" HorizontalAlignment="Right"/>
-              <TextBlock Grid.Row="2" Text="✓" Foreground="{StaticResource Good}" FontSize="16"/><TextBlock Grid.Row="2" Grid.Column="1" Text="Mapy"/><TextBlock Grid.Row="2" Grid.Column="2" Text="{DynamicResource UI_2Packages}" Foreground="{StaticResource Muted}" HorizontalAlignment="Right"/>
-              <TextBlock Grid.Row="3" Text="✓" Foreground="{StaticResource Good}" FontSize="16"/><TextBlock Grid.Row="3" Grid.Column="1" Text="Overlays"/><TextBlock Grid.Row="3" Grid.Column="2" Text="{DynamicResource UI_1Package}" Foreground="{StaticResource Muted}" HorizontalAlignment="Right"/>
-              <TextBlock Grid.Row="4" Text="✓" Foreground="{StaticResource Good}" FontSize="16"/><TextBlock Grid.Row="4" Grid.Column="1" Text="Meshtastic"/><TextBlock Grid.Row="4" Grid.Column="2" Text="{DynamicResource UI_Configured}" Foreground="{StaticResource Muted}" HorizontalAlignment="Right"/>
-              <TextBlock Grid.Row="5" Text="✓" Foreground="{StaticResource Good}" FontSize="16"/><TextBlock Grid.Row="5" Grid.Column="1" Text="Server"/><TextBlock Grid.Row="5" Grid.Column="2" Text="{DynamicResource UI_Configured}" Foreground="{StaticResource Muted}" HorizontalAlignment="Right"/>
-            </Grid>
+            <TextBlock x:Name="PackageStatusIcon" Tag="DYNAMIC_NO_I18N" Text="…" FontSize="40" Foreground="{StaticResource Muted}" HorizontalAlignment="Center" Margin="0,8,0,0"/>
+            <TextBlock x:Name="PackageStatusHeadline" Tag="DYNAMIC_NO_I18N" Text="…" FontSize="17" FontWeight="Bold" HorizontalAlignment="Center" TextAlignment="Center" TextWrapping="Wrap"/>
+            <TextBlock x:Name="PackageStatusHint" Tag="DYNAMIC_NO_I18N" Text="" Foreground="{StaticResource Muted}" TextWrapping="Wrap" HorizontalAlignment="Center" TextAlignment="Center" Margin="0,4,0,10"/>
+            <StackPanel x:Name="PackageStatusRows"/>
+            <TextBlock Text="{DynamicResource UI_StatusReadyHint}" Foreground="{StaticResource AccentDim}" TextWrapping="Wrap" Margin="0,10,0,0"/>
           </StackPanel>
         </Border>
 
@@ -657,8 +654,8 @@
             <StackPanel Orientation="Horizontal"><Image Source="Assets/navicons/package.png" Width="28" Height="28" Margin="0,0,9,0"/><TextBlock Text="{DynamicResource UI_Generated}" FontSize="17" FontWeight="SemiBold" VerticalAlignment="Center"/></StackPanel>
             <TextBlock x:Name="GeneratedFileNameText" Text="—" FontSize="16" Foreground="{StaticResource Accent}" Margin="0,11,0,0" TextWrapping="Wrap"/>
             <TextBlock x:Name="GeneratedFilePathText" Text="—" Foreground="{StaticResource Muted}" Margin="0,4,0,0" TextWrapping="Wrap"/>
-            <TextBlock x:Name="GeneratedFileSizeText" Text="0 B" Foreground="{StaticResource Muted}" FontSize="12" Margin="0,4,0,10"/>
-            <Button Content="{DynamicResource SaveQrPng}" Click="SaveQr_Click" Style="{StaticResource IconActionButton}" HorizontalAlignment="Right"/>
+            <TextBlock x:Name="GeneratedFileSizeText" Text="" Foreground="{StaticResource Muted}" FontSize="12" Margin="0,4,0,10"/>
+            <Button x:Name="OpenPackagesFolderButton" Content="{DynamicResource UI_OpenPackagesFolder}" Click="OpenPackagesFolder_Click" Style="{StaticResource IconActionButton}" HorizontalAlignment="Right"/>
           </StackPanel>
         </Border>
 
