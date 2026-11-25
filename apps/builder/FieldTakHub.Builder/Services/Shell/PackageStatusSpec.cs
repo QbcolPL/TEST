@@ -17,8 +17,17 @@ internal sealed record PackageStatus(StatusLevel Level, string Headline, string 
 /// <summary>Plik z folderu source (ścieżka względna, ukośniki dowolne).</summary>
 internal sealed record SourceFileEntry(string RelativePath, long Size);
 
-/// <summary>Strona konfliktu i adres jej serwera TAK (pusty — tylko sieć mesh).</summary>
-internal sealed record FactionStatusEntry(string Name, string ServerHost);
+/// <summary>
+/// Strona konfliktu i adres jej serwera TAK (pusty — tylko sieć mesh). Pozostałe pola (etap 1) służą do sprawdzenia
+/// ustawień strony tymi samymi regułami co budowanie paczki; null — pole nieznane, bez sprawdzania.
+/// </summary>
+internal sealed record FactionStatusEntry(
+    string Name,
+    string ServerHost,
+    string? ChannelKey = null,
+    string? EnrollmentLink = null,
+    string? ChannelLink = null,
+    string? ChannelName = null);
 
 /// <summary>Zbudowana paczka .ftak z folderu out\.</summary>
 internal sealed record BuiltPackageEntry(string FullPath, long Size, DateTime LastWriteLocal);
@@ -180,6 +189,17 @@ internal static class PackageStatusSpec
             }
         }
 
+        // Uwagi do ustawień stron — te same reguły co sprawdzenie przed budowaniem (SideSettingsSpec).
+        var problems = SideSettingsSpec.Check(sides.Select(s => new SideSettings(
+            s.Name, s.ChannelKey, s.ServerHost, s.EnrollmentLink, s.ChannelLink, s.ChannelName)), english);
+        if (problems.Count > 0)
+        {
+            rows.Add(new PackageStatusRow(StatusLevel.Warning, L("Do poprawienia", "To fix"),
+                problems.Count.ToString(CultureInfo.InvariantCulture) + " · "
+                + JoinNames(problems.Select(p => p.Side).Distinct(StringComparer.OrdinalIgnoreCase), 3),
+                string.Join("\n", problems.Select(p => p.Side + ": " + p.Message))));
+        }
+
         if (skipped > 0)
         {
             rows.Add(new PackageStatusRow(StatusLevel.Warning, L("Pominięte pliki", "Skipped files"),
@@ -193,10 +213,17 @@ internal static class PackageStatusSpec
             return new PackageStatus(StatusLevel.Warning, L("Dodaj stronę konfliktu", "Add a faction"),
                 L("Bez strony konfliktu nie powstanie żadna paczka.", "No package can be built without a faction."), rows);
         }
+        var blocking = problems.FirstOrDefault(p => p.Blocking);
+        if (blocking != null)
+        {
+            return new PackageStatus(StatusLevel.Warning, L("Popraw przed budowaniem", "Fix before building"), blocking.Message, rows);
+        }
         return new PackageStatus(StatusLevel.Ok, L("Gotowa do generowania", "Ready to build"),
             skipped > 0
                 ? L("Część plików z folderu source zostanie pominięta — szczegóły niżej.", "Some files in the source folder will be skipped — see below.")
-                : L("Każda strona dostanie własną paczkę w folderze out\\<STRONA>\\.", "Each faction gets its own package in out\\<FACTION>\\."),
+                : problems.Count > 0
+                    ? L("Są uwagi do ustawień stron — szczegóły niżej.", "Some faction settings need attention — see below.")
+                    : L("Każda strona dostanie własną paczkę w folderze out\\<STRONA>\\.", "Each faction gets its own package in out\\<FACTION>\\."),
             rows);
     }
 

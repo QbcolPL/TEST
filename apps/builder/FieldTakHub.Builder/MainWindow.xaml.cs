@@ -174,7 +174,8 @@ public partial class MainWindow : Window
         PackageId = IdBox.Text.Trim(), Name = NameBox.Text.Trim(), PackageVersion = VersionBox.Text.Trim(), PublisherName = PublisherBox.Text.Trim(),
         SourceDirectory = SourceBox.Text.Trim(), OutputDirectory = OutputBox.Text.Trim(), AtakMinVersion = AtakMinBox.Text.Trim(), AtakMaxVersion = AtakMaxBox.Text.Trim(),
         ExpiryHours = int.TryParse(PackageExpiryBox.Text, out var ph) ? Math.Max(0, ph) : 6,
-        QrExpiryHours = int.TryParse(QrExpiryBox.Text, out var qh) ? Math.Max(0, qh) : 6,
+        // Jedna ważność w oknie (etap 1 modułu paczek) — pole „Ważność kodu QR” zniknęło.
+        QrExpiryHours = int.TryParse(PackageExpiryBox.Text, out var qh) ? Math.Max(0, qh) : 6,
         BuilderMode = (BuilderModeBox.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? "simple",
         MaxDownloads = int.TryParse(MaxDownloadsBox.Text, out var md) ? Math.Max(1, md) : 50,
         Server = ServerFromUi(),
@@ -230,7 +231,7 @@ public partial class MainWindow : Window
     private void ToUi(FieldTakProject p)
     {
         IdBox.Text=p.PackageId; NameBox.Text=p.Name; VersionBox.Text=p.PackageVersion; PublisherBox.Text=p.PublisherName; SourceBox.Text=p.SourceDirectory; OutputBox.Text=p.OutputDirectory;
-        AtakMinBox.Text=p.AtakMinVersion; AtakMaxBox.Text=p.AtakMaxVersion; PackageExpiryBox.Text=p.ExpiryHours.ToString(); QrExpiryBox.Text=p.QrExpiryHours.ToString(); MaxDownloadsBox.Text=p.MaxDownloads.ToString(); BuilderModeBox.SelectedIndex = p.BuilderMode.Equals("advanced", StringComparison.OrdinalIgnoreCase) ? 1 : 0; ServerToUi(p.Server); ApplyBuilderMode();
+        AtakMinBox.Text=p.AtakMinVersion; AtakMaxBox.Text=p.AtakMaxVersion; PackageExpiryBox.Text=p.ExpiryHours.ToString(); MaxDownloadsBox.Text=p.MaxDownloads.ToString(); BuilderModeBox.SelectedIndex = p.BuilderMode.Equals("advanced", StringComparison.OrdinalIgnoreCase) ? 1 : 0; ServerToUi(p.Server); ApplyBuilderMode();
         LoadEnrollmentConfig();
         SyncExtraOptionsFields();
         MeshtasticToUi(p.Meshtastic);
@@ -308,9 +309,7 @@ public partial class MainWindow : Window
     private void RecommendedProfile_Click(object sender, RoutedEventArgs e)
     {
         NameBox.Text = T("RecommendedEventName", "MILSIM 2026");
-        DescriptionBox.Text = T("RecommendedEventDescription", "Konfiguracja uczestników - MILSIM 2026");
         PackageExpiryBox.Text = "24";
-        QrExpiryBox.Text = "2";
         MaxDownloadsBox.Text = "50";
         AtakMinBox.Text = "5.6";
         AtakMaxBox.Text = "5.8";
@@ -356,7 +355,7 @@ public partial class MainWindow : Window
 
     private void Analyze_Click(object sender, RoutedEventArgs e)
     {
-        try { EnsureCurrentStructure(log:false); _items=_analyzer.Analyze(SourceBox.Text); ContentList.ItemsSource=_items; UpdateContentPreview(); Log(string.Format(T("LogAnalyzed","Analyzed {0} files. ATAK source: {1}; APKs: {2}; total {3}."),_items.Count,_items.Count(x=>x.Category=="ATAK Mission Package"),_items.Count(x=>x.Category=="Plugin APK"),HumanBytes(_items.Sum(x=>x.Size)))); }
+        try { EnsureCurrentStructure(log:false); _items=_analyzer.Analyze(SourceBox.Text); ContentList.ItemsSource=_items; Log(string.Format(T("LogAnalyzed","Analyzed {0} files. ATAK source: {1}; APKs: {2}; total {3}."),_items.Count,_items.Count(x=>x.Category=="ATAK Mission Package"),_items.Count(x=>x.Category=="Plugin APK"),HumanBytes(_items.Sum(x=>x.Size)))); }
         catch(Exception ex){ Error(ex); }
     }
 
@@ -378,37 +377,10 @@ public partial class MainWindow : Window
             _items = _analyzer.Analyze(result.Project.SourceDirectory);
             ContentList.ItemsSource = _items;
             RefreshFolderCounts();
-            UpdateContentPreview();
             Log(string.Format(T("LogFtakImported", "Imported .ftak for editing. Files: {0}; source size: {1}; project: {2}"), result.ImportedFiles, HumanBytes(result.ImportedBytes), result.ProjectFile));
             MessageBox.Show(string.Format(T("FtakImportSummary", "The .ftak package was imported into an editable Builder project.\n\nFiles: {0}\nSource size: {1}\nOriginal package SHA-256 was recorded in IMPORTED-FROM-FTAK.txt.\n\nYou can now modify the project and build a new signed .ftak."), result.ImportedFiles, HumanBytes(result.ImportedBytes)), T("ImportFtak", "Import .ftak"), MessageBoxButton.OK, MessageBoxImage.Information);
         }
         catch (Exception ex) { Error(ex); }
-    }
-
-    private void UpdateContentPreview()
-    {
-        if (_items.Count == 0)
-        {
-            if (ContentFilesSizeText != null) ContentFilesSizeText.Text = "0 B";
-            if (ContentMapsSizeText != null) ContentMapsSizeText.Text = "0 B";
-            if (ContentPluginsSizeText != null) ContentPluginsSizeText.Text = "0 B";
-            if (ContentConfigSizeText != null) ContentConfigSizeText.Text = "0 B";
-            if (ContentTacticalSizeText != null) ContentTacticalSizeText.Text = "0 B";
-            if (ContentOtherSizeText != null) ContentOtherSizeText.Text = "0 B";
-            return;
-        }
-        long Size(params string[] categories) => _items.Where(x => categories.Contains(x.Category, StringComparer.OrdinalIgnoreCase)).Sum(x => x.Size);
-        var maps = Size("Map");
-        var plugins = Size("Plugin APK");
-        var config = Size("Configuration", "Certificate");
-        var tactical = Size("Overlay", "ATAK Mission Package");
-        var other = _items.Sum(x => x.Size) - maps - plugins - config - tactical;
-        if (ContentMapsSizeText != null) ContentMapsSizeText.Text = HumanBytes(maps);
-        if (ContentPluginsSizeText != null) ContentPluginsSizeText.Text = HumanBytes(plugins);
-        if (ContentConfigSizeText != null) ContentConfigSizeText.Text = HumanBytes(config);
-        if (ContentTacticalSizeText != null) ContentTacticalSizeText.Text = HumanBytes(tactical);
-        if (ContentOtherSizeText != null) ContentOtherSizeText.Text = HumanBytes(Math.Max(0, other));
-        if (ContentFilesSizeText != null) ContentFilesSizeText.Text = HumanBytes(_items.Sum(x => x.Size));
     }
 
     private void Build_Click(object sender, RoutedEventArgs e)
@@ -927,8 +899,7 @@ public partial class MainWindow : Window
     private void SetPackage6_Click(object sender, RoutedEventArgs e) => PackageExpiryBox.Text = "6";
     private void SetPackage24_Click(object sender, RoutedEventArgs e) => PackageExpiryBox.Text = "24";
     private void SetPackage48_Click(object sender, RoutedEventArgs e) => PackageExpiryBox.Text = "48";
-    private void SetQr6_Click(object sender, RoutedEventArgs e) => QrExpiryBox.Text = "6";
-    private void SetIndefinite0_Click(object sender, RoutedEventArgs e) { PackageExpiryBox.Text = "0"; QrExpiryBox.Text = "0"; }
+    private void SetIndefinite0_Click(object sender, RoutedEventArgs e) => PackageExpiryBox.Text = "0";
     private void SetLanguagePl_Click(object sender, RoutedEventArgs e) => LanguageBox.SelectedIndex = 0;
     private void SetLanguageEn_Click(object sender, RoutedEventArgs e) => LanguageBox.SelectedIndex = 1;
 

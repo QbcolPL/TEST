@@ -73,6 +73,8 @@ namespace FieldTakHub.Builder.Services
         private static int _pcServerPort = 8766;
         // Czytany z wątków serwera HTTP, zapisywany z wątku UI przy budowie paczek – stąd ConcurrentDictionary.
         private static readonly ConcurrentDictionary<string, string> ServedFtakPathsByFaction = new ConcurrentDictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        // Adresy paczek i rozkazów w sieci Wi-Fi: losowy token strony zamiast jej nazwy, którą każdy mógł zgadnąć (etap 1).
+        private static readonly Shell.LanShareTokens LanTokens = new Shell.LanShareTokens();
         private static Window _lastWinRef;
 
         // =========================================================================
@@ -93,6 +95,8 @@ namespace FieldTakHub.Builder.Services
                 // Zapisz aktualny stan wszystkich rozkazów OPORD do folderów frakcji
                 OpordBuilderManager.SaveAllOpordsToDisk(win);
 
+                // Paczki powstają z tego, co jest na ekranie (ten sam stan, który zapisuje autozapis),
+                // a nie z pliku projektu na dysku — patrz WorkspaceSnapshotSpec.
                 var snapshot = ExtractWorkspaceSnapshot(win);
                 string eventName = snapshot.EventName;
                 string sourceDir = TacticalConfigPanel.GetPrimarySourceDirectory(win);
@@ -117,6 +121,9 @@ namespace FieldTakHub.Builder.Services
                     onStatusUpdated?.Invoke(BuilderI18n.T("⚠️ Brak skonfigurowanych stron konfliktu!", "⚠️ No factions configured!"));
                     return "";
                 }
+
+                if (!ConfirmSideProblems(win, targetFactions, onStatusUpdated))
+                    return "";
 
                 string lastBuiltFtakPath = "";
                 string lastBuiltFactionFolder = "";
@@ -160,8 +167,6 @@ namespace FieldTakHub.Builder.Services
                     }
                 });
 
-                string serverBaseUrl = EnsurePcFtakHttpServerStarted();
-
                 if (lastBuiltFaction != null)
                 {
                     string otsLabel = string.IsNullOrWhiteSpace(lastBuiltFaction.OtsHost) ? "Off-Grid Mesh" : lastBuiltFaction.OtsHost;
@@ -177,6 +182,8 @@ namespace FieldTakHub.Builder.Services
 
                 if (showQrModalAfter && lastBuiltFaction != null)
                 {
+                    // Serwer Wi-Fi rusza dopiero tutaj — wcześniej startował przy każdym budowaniu paczek.
+                    string serverBaseUrl = EnsurePcFtakHttpServerStarted();
                     ShowActiveFactionQrModal(win, eventName, lastBuiltFaction, lastBuiltFtakPath, serverBaseUrl);
                 }
                 else if (!string.IsNullOrEmpty(lastBuiltFactionFolder) && Directory.Exists(lastBuiltFactionFolder))
@@ -191,6 +198,40 @@ namespace FieldTakHub.Builder.Services
                 onStatusUpdated?.Invoke("⚠️ Błąd budowy .FTAK: " + ex.Message);
                 return "";
             }
+        }
+
+        /// <summary>
+        /// Uwagi do ustawień stron przed budowaniem (te same reguły co karta „Status paczki”). Błąd blokujący —
+        /// np. dwie strony z tą samą nazwą, które nadpisałyby sobie paczki — przerywa budowanie. Pozostałe uwagi
+        /// (np. brak klucza kanału: paczka dostałaby publiczny klucz Meshtastic) — pytanie, czy budować mimo to.
+        /// </summary>
+        private static bool ConfirmSideProblems(Window win, List<CleanFactionProfileModel> factions, Action<string> onStatusUpdated)
+        {
+            bool english = string.Equals(BuilderI18n.CurrentLang, "EN", StringComparison.OrdinalIgnoreCase);
+            var problems = Shell.SideSettingsSpec.Check(factions.Select(f => new Shell.SideSettings(
+                f.Name ?? "", f.Psk ?? "", f.OtsHost ?? "", f.EnrollmentUri ?? "", f.ChannelUrl ?? "", f.ChannelName ?? "")), english);
+            if (problems.Count == 0) return true;
+
+            string lines = string.Join("\n", problems.Take(10).Select(p => "• " + p.Side + ": " + p.Message));
+            if (problems.Count > 10) lines += "\n• …";
+
+            if (problems.Any(p => p.Blocking))
+            {
+                MessageBox.Show(win,
+                    BuilderI18n.T("Paczek nie da się zbudować:\n\n", "The packages cannot be built:\n\n") + lines,
+                    "Field TAK Hub Builder", MessageBoxButton.OK, MessageBoxImage.Warning);
+                onStatusUpdated?.Invoke(BuilderI18n.T("⚠️ Popraw ustawienia stron i zbuduj ponownie.", "⚠️ Fix the faction settings and build again."));
+                return false;
+            }
+
+            var answer = MessageBox.Show(win,
+                BuilderI18n.T("Uwagi do ustawień stron:\n\n", "Faction settings need attention:\n\n") + lines
+                + BuilderI18n.T("\n\nZbudować paczki mimo to?", "\n\nBuild the packages anyway?"),
+                "Field TAK Hub Builder", MessageBoxButton.YesNo, MessageBoxImage.Warning);
+            if (answer == MessageBoxResult.Yes) return true;
+
+            onStatusUpdated?.Invoke(BuilderI18n.T("Budowanie przerwane — popraw uwagi w kartach stron.", "Build cancelled — fix the notes in the faction cards."));
+            return false;
         }
 
         private static void PurgeLegacyOutputFolders(string outRootDir, List<string> validFactionFolderNames)
@@ -534,10 +575,10 @@ namespace FieldTakHub.Builder.Services
         // =========================================================================
         public static string BuildMeshtasticChannelSetUrl(CleanFactionProfileModel fac)
         {
-            if (!string.IsNullOrWhiteSpace(fac.ChannelUrl) &&
-                fac.ChannelUrl.StartsWith("https://meshtastic.org/e/#", StringComparison.OrdinalIgnoreCase))
+            // Własny link kanału — te same warunki co w telefonie (MeshChannel.isChannelUrl).
+            if (Shell.MeshChannelLinkSpec.IsChannelLink(fac.ChannelUrl))
             {
-                return fac.ChannelUrl;
+                return fac.ChannelUrl.Trim();
             }
 
             byte[] pskBytes;
@@ -550,8 +591,8 @@ namespace FieldTakHub.Builder.Services
                 pskBytes = new byte[] { 1 };
             }
 
-            string cleanChName = (fac.ChannelName ?? fac.Name ?? "TAK").Trim();
-            if (cleanChName.Length > 11) cleanChName = cleanChName.Substring(0, 11);
+            // Najwyżej 11 bajtów UTF-8 (limit Meshtastic) — wcześniej cięte po 11 znakach, co z polskimi literami dawało więcej.
+            string cleanChName = Shell.ChannelNameSpec.Effective(fac.ChannelName ?? fac.Name ?? "TAK");
             byte[] nameBytes = Encoding.UTF8.GetBytes(cleanChName);
 
             using var chSettings = new MemoryStream();
@@ -577,15 +618,8 @@ namespace FieldTakHub.Builder.Services
             };
             if (presetEnum != 0) WriteProtoVarintField(loraCfg, 0x10, presetEnum);
 
-            int regionEnum = (fac.LoraRegion ?? "EU_868").ToUpperInvariant() switch
-            {
-                "US" => 1,
-                "EU_433" => 2,
-                "EU_868" => 3,
-                "UA_433" => 14,
-                "UA_868" => 15,
-                _ => 3
-            };
+            // Numer regionu z jednej tabeli (LoraRegionSpec) — „US_915” i „ANZ_915” z dawnej listy dawały tu EU_868.
+            int regionEnum = Shell.LoraRegionSpec.Code(fac.LoraRegion);
             WriteProtoVarintField(loraCfg, 0x38, regionEnum);
             WriteProtoVarintField(loraCfg, 0x40, Math.Clamp(fac.HopLimit, 1, 7));
             WriteProtoVarintField(loraCfg, 0x48, 1);
@@ -689,17 +723,20 @@ namespace FieldTakHub.Builder.Services
 
                     string path = LanHttp.DecodeRequestPath(reqLine);
 
-                    // Sam rozkaz OPORD przez Wi-Fi / LAN: /opord/<Strona>.html lub .json.
-                    // Strona musi zgadzać się dokładnie – wcześniej „zawiera” i domyślne BLUFOR mieszały strony.
+                    // Sam rozkaz OPORD przez Wi-Fi / LAN: /opord/<token>.html lub .json. Token strony jest losowy —
+                    // wcześniej w adresie była nazwa strony, więc każdy w tej samej sieci mógł pobrać rozkaz przeciwnika.
                     if (path.StartsWith("/opord/", StringComparison.OrdinalIgnoreCase))
                     {
-                        string? requestedFaction = LanHttp.ResourceName(path, "/opord/", ".html", ".json");
-                        string? facKey = requestedFaction == null
-                            ? null
-                            : ServedFtakPathsByFaction.Keys.FirstOrDefault(k => string.Equals(k, requestedFaction, StringComparison.OrdinalIgnoreCase));
+                        string? requestedToken = LanHttp.ResourceName(path, "/opord/", ".html", ".json");
+                        string? facKey = null;
+                        if (requestedToken != null && LanTokens.TryResolve(requestedToken, out string tokenFaction) &&
+                            ServedFtakPathsByFaction.ContainsKey(tokenFaction))
+                        {
+                            facKey = tokenFaction;
+                        }
                         if (facKey == null)
                         {
-                            LanHttp.WritePlainResponse(stream, "404 Not Found", "Nieznana strona OPORD w adresie: " + path);
+                            LanHttp.WritePlainResponse(stream, "404 Not Found", "Nieznany adres rozkazu OPORD: " + path);
                             return;
                         }
 
@@ -717,12 +754,14 @@ namespace FieldTakHub.Builder.Services
                         return;
                     }
 
-                    // Paczka tylko dla strony z adresu /deploy/<Strona>.ftak. Wcześniej przy braku dopasowania
-                    // serwer oddawał pierwszą dostępną paczkę – czyli cudzą, razem z jej kluczem PSK.
+                    // Paczka tylko dla strony z adresu /deploy/<token>.ftak. Wcześniej przy braku dopasowania
+                    // serwer oddawał pierwszą dostępną paczkę – czyli cudzą, razem z jej kluczem PSK – a potem
+                    // wydawał ją pod adresem z nazwą strony, który dało się zgadnąć.
                     string? targetFile = null;
                     string? requestedPackage = LanHttp.ResourceName(path, "/deploy/", ".ftak");
                     if (requestedPackage != null &&
-                        ServedFtakPathsByFaction.TryGetValue(requestedPackage, out var servedPath) &&
+                        LanTokens.TryResolve(requestedPackage, out string packageFaction) &&
+                        ServedFtakPathsByFaction.TryGetValue(packageFaction, out var servedPath) &&
                         File.Exists(servedPath))
                     {
                         targetFile = servedPath;
@@ -761,9 +800,10 @@ namespace FieldTakHub.Builder.Services
             string ftakFilePath,
             string serverBaseUrl)
         {
-            string safeFac = Uri.EscapeDataString(fac.Name);
-            string wifiDownloadUrl = serverBaseUrl + "/deploy/" + safeFac + ".ftak";
-            string opordLanUrl = serverBaseUrl + "/opord/" + safeFac + ".html";
+            // Losowy token strony w adresie — nie da się go zgadnąć z nazwy strony.
+            string lanToken = LanTokens.TokenFor(fac.Name);
+            string wifiDownloadUrl = serverBaseUrl + "/deploy/" + lanToken + ".ftak";
+            string opordLanUrl = serverBaseUrl + "/opord/" + lanToken + ".html";
 
             var offlineJsonObj = new JsonObject
             {
@@ -1005,59 +1045,18 @@ namespace FieldTakHub.Builder.Services
             dlg.ShowDialog();
         }
 
+        /// <summary>
+        /// Stan do budowania paczek: bieżące strony konfliktu i nazwa wydarzenia z pamięci (ten sam JSON, który
+        /// zapisuje autozapis). Wcześniej czytany był plik projektu z dysku — bez zapisanego projektu szablon
+        /// nowego projektu („NOWA OPERACJA”, domyślne strony, pusty klucz), a z zapisanym — jego ostatnia wersja.
+        /// </summary>
         public static CleanWorkspaceSnapshot ExtractWorkspaceSnapshot(Window win)
         {
             try { TacticalConfigPanel.SaveSessionStateAuto(win); } catch { }
 
-            var state = new CleanWorkspaceSnapshot
-            {
-                EventName = TacticalConfigPanel.GetEventNameFromWindow(win)
-            };
-
-            JsonObject sessionJson = TryReadSavedWorkspaceJson();
-            if (sessionJson != null)
-            {
-                string ev = sessionJson["eventName"]?.ToString();
-                if (!string.IsNullOrWhiteSpace(ev)) state.EventName = ev;
-
-                if (sessionJson["factions"] is JsonArray fArr && fArr.Count > 0)
-                {
-                    foreach (var item in fArr.OfType<JsonObject>())
-                    {
-                        var fm = new CleanFactionProfileModel
-                        {
-                            Name = item["Name"]?.ToString() ?? item["name"]?.ToString() ?? "BLUFOR",
-                            ColorHex = item["ColorHex"]?.ToString() ?? item["colorHex"]?.ToString() ?? "#2684FF",
-                            ChannelName = item["ChannelName"]?.ToString() ?? item["channelName"]?.ToString() ?? "BLUFOR-MESH",
-                            Psk = item["Psk"]?.ToString() ?? item["psk"]?.ToString() ?? "",
-                            ChannelUrl = item["ChannelUrl"]?.ToString() ?? item["channelUrl"]?.ToString() ?? "",
-                            LoraRegion = item["LoraRegion"]?.ToString() ?? item["loraRegion"]?.ToString() ?? "EU_868",
-                            LoraModemPreset = item["LoraModemPreset"]?.ToString() ?? item["loraModemPreset"]?.ToString() ?? "SHORT_FAST",
-                            HopLimit = int.TryParse(item["HopLimit"]?.ToString() ?? item["hopLimit"]?.ToString(), out int hl) ? hl : 3,
-                            OtsHost = item["OtsHost"]?.ToString() ?? item["otsHost"]?.ToString() ?? "",
-                            EnrollmentUri = item["EnrollmentUri"]?.ToString() ?? item["enrollmentUri"]?.ToString() ?? "",
-                            EmergencyPhone = item["EmergencyPhone"]?.ToString() ?? item["emergencyPhone"]?.ToString() ?? "",
-                            PliProfile = item["PliProfile"]?.ToString() ?? "ConstRateUnreliable",
-                            MeshProfile = item["MeshProfile"]?.ToString() ?? "StationaryMesh"
-                        };
-
-                        if ((item["VoiceChannels"] ?? item["voiceChannels"]) is JsonArray vArr)
-                        {
-                            foreach (var vo in vArr.OfType<JsonObject>())
-                            {
-                                fm.VoiceChannels.Add(new CleanVoiceChannelItem
-                                {
-                                    RoleName = vo["roleName"]?.ToString() ?? vo["RoleName"]?.ToString() ?? "Kanał",
-                                    BandType = vo["bandType"]?.ToString() ?? vo["BandType"]?.ToString() ?? "PMR",
-                                    FreqMhz = vo["freqMhz"]?.ToString() ?? vo["FreqMhz"]?.ToString() ?? "-",
-                                    ToneOrCode = vo["toneOrCode"]?.ToString() ?? vo["ToneOrCode"]?.ToString() ?? "-"
-                                });
-                            }
-                        }
-                        state.Factions.Add(fm);
-                    }
-                }
-            }
+            JsonObject current = null;
+            try { current = TacticalConfigPanel.BuildFullWorkspaceStateJson(win); } catch { }
+            var state = Shell.WorkspaceSnapshotSpec.FromWorkspaceJson(current, TacticalConfigPanel.GetEventNameFromWindow(win));
 
             if (state.Factions.Count == 0)
             {
@@ -1074,45 +1073,6 @@ namespace FieldTakHub.Builder.Services
             }
 
             return state;
-        }
-
-        private static JsonObject TryReadSavedWorkspaceJson()
-        {
-            try
-            {
-                if (!string.IsNullOrWhiteSpace(TacticalConfigPanel.CurrentDraftProjectPath) &&
-                    File.Exists(TacticalConfigPanel.CurrentDraftProjectPath))
-                {
-                    if (JsonNode.Parse(File.ReadAllText(TacticalConfigPanel.CurrentDraftProjectPath, Encoding.UTF8)) is JsonObject draftObj)
-                        return draftObj;
-                }
-
-                string appData = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "FieldTakHub");
-                if (Directory.Exists(appData))
-                {
-                    var jsonFiles = Directory.GetFiles(appData, "*.json", SearchOption.TopDirectoryOnly)
-                        .Concat(Directory.GetFiles(appData, "*.fthproj", SearchOption.TopDirectoryOnly))
-                        .Where(f => !Path.GetFileName(f).StartsWith("opord_", StringComparison.OrdinalIgnoreCase))
-                        .OrderByDescending(File.GetLastWriteTimeUtc)
-                        .ToList();
-
-                    foreach (string jf in jsonFiles)
-                    {
-                        try
-                        {
-                            string raw = File.ReadAllText(jf, Encoding.UTF8);
-                            if (raw.Contains("\"factions\"", StringComparison.OrdinalIgnoreCase) &&
-                                JsonNode.Parse(raw) is JsonObject obj)
-                            {
-                                return obj;
-                            }
-                        }
-                        catch { }
-                    }
-                }
-            }
-            catch { }
-            return null;
         }
     }
 
@@ -1633,21 +1593,26 @@ namespace FieldTakHub.Builder.Services
             if (_bannerDescBlock != null)
             {
                 _bannerDescBlock.Text = BuilderI18n.T(
-                    "Ka\u017Cda strona konfliktu zapisywana jest do w\u0142asnego katalogu out\\<STRONA>\\. Wsp\u00F3lne pliki instalacyjne .apk (ATAK, Meshtastic, plugins) oraz mapy (maps) pobierane s\u0105 ze Wsp\u00F3lnego folderu Stron:",
-                    "Each faction outputs to its own clean directory out\\<FACTION>\\. Shared .apk files (ATAK, Meshtastic, plugins) and maps are loaded from the Shared Factions Folder:");
+                    "Ka\u017Cda strona konfliktu dostaje w\u0142asn\u0105 paczk\u0119 w folderze out\\<STRONA>\\. Pliki z folderu source (APK, mapy, nak\u0142adki) trafiaj\u0105 do paczek wszystkich stron, a nak\u0142adki z source\\factions\\<strona>\\ \u2014 tylko do paczki swojej strony.",
+                    "Each faction gets its own package in out\\<FACTION>\\. Files from the source folder (APKs, maps, overlays) go into every faction's package; overlays from source\\factions\\<faction>\\ only into that faction's package.");
             }
             if (_btnShowActiveQr != null)
+            {
                 _btnShowActiveQr.Content = BuilderI18n.T("\uD83D\uDCE1 Dystrybucja LAN/WIFI Hotspot", "\uD83D\uDCE1 LAN/WIFI Hotspot Distribution");
+                _btnShowActiveQr.ToolTip = BuilderI18n.T(
+                    "Buduje paczki wszystkich stron, uruchamia w tym komputerze serwer Wi-Fi i pokazuje kod QR ostatniej strony. Serwer dzia\u0142a do zamkni\u0119cia Buildera.",
+                    "Builds every faction's package, starts a Wi-Fi server on this computer and shows the QR code of the last faction. The server runs until Builder is closed.");
+            }
             if (_btnOpenSourceDir != null)
                 _btnOpenSourceDir.Content = BuilderI18n.T("\uD83D\uDCC2 Wsp\u00F3lny folder Stron", "\uD83D\uDCC2 Shared Factions Folder");
             if (_btnBuildAllFactions != null)
-                _btnBuildAllFactions.Content = BuilderI18n.T("\u26A1 Buduj Wszystkie Strony", "\u26A1 Build All Factions");
-            if (_auditStatusLabel != null && string.IsNullOrWhiteSpace(_auditStatusLabel.Text))
             {
-                _auditStatusLabel.Text = BuilderI18n.T(
-                    "\u2713 Struktura gotowa: out\\<STRONA>\\ (paczki .ftak, Plakat QR, OPORD) + wsp\u00F3lny folder source\\ (ATAK, Meshtastic, plugins, maps).",
-                    "\u2713 Structure ready: out\\<FACTION>\\ (.ftak, QR Poster, OPORD) + shared source\\ (ATAK, Meshtastic, plugins, maps).");
+                _btnBuildAllFactions.Content = BuilderI18n.T("\u26A1 Buduj Wszystkie Strony", "\u26A1 Build All Factions");
+                _btnBuildAllFactions.ToolTip = BuilderI18n.T(
+                    "Buduje paczki wszystkich stron z tego, co wida\u0107 na ekranie, i otwiera folder ostatniej paczki. Serwera Wi-Fi nie uruchamia.",
+                    "Builds every faction's package from what is on screen and opens the folder of the last one. Does not start the Wi-Fi server.");
             }
+            // Bez komunikatu \u201E\u2713 Struktura gotowa\u201D na starcie \u2014 pasek m\u00F3wi tylko to, co si\u0119 naprawd\u0119 sta\u0142o (wynik budowania).
         }
 
         private static void SyncActiveFactionComboItems(List<(string Name, string Channel, string ColorHex, string Psk)> configured)

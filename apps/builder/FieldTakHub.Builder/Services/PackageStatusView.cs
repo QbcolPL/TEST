@@ -14,7 +14,8 @@ namespace FieldTakHub.Builder.Services
     /// <summary>
     /// Prawa kolumna generatora paczek (etap 4): karta „Status paczki” pokazuje, co naprawdę trafi do paczek
     /// (zamiast stałych „✓ Skonfigurowany”), a karta „Ostatnie paczki .ftak” — ostatnio zbudowany plik z folderu out\.
-    /// Odświeżane razem z kartą „Podgląd zawartości” (ten sam przegląd folderu source).
+    /// Odświeżane przy każdym przeglądzie folderu source (co kilka sekund). Od etapu 1 modułu paczek karta statusu
+    /// pokazuje też uwagi do ustawień stron (klucz kanału, adres serwera TAK, link rejestracji, powtórzone nazwy).
     /// </summary>
     internal static class PackageStatusView
     {

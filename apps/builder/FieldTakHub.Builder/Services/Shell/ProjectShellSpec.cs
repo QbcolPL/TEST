@@ -41,6 +41,11 @@ internal static class ProjectSignature
 
         foreach (string key in VolatileRootKeys) copy.Remove(key);
 
+        // Ważność 0 (bez limitu) znaczy to samo co brak pola — projekty sprzed etapu 1 modułu paczek go nie mają,
+        // więc nie mogą przez to wyglądać na zmienione.
+        if (copy.ContainsKey(PackageValiditySpec.JsonKey) && PackageValiditySpec.FromJson(copy[PackageValiditySpec.JsonKey]) == 0)
+            copy.Remove(PackageValiditySpec.JsonKey);
+
         // Strony zaznaczone na mapie to zbiór — kolejność nie jest zmianą.
         string selectedFactions = "";
         if (copy["mapState"] is JsonObject map)

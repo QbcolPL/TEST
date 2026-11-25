@@ -147,6 +147,10 @@ namespace FieldTakHub.Builder.Services
                 Directory.CreateDirectory(Path.Combine(sourceDir, "certs"));
                 Directory.CreateDirectory(Path.Combine(sourceDir, "factions"));
 
+                // Przykładowe nakładki strefa_<strona>.kml, które Builder kiedyś sam tworzył (punkt „HQ” w stałym
+                // miejscu), jechały w paczkach jak prawdziwe. Usuwamy tylko nietknięte — zmienione przez kogoś zostają.
+                TacticalConfigPanel.RemoveGeneratedSampleOverlays(sourceDir);
+
                 string outBaseDir = Path.GetDirectoryName(Path.TrimEndingDirectorySeparator(sourceDir)) ?? AppDomain.CurrentDomain.BaseDirectory;
                 string outDir = Path.Combine(outBaseDir, "out");
                 if (Directory.Exists(outDir))
@@ -185,7 +189,8 @@ namespace FieldTakHub.Builder.Services
                         ["Name"] = "BLUFOR",
                         ["ColorHex"] = "#2684FF",
                         ["ChannelName"] = "BLUFOR-MESH",
-                        ["Psk"] = "",
+                        // Losowy klucz od razu — pusty klucz dawał w paczce publiczny klucz Meshtastic.
+                        ["Psk"] = TacticalConfigModel.GenerateRandomBase64Psk(),
                         ["ChannelUrl"] = "",
                         ["LoraRegion"] = "EU_868",
                         ["LoraModemPreset"] = "SHORT_FAST",
@@ -193,25 +198,16 @@ namespace FieldTakHub.Builder.Services
                         ["OtsHost"] = "",
                         ["EnrollmentUri"] = "",
                         ["EmergencyPhone"] = "",
-                        ["PliProfile"] = "ConstRateUnreliable",
-                        ["MeshProfile"] = "StationaryMesh",
-                        ["VoiceChannels"] = new JsonArray
-                        {
-                            new JsonObject
-                            {
-                                ["roleName"] = "Dowodzenie HQ",
-                                ["bandType"] = "PMR",
-                                ["freqMhz"] = "CH 1 (446.00625)",
-                                ["toneOrCode"] = "CTCSS 67.0 Hz"
-                            }
-                        }
+                        ["PliStrategy"] = "Constant",
+                        // Bez przykładowych kanałów głosowych — trafiały do paczek i na plakaty jak prawdziwe.
+                        ["VoiceChannels"] = new JsonArray()
                     },
                     new JsonObject
                     {
                         ["Name"] = "OPFOR",
                         ["ColorHex"] = "#EB4034",
                         ["ChannelName"] = "OPFOR-MESH",
-                        ["Psk"] = "",
+                        ["Psk"] = TacticalConfigModel.GenerateRandomBase64Psk(),
                         ["ChannelUrl"] = "",
                         ["LoraRegion"] = "EU_868",
                         ["LoraModemPreset"] = "SHORT_FAST",
@@ -219,18 +215,8 @@ namespace FieldTakHub.Builder.Services
                         ["OtsHost"] = "",
                         ["EnrollmentUri"] = "",
                         ["EmergencyPhone"] = "",
-                        ["PliProfile"] = "ConstRateUnreliable",
-                        ["MeshProfile"] = "StationaryMesh",
-                        ["VoiceChannels"] = new JsonArray
-                        {
-                            new JsonObject
-                            {
-                                ["roleName"] = "Dowodzenie OPFOR",
-                                ["bandType"] = "PMR",
-                                ["freqMhz"] = "CH 5 (446.05625)",
-                                ["toneOrCode"] = "CTCSS 100.0 Hz"
-                            }
-                        }
+                        ["PliStrategy"] = "Constant",
+                        ["VoiceChannels"] = new JsonArray()
                     }
                 },
                 ["mapState"] = new JsonObject
@@ -762,72 +748,18 @@ namespace FieldTakHub.Builder.Services
 
             if (dlg.ShowDialog(win) == true)
             {
+                // Pełny bieżący stan (strony ze wszystkimi polami, mapa, ważność paczek) — ten sam zapis co Ctrl+S.
+                // Wcześniej ta ścieżka składała okrojony projekt z migawki czytanej z pliku na dysku.
+                if (!TacticalConfigPanel.SaveDraftProjectToFile(win, dlg.FileName))
+                {
+                    MessageBox.Show(win,
+                        BuilderI18n.T("Nie udało się zapisać projektu do pliku:\n" + dlg.FileName,
+                                      "Could not save the project to:\n" + dlg.FileName),
+                        "Field TAK Hub Builder", MessageBoxButton.OK, MessageBoxImage.Warning);
+                    return false;
+                }
+
                 CurrentProjectFilePath = dlg.FileName;
-
-                JsonNode existingMapState = null;
-                try
-                {
-                    if (!string.IsNullOrWhiteSpace(TacticalConfigPanel.CurrentDraftProjectPath) && File.Exists(TacticalConfigPanel.CurrentDraftProjectPath))
-                    {
-                        var draftNode = JsonNode.Parse(File.ReadAllText(TacticalConfigPanel.CurrentDraftProjectPath, Encoding.UTF8)) as JsonObject;
-                        if (draftNode != null && draftNode["mapState"] != null)
-                        {
-                            existingMapState = draftNode["mapState"].DeepClone();
-                        }
-                    }
-                }
-                catch { }
-
-                var snap = CleanFactionPackageEngine.ExtractWorkspaceSnapshot(win);
-                var fArr = new JsonArray();
-                foreach (var fac in snap.Factions)
-                {
-                    var vArr = new JsonArray();
-                    foreach (var vc in fac.VoiceChannels)
-                    {
-                        vArr.Add(new JsonObject
-                        {
-                            ["roleName"] = vc.RoleName,
-                            ["bandType"] = vc.BandType,
-                            ["freqMhz"] = vc.FreqMhz,
-                            ["toneOrCode"] = vc.ToneOrCode
-                        });
-                    }
-
-                    fArr.Add(new JsonObject
-                    {
-                        ["Name"] = fac.Name,
-                        ["ColorHex"] = fac.ColorHex,
-                        ["ChannelName"] = fac.ChannelName,
-                        ["Psk"] = fac.Psk,
-                        ["ChannelUrl"] = CleanFactionPackageEngine.BuildMeshtasticChannelSetUrl(fac),
-                        ["LoraRegion"] = fac.LoraRegion,
-                        ["LoraModemPreset"] = fac.LoraModemPreset,
-                        ["HopLimit"] = fac.HopLimit,
-                        ["OtsHost"] = fac.OtsHost,
-                        ["EnrollmentUri"] = fac.EnrollmentUri,
-                        ["EmergencyPhone"] = fac.EmergencyPhone,
-                        ["PliProfile"] = fac.PliProfile,
-                        ["MeshProfile"] = fac.MeshProfile,
-                        ["VoiceChannels"] = vArr
-                    });
-                }
-
-                var rootObj = new JsonObject
-                {
-                    ["schemaVersion"] = "3.2",
-                    ["savedAtUtc"] = DateTime.UtcNow.ToString("o"),
-                    ["eventName"] = snap.EventName,
-                    ["factions"] = fArr
-                };
-                if (existingMapState != null)
-                {
-                    rootObj["mapState"] = existingMapState;
-                }
-
-                File.WriteAllText(dlg.FileName, rootObj.ToJsonString(new JsonSerializerOptions { WriteIndented = true }), Encoding.UTF8);
-                TacticalConfigPanel.CurrentDraftProjectPath = dlg.FileName;
-
                 BuilderShell.MarkSaved();
                 return true;
             }
@@ -2381,8 +2313,7 @@ private static void CaptureAndCollapseTopMenuBar(List<DependencyObject> allEleme
                                 });
                             }
                         }
-                        if (snap.VoiceRows.Count == 0)
-                            snap.VoiceRows.Add(new V34FactionVoiceChannelRow());
+                        // Strona bez kanałów głosowych zostaje bez nich — bez zmyślonego „Dowodzenie HQ, CH 1” w rozkazie.
                         list.Add(snap);
                     }
                     if (list.Count > 0)
@@ -2480,9 +2411,6 @@ private static void CaptureAndCollapseTopMenuBar(List<DependencyObject> allEleme
                             }
                         }
                     }
-
-                    if (snap.VoiceRows.Count == 0)
-                        snap.VoiceRows.Add(new V34FactionVoiceChannelRow());
 
                     list.Add(snap);
                 }

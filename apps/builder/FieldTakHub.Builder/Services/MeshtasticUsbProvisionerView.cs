@@ -280,14 +280,9 @@ namespace FieldTakHub.Builder.Services
 
         private static byte[] BuildSetLoraConfigAdmin(string regionStr, string presetStr, int hopLimit)
         {
-            ulong regionEnum = regionStr switch
-            {
-                "US_915" => 1,
-                "EU_433" => 2,
-                "EU_868" => 3,
-                "ANZ_915" => 7,
-                _ => 3
-            };
+            // Jedna tabela regionów z paczką i telefonem (LoraRegionSpec). Wcześniej „US” dawało tu EU_868,
+            // a „ANZ_915” — region 7, czyli Koreę zamiast Australii i Nowej Zelandii (6).
+            ulong regionEnum = (ulong)FieldTakHub.Builder.Services.Shell.LoraRegionSpec.Code(regionStr);
 
             ulong presetEnum = presetStr switch
             {
