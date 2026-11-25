@@ -630,6 +630,7 @@ namespace FieldTakHub.Builder.Services
             else if (_listSelection is TacticalMapObjectItem) desired = null;
             if (ReferenceEquals(desired, _listSelection)) return;
             _listSelection = desired;
+            if (desired != null) ShowObjectsTabForSelection();
             ApplyListSelectionToUi(scrollIntoView: true);
         }
 
@@ -641,7 +642,10 @@ namespace FieldTakHub.Builder.Services
             if (scrollIntoView && _listSelection != null && _listRows.TryGetValue(_listSelection, out var row))
             {
                 _listScrolledTo = _listSelection;
-                ScrollListRowIntoView(row.Row);
+                var rowBorder = row.Row;
+                // Wiersz z dopiero pokazanej zakładki ma wymiary dopiero po układzie.
+                if (rowBorder.IsVisible && rowBorder.ActualHeight > 0) ScrollListRowIntoView(rowBorder);
+                else rowBorder.Dispatcher.BeginInvoke(DispatcherPriority.Loaded, new Action(() => ScrollListRowIntoView(rowBorder)));
             }
         }
 
@@ -678,10 +682,13 @@ namespace FieldTakHub.Builder.Services
             row.Loaded += onLoaded;
         }
 
-        /// <summary>„Pokaż na liście” z menu obiektu: przewija panel do wiersza.</summary>
+        /// <summary>„Pokaż na liście” z menu obiektu: zakładka „Obiekty” i przewinięcie panelu do wiersza.</summary>
         private static void RevealListRow(object item)
         {
-            if (_listRows.TryGetValue(item, out var row)) row.Row.BringIntoView();
+            ShowObjectsTabForSelection();
+            if (!_listRows.TryGetValue(item, out var row)) return;
+            var rowBorder = row.Row;
+            rowBorder.Dispatcher.BeginInvoke(DispatcherPriority.Loaded, new Action(() => rowBorder.BringIntoView()));
         }
 
         /// <summary>Kliknięcie wiersza (dwuklik — także wyśrodkowanie mapy), 📍, klawisz F.</summary>
@@ -746,6 +753,7 @@ namespace FieldTakHub.Builder.Services
             }
             _restyleSectorsAfterSectorGesture = true;
             _listSelection = sec;
+            ShowObjectsTabForSelection();
             UpdateSelectedMarkerInspectorUI();
             ApplyListSelectionToUi(scrollIntoView: true);
         }
@@ -798,6 +806,7 @@ namespace FieldTakHub.Builder.Services
         /// <summary>F2 / „Zmień nazwę”: zaznacza element i ustawia kursor w polu nazwy w panelu szczegółów.</summary>
         private static void FocusListItemName(object item)
         {
+            ShowObjectsTabForSelection();
             if (item is TacticalMapObjectItem obj)
             {
                 FocusObjectNameBox(obj);
@@ -819,7 +828,8 @@ namespace FieldTakHub.Builder.Services
                 box.SelectAll();
             }
 
-            if (box.IsLoaded) Apply();
+            // Pole z właśnie pokazanej zakładki albo nowej karty jest widoczne dopiero po układzie.
+            if (box.IsLoaded && box.IsVisible) Apply();
             else box.Dispatcher.BeginInvoke(DispatcherPriority.Input, new Action(Apply));
         }
 
@@ -870,6 +880,7 @@ namespace FieldTakHub.Builder.Services
             _inspectedObject = null;
             _selectedRangeSector = copy;
             _listSelection = copy;
+            ShowObjectsTabForSelection();
             PopulateRangeSectorEditorFromSelected();
             UpdateSelectedMarkerInspectorUI();
             ShowMapStatus($"Zduplikowano sektor ognia „{sec.Name}”.");

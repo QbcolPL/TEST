@@ -366,6 +366,117 @@ internal static class MapEditorUi
         button.Foreground = active ? TacticalConfigPanel.BrushDarkFg : Brushes.White;
     }
 
+    /// <summary>
+    /// Zakładka panelu bocznego (Mapa · Obiekty · Siatka · Legenda · Eksport). Aktywna ma wypełnione tło
+    /// (<see cref="SetTabActive"/>), a ramka — jak przy przyciskach narzędzi — należy do efektu najechania myszą.
+    /// </summary>
+    public static Button TabButton(string glyph, string text, string tooltip, Action onClick)
+    {
+        var label = new TextBlock
+        {
+            FontSize = 10.5,
+            FontWeight = FontWeights.SemiBold,
+            TextAlignment = TextAlignment.Center,
+            TextTrimming = TextTrimming.CharacterEllipsis,
+            VerticalAlignment = VerticalAlignment.Center
+        };
+        label.Inlines.Add(new System.Windows.Documents.Run(glyph + " ") { FontSize = 11.5 });
+        label.Inlines.Add(new System.Windows.Documents.Run(text));
+
+        var button = new Button
+        {
+            Style = SquareButtonStyle,
+            Height = 30,
+            Margin = new Thickness(1, 0, 1, 0),
+            Padding = new Thickness(2, 0, 2, 0),
+            Content = label,
+            Background = Brushes.Transparent,
+            BorderBrush = Brushes.Transparent,
+            BorderThickness = new Thickness(1),
+            Cursor = Cursors.Hand,
+            ToolTip = tooltip,
+            HorizontalAlignment = HorizontalAlignment.Stretch
+        };
+        ToolTipService.SetInitialShowDelay(button, 400);
+        AddHoverBorder(button, TacticalConfigPanel.BrushAccent);
+        button.Click += (_, _) => onClick();
+        SetTabActive(button, false);
+        return button;
+    }
+
+    /// <summary>Tło i kolor napisu zakładki (napis ma własny kolor — styl okna nadaje go każdemu TextBlock).</summary>
+    public static void SetTabActive(Button button, bool active)
+    {
+        button.Background = active ? TacticalConfigPanel.BrushButtonAccent : Brushes.Transparent;
+        if (button.Content is TextBlock label) label.Foreground = active ? TacticalConfigPanel.BrushDarkFg : SecondaryText;
+    }
+
+    /// <summary>Pozycja listy eksportu: znak, nazwa i jednozdaniowy opis „co dostaniesz”. Cały wiersz jest przyciskiem.</summary>
+    public static Button ActionRow(string glyph, string title, string note, Action onClick)
+    {
+        var row = new Grid();
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(30) });
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+
+        var icon = new TextBlock
+        {
+            Text = glyph,
+            Foreground = TacticalConfigPanel.BrushAccent,
+            FontSize = 15,
+            HorizontalAlignment = HorizontalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Center
+        };
+        var texts = new StackPanel { VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(4, 0, 4, 0) };
+        texts.Children.Add(new TextBlock
+        {
+            Text = title,
+            Foreground = Brushes.White,
+            FontSize = 11.5,
+            FontWeight = FontWeights.SemiBold,
+            TextTrimming = TextTrimming.CharacterEllipsis
+        });
+        texts.Children.Add(new TextBlock
+        {
+            Text = note,
+            Foreground = TacticalConfigPanel.BrushMutedText,
+            FontSize = 9.5,
+            TextWrapping = TextWrapping.Wrap
+        });
+        Grid.SetColumn(icon, 0);
+        Grid.SetColumn(texts, 1);
+        row.Children.Add(icon);
+        row.Children.Add(texts);
+
+        var button = new Button
+        {
+            Style = MenuRowStyle,
+            Padding = new Thickness(4, 5, 8, 5),
+            Margin = new Thickness(0, 0, 0, 4),
+            Content = row,
+            Background = Brushes.Transparent,
+            BorderBrush = TacticalConfigPanel.BrushTileBorder,
+            BorderThickness = new Thickness(1),
+            Cursor = Cursors.Hand,
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            ToolTip = title + " — " + note
+        };
+        AddHoverBackground(button, HoverBackground);
+        AddHoverBorder(button, TacticalConfigPanel.BrushAccent);
+        button.Click += (_, _) => onClick();
+        return button;
+    }
+
+    /// <summary>Podtytuł grupy na liście (np. „Pliki”, „Do paczki .ftak”).</summary>
+    public static TextBlock GroupCaption(string text, bool first = false) => new TextBlock
+    {
+        Text = text,
+        Foreground = TacticalConfigPanel.BrushAccent,
+        FontSize = 9.5,
+        FontWeight = FontWeights.Bold,
+        Margin = new Thickness(2, first ? 0 : 6, 2, 4),
+        TextTrimming = TextTrimming.CharacterEllipsis
+    };
+
     /// <summary>Kafelek z dowolną zawartością (np. symbolem NATO) do siatki wyboru.</summary>
     public static Button TileButton(UIElement content, string tooltip, bool selected, Action onClick)
     {

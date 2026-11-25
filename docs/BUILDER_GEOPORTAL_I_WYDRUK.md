@@ -36,7 +36,8 @@ z Geoportalu oraz nowego wydruku PDF z ramką w stylu arkuszy taktycznych 1:25 0
 
 ## 2. Wydruk z ramką kartograficzną
 
-Przycisk w sekcji 4 edytora mapy: **🗺️ Wydruk z ramką kartograficzną (PDF, seria arkuszy)…**
+Pozycja **🗺️ Wydruk z ramką kartograficzną…** w menu **📤 Eksport…** na dole panelu generatora map (Ctrl+E)
+albo w zakładce Eksport (wcześniej przycisk w sekcji 4).
 
 1. Okno ustawia arkusz w edytorze na obszar mapy z wydruku (format „Wydruk z ramką — obszar mapy W × H mm”).
    Ekran pokazuje dokładnie ten wycinek terenu, który trafi na papier. Poprzedni format wybierzesz z listy

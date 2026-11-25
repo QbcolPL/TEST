@@ -110,6 +110,7 @@ namespace FieldTakHub.Builder.Services
             root["northArrowPos"] = _northArrowPos;
             root["scaleBarPos"] = _scaleBarPos;
             root["legendPos"] = _legendPos;
+            root["leftPanelTab"] = _activeLeftTab;
             if (_northNormX.HasValue) root["northNormX"] = _northNormX.Value;
             if (_northNormY.HasValue) root["northNormY"] = _northNormY.Value;
             if (_scaleNormX.HasValue) root["scaleNormX"] = _scaleNormX.Value;
@@ -183,6 +184,8 @@ namespace FieldTakHub.Builder.Services
 
             if (_dimmerRect != null) _dimmerRect.Opacity = _mapDimmerOpacity;
             if (_lidarTileCanvas != null) _lidarTileCanvas.Opacity = _lidarOpacity;
+
+            if (root["leftPanelTab"] != null) RestoreLeftTab(root["leftPanelTab"].ToString());
 
             if (_hostWindow != null && _leftControlScrollViewer != null)
                 RebuildLeftControlsPanel(_hostWindow);
@@ -468,8 +471,10 @@ namespace FieldTakHub.Builder.Services
             _isRebuildingMapControls = true;
             try
             {
-                var leftStack = new StackPanel { Margin = new Thickness(6) };
-                var sec1 = CreateSectionCard("1. STRONY KONFLIKTU, FORMAT ARKUSZA (A3–A6 / MAPNIK) & SKALA 1:X");
+                BeginLeftTabPages();
+
+                // ======================= ZAKŁADKA „MAPA”: teren gry i strony konfliktu, arkusz i skala, podkład
+                var secArea = CreateSectionCard("TEREN GRY I STRONY KONFLIKTU");
 
                 var facSelectBorder = new Border { Background = TacticalConfigPanel.BrushInputBg, BorderBrush = TacticalConfigPanel.BrushInputBorder, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(6), Padding = new Thickness(8, 6, 8, 6), Margin = new Thickness(0, 0, 0, 6) };
                 var facSelectStack = new StackPanel();
@@ -485,7 +490,7 @@ namespace FieldTakHub.Builder.Services
                 RebuildFactionCheckboxesUI();
                 facSelectStack.Children.Add(_factionsCheckboxesWrap);
                 facSelectBorder.Child = facSelectStack;
-                sec1.Children.Add(facSelectBorder);
+                secArea.Children.Add(facSelectBorder);
 
                 var searchRow = new Grid { Margin = new Thickness(0, 0, 0, 6) };
                 searchRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
@@ -495,7 +500,10 @@ namespace FieldTakHub.Builder.Services
                 btnFind.Height = 25; btnFind.Margin = new Thickness(6, 0, 0, 0);
                 Grid.SetColumn(_searchPlaceBox, 0); Grid.SetColumn(btnFind, 1);
                 searchRow.Children.Add(_searchPlaceBox); searchRow.Children.Add(btnFind);
-                sec1.Children.Add(TacticalConfigPanel.FieldBox("Wyszukaj miejscowość / teren gry:", searchRow));
+                secArea.Children.Add(TacticalConfigPanel.FieldBox("Wyszukaj miejscowość / teren gry:", searchRow));
+                AddToLeftTab(LeftTabMap, WrapCard(secArea));
+
+                var secSheet = CreateSectionCard("ARKUSZ I SKALA");
 
                 var fmtGrid = new Grid { Margin = new Thickness(0, 0, 0, 4) };
                 fmtGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1.65, GridUnitType.Star) });
@@ -522,9 +530,9 @@ namespace FieldTakHub.Builder.Services
                 var fOri = TacticalConfigPanel.FieldBox("Orientacja:", _oriComboBox);
                 Grid.SetColumn(fFmt, 0); Grid.SetColumn(fOri, 1);
                 fmtGrid.Children.Add(fFmt); fmtGrid.Children.Add(fOri);
-                sec1.Children.Add(fmtGrid);
+                secSheet.Children.Add(fmtGrid);
 
-                sec1.Children.Add(new TextBlock { Text = "Skala mapy (wpisz dowolną 1:X lub wybierz poniżej):", Foreground = TacticalConfigPanel.BrushMutedText, FontSize = 10, Margin = new Thickness(0, 2, 0, 3) });
+                secSheet.Children.Add(new TextBlock { Text = "Skala mapy (wpisz dowolną 1:X lub wybierz poniżej):", Foreground = TacticalConfigPanel.BrushMutedText, FontSize = 10, Margin = new Thickness(0, 2, 0, 3) });
                 var scaleCustomGrid = new Grid { Margin = new Thickness(0, 0, 0, 6) };
                 scaleCustomGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(28) });
                 scaleCustomGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
@@ -535,7 +543,7 @@ namespace FieldTakHub.Builder.Services
                 var btnSetScale = MakeActionButton("Ustaw skalę", true, () => { if (int.TryParse(_scaleInputBox.Text.Trim(), out int sc)) { TacticalConfigPanel.MarkDirty(); ApplyScaleDenominator(sc); } });
                 btnSetScale.Height = 25; btnSetScale.Margin = new Thickness(6, 0, 0, 0);
                 Grid.SetColumn(btnSetScale, 2); scaleCustomGrid.Children.Add(btnSetScale);
-                sec1.Children.Add(scaleCustomGrid);
+                secSheet.Children.Add(scaleCustomGrid);
 
                 _scalePresetButtons.Clear();
                 var scalePresetsRow = new UniformGrid { Columns = 6, Margin = new Thickness(0, 0, 0, 4) };
@@ -547,11 +555,14 @@ namespace FieldTakHub.Builder.Services
                     _scalePresetButtons.Add(b);
                     scalePresetsRow.Children.Add(b);
                 }
-                sec1.Children.Add(scalePresetsRow);
+                secSheet.Children.Add(scalePresetsRow);
                 var btnScale25k = MakeActionButton("1:25000", _targetScaleDenominator == 25000, () => { TacticalConfigPanel.MarkDirty(); ApplyScaleDenominator(25000); });
                 btnScale25k.Height = 24; btnScale25k.Margin = new Thickness(1, 0, 1, 6); btnScale25k.FontSize = 10;
                 _scalePresetButtons.Add(btnScale25k);
-                sec1.Children.Add(btnScale25k);
+                secSheet.Children.Add(btnScale25k);
+                AddToLeftTab(LeftTabMap, WrapCard(secSheet));
+
+                var secBase = CreateSectionCard("PODKŁAD MAPY");
 
                 var layerRow = new Grid { Margin = new Thickness(0, 0, 0, 6) };
                 layerRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
@@ -594,7 +605,7 @@ namespace FieldTakHub.Builder.Services
                 Grid.SetColumn(btnReloadTiles, 1);
                 layerRow.Children.Add(btnReloadTiles);
 
-                sec1.Children.Add(TacticalConfigPanel.FieldBox("Podkład bazowy (Geoportal WMS / LiDAR NMT GRID1 / Google / OSM):", layerRow));
+                secBase.Children.Add(TacticalConfigPanel.FieldBox("Podkład bazowy (Geoportal WMS / LiDAR NMT GRID1 / Google / OSM):", layerRow));
 
                 var lidarBox = new Border { Background = TacticalConfigPanel.BrushInputBg, BorderBrush = TacticalConfigPanel.BrushAccent, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(6), Padding = new Thickness(8, 6, 8, 6) };
                 var lidarStack = new StackPanel();
@@ -621,15 +632,20 @@ namespace FieldTakHub.Builder.Services
                     if (_lidarTileCanvas != null) _lidarTileCanvas.Opacity = _lidarOpacity;
                 }));
                 lidarBox.Child = lidarStack;
-                sec1.Children.Add(lidarBox);
-                leftStack.Children.Add(WrapCard(sec1));
+                secBase.Children.Add(lidarBox);
+                secBase.Children.Add(BuildBaseMapToneControls());
+                AddToLeftTab(LeftTabMap, WrapCard(secBase));
 
-                leftStack.Children.Add(WrapCard(BuildSection2GridAndColorsUI(win)));
+                // ======================= ZAKŁADKA „SIATKA”: układ współrzędnych i podziałka sektorowa, wygląd siatki
+                var (gridSystemCard, gridLookCard) = BuildSection2GridAndColorsUI(win);
+                AddToLeftTab(LeftTabGrid, WrapCard(gridSystemCard));
+                AddToLeftTab(LeftTabGrid, WrapCard(gridLookCard));
 
-                var sec3 = CreateSectionCard("3. OBIEKTY NA MAPIE I SEKTORY OGNIA · .KMZ / .GPX · ODCZYT MGRS");
-                sec3.Children.Add(new TextBlock
+                // ======================= ZAKŁADKA „OBIEKTY”: nowe obiekty, lista wszystkiego na mapie, wygląd obiektów
+                var secNew = CreateSectionCard("NOWE OBIEKTY: SYMBOL I KOLOR");
+                secNew.Children.Add(new TextBlock
                 {
-                    Text = "Rysujesz na mapie: narzędzia są na pasku nad mapą (V, N, K, T, S, A, L), prawy klik otwiera szybkie menu, a Ctrl+Z / Ctrl+Y (↶ ↷) cofa i ponawia zmiany. Poniżej — symbol i kolor nowych obiektów oraz jedna lista wszystkiego, co jest na mapie.",
+                    Text = "Rysujesz na mapie: narzędzia są na pasku nad mapą (V, N, K, T, S, A, L), prawy klik otwiera szybkie menu, a Ctrl+Z / Ctrl+Y (↶ ↷) cofa i ponawia zmiany. Tu wybierasz symbol i kolor nowych obiektów; niżej jest lista wszystkiego, co jest na mapie.",
                     Foreground = TacticalConfigPanel.BrushMutedText,
                     FontSize = 9.5,
                     TextWrapping = TextWrapping.Wrap,
@@ -652,7 +668,6 @@ namespace FieldTakHub.Builder.Services
                 _inspectorWgsUtmLabel = new TextBlock { Text = "WGS84: —   |   UTM: —", Foreground = TacticalConfigPanel.BrushMutedText, FontFamily = new FontFamily("Consolas"), FontSize = 9.2 };
                 inspStack.Children.Add(_inspectorMgrsLabel); inspStack.Children.Add(_inspectorWgsUtmLabel);
                 inspectorBorder.Child = inspStack;
-                sec3.Children.Add(inspectorBorder);
                 UpdateSelectedMarkerInspectorUI();
 
                 var aoMaskRow = new Grid { Margin = new Thickness(0, 0, 0, 4) };
@@ -662,7 +677,6 @@ namespace FieldTakHub.Builder.Services
                 var fAoOp = MakeSliderRow("Krycie maski poza AO:", 0.10, 0.85, _aoOutMaskOpacity, v => $"{(int)Math.Round(v * 100)}%", v => { _aoOutMaskOpacity = Math.Round(v, 2); _fastOverlayRenderer?.InvalidateVisual(); });
                 Grid.SetColumn(fAoPat, 0); Grid.SetColumn(fAoOp, 1);
                 aoMaskRow.Children.Add(fAoPat); aoMaskRow.Children.Add(fAoOp);
-                sec3.Children.Add(aoMaskRow);
 
                 var matchedSymbol = NatoSymbols.FirstOrDefault(n => n.Code == _selectedNatoSymbolCode) ?? NatoSymbols[0];
                 var natoCombo = new ComboBox
@@ -686,7 +700,7 @@ namespace FieldTakHub.Builder.Services
                         UpdateToolHint();
                     }
                 };
-                sec3.Children.Add(TacticalConfigPanel.FieldBox("Wybierz symbol taktyczny / wektor militarny NATO (36 wzor\u00F3w wektorowych):", natoCombo));
+                secNew.Children.Add(TacticalConfigPanel.FieldBox("Wybierz symbol taktyczny / wektor militarny NATO (36 wzor\u00F3w wektorowych):", natoCombo));
 
                 var mapColorSwatch = new Border { Width = 14, Height = 14, CornerRadius = new CornerRadius(7), Background = TacticalConfigPanel.BrushFromHex(_selectedObjectColorHex, Color.FromRgb(38, 132, 255)), BorderBrush = Brushes.White, BorderThickness = new Thickness(1), Margin = new Thickness(0, 0, 7, 0), VerticalAlignment = VerticalAlignment.Center };
                 var mapColorText = new TextBlock { Text = $"Kolor nowego obiektu / symbolu: Paleta RGB ({_selectedObjectColorHex.ToUpperInvariant()})", Foreground = Brushes.White, FontSize = 10, FontWeight = FontWeights.Bold, VerticalAlignment = VerticalAlignment.Center };
@@ -706,7 +720,8 @@ namespace FieldTakHub.Builder.Services
                         TacticalConfigPanel.MarkDirty();
                     }
                 };
-                sec3.Children.Add(btnPickMapRgb);
+                secNew.Children.Add(btnPickMapRgb);
+                AddToLeftTab(LeftTabObjects, WrapCard(secNew));
 
                 var lblTogglesGrid = new UniformGrid { Columns = 2, Margin = new Thickness(0, 0, 0, 6) };
                 var chkGlobalLabels = new CheckBox { Content = "Pokazuj etykiety nazw na mapie", IsChecked = _showAllObjectLabels, Foreground = TacticalConfigPanel.BrushAccent, FontSize = 9.5, FontWeight = FontWeights.Bold };
@@ -718,7 +733,8 @@ namespace FieldTakHub.Builder.Services
                 chkRotHandles.Unchecked += (s, e) => { _showRotationHandlesOnMap = false; if (!_isRebuildingMapControls) TacticalConfigPanel.MarkDirty(); RedrawVectorsOnly(); };
 
                 lblTogglesGrid.Children.Add(chkGlobalLabels); lblTogglesGrid.Children.Add(chkRotHandles);
-                sec3.Children.Add(lblTogglesGrid);
+
+                var secList = CreateSectionCard("NA MAPIE: OBIEKTY I SEKTORY OGNIA");
 
                 // PASEK SZYBKIEGO IMPORTU I EDYCJI PLIKÓW WEKTOROWYCH (.KMZ / .KML / .GPX)
                 var vectorIoBar = new Grid { Margin = new Thickness(0, 0, 0, 5) };
@@ -739,7 +755,7 @@ namespace FieldTakHub.Builder.Services
                 Grid.SetColumn(btnClearObjects, 1);
                 vectorIoBar.Children.Add(btnImportVector);
                 vectorIoBar.Children.Add(btnClearObjects);
-                sec3.Children.Add(vectorIoBar);
+                secList.Children.Add(vectorIoBar);
 
                 // Sektory ognia — na tej samej liście co obiekty (wcześniej osobny panel w sekcji 2).
                 var sectorBar = new Grid { Margin = new Thickness(0, 0, 0, 6) };
@@ -763,7 +779,7 @@ namespace FieldTakHub.Builder.Services
                     Grid.SetColumn(b, i);
                     sectorBar.Children.Add(b);
                 }
-                sec3.Children.Add(sectorBar);
+                secList.Children.Add(sectorBar);
 
                 // Jedna lista wszystkiego na mapie (zwarte wiersze) i pod nią szczegóły zaznaczonego elementu.
                 var listHeader = new Grid { Margin = new Thickness(0, 2, 0, 3) };
@@ -781,24 +797,34 @@ namespace FieldTakHub.Builder.Services
                 };
                 Grid.SetColumn(listHint, 1);
                 listHeader.Children.Add(listHint);
-                sec3.Children.Add(listHeader);
+                secList.Children.Add(listHeader);
 
                 var objListBorder = new Border { Background = TacticalConfigPanel.BrushInputBg, BorderBrush = TacticalConfigPanel.BrushInputBorder, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(4), MinHeight = 44, MaxHeight = 280, Padding = new Thickness(4) };
                 var objListScroll = new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
                 _objectsListStack = new StackPanel();
                 objListScroll.Content = _objectsListStack; objListBorder.Child = objListScroll;
                 _objectsListScroll = objListScroll;
-                sec3.Children.Add(objListBorder);
+                secList.Children.Add(objListBorder);
+
+                // Współrzędne zaznaczonego elementu — między listą a jego szczegółami.
+                inspectorBorder.Margin = new Thickness(0, 6, 0, 0);
+                secList.Children.Add(inspectorBorder);
 
                 _mapItemDetailsHost = new Border { Margin = new Thickness(0, 6, 0, 0) };
-                sec3.Children.Add(_mapItemDetailsHost);
+                secList.Children.Add(_mapItemDetailsHost);
                 BuildRangeSectorEditor();
                 PopulateRangeSectorEditorFromSelected();
                 _detailsItem = null;
                 RefreshObjectsListUI(win);
-                leftStack.Children.Add(WrapCard(sec3));
+                AddToLeftTab(LeftTabObjects, WrapCard(secList));
 
-                var sec4 = CreateSectionCard("4. ELEMENTY MAPY (DRAG & DROP) & EKSPORT Z WYBOREM PLIKU");
+                var secLook = CreateSectionCard("WYGLĄD OBIEKTÓW NA MAPIE");
+                secLook.Children.Add(lblTogglesGrid);
+                secLook.Children.Add(aoMaskRow);
+                AddToLeftTab(LeftTabObjects, WrapCard(secLook));
+
+                // ======================= ZAKŁADKA „LEGENDA”: znacznik Północy, podziałka skali, legenda
+                var sec4 = CreateSectionCard("LEGENDA, PÓŁNOC I PODZIAŁKA NA MAPIE");
                 var hudChkGrid = new UniformGrid { Columns = 2, Margin = new Thickness(0, 0, 0, 6) };
                 CheckBox MakeHudChk(string label, bool init, Action<bool> onChg)
                 {
@@ -815,47 +841,23 @@ namespace FieldTakHub.Builder.Services
 
                 string[] corners = { "Lewy górny róg", "Prawy górny róg", "Lewy dolny róg", "Prawy dolny róg" };
                 var posGrid = new UniformGrid { Columns = 2, Margin = new Thickness(0, 0, 0, 8) };
-                posGrid.Children.Add(TacticalConfigPanel.FieldBox("Pozycja Północy (lub przeciągnij):", TacticalConfigPanel.ComboCtrl(corners, _northArrowPos, win, v => { _northArrowPos = v; _northNormX = null; _northNormY = null; RedrawVectorsOnly(); })));
-                posGrid.Children.Add(TacticalConfigPanel.FieldBox("Pozycja Podziałki (lub przeciągnij):", TacticalConfigPanel.ComboCtrl(corners, _scaleBarPos, win, v => { _scaleBarPos = v; _scaleNormX = null; _scaleNormY = null; RedrawVectorsOnly(); })));
-                posGrid.Children.Add(TacticalConfigPanel.FieldBox("Pozycja Legendy (lub przeciągnij):", TacticalConfigPanel.ComboCtrl(corners, _legendPos, win, v => { _legendPos = v; _legendNormX = null; _legendNormY = null; RedrawVectorsOnly(); })));
-                posGrid.Children.Add(TacticalConfigPanel.FieldBox("Tryb GRG w pliku .KMZ:", TacticalConfigPanel.ComboCtrl(new[] { "Przezroczysta siatka", "Pełny podkład + siatka", "Tylko podkład", "Tylko wektory KML (Bez obrazu)" }, _kmzGrgMode, win, v => _kmzGrgMode = v)));
+                posGrid.Children.Add(TacticalConfigPanel.FieldBox("Pozycja Północy:", TacticalConfigPanel.ComboCtrl(corners, _northArrowPos, win, v => { _northArrowPos = v; _northNormX = null; _northNormY = null; RedrawVectorsOnly(); })));
+                posGrid.Children.Add(TacticalConfigPanel.FieldBox("Pozycja podziałki:", TacticalConfigPanel.ComboCtrl(corners, _scaleBarPos, win, v => { _scaleBarPos = v; _scaleNormX = null; _scaleNormY = null; RedrawVectorsOnly(); })));
+                posGrid.Children.Add(TacticalConfigPanel.FieldBox("Pozycja legendy:", TacticalConfigPanel.ComboCtrl(corners, _legendPos, win, v => { _legendPos = v; _legendNormX = null; _legendNormY = null; RedrawVectorsOnly(); })));
                 sec4.Children.Add(posGrid);
-                var btnEditLegendContent = MakeActionButton("\u270F\uFE0F Edytuj tre\u015B\u0107 i wymiary Legendy (lub przeci\u0105gnij dowolny bok na mapie)", false, () => ShowLegendContentEditorDialog(win));
+                sec4.Children.Add(new TextBlock { Text = "Każdy z tych elementów możesz też przeciągnąć myszą na mapie, a legendę — także za bok, żeby zmienić jej wymiary.", Foreground = TacticalConfigPanel.BrushMutedText, FontSize = 9.5, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, -4, 0, 8) });
+                var btnEditLegendContent = MakeActionButton("\u270F\uFE0F Edytuj tre\u015B\u0107 i wymiary legendy\u2026", false, () => ShowLegendContentEditorDialog(win));
                 btnEditLegendContent.Height = 27;
                 btnEditLegendContent.Margin = new Thickness(0, 0, 0, 6);
                 btnEditLegendContent.BorderBrush = TacticalConfigPanel.BrushAccent;
                 sec4.Children.Add(btnEditLegendContent);
 
-                var expRow1 = new UniformGrid { Columns = 2, Margin = new Thickness(0, 0, 0, 6) };
-                var btnGpx = MakeActionButton("⌚ Zapisz .GPX jako...", false, async () => await ExportStandaloneFilesAsync(win, "gpx"));
-                var btnKmz = MakeActionButton("📦 Zapisz .KMZ jako...", false, async () => await ExportStandaloneFilesAsync(win, "kmz"));
-                btnGpx.Height = 30; btnGpx.Margin = new Thickness(0, 0, 3, 0); btnGpx.BorderBrush = TacticalConfigPanel.BrushAccent;
-                btnKmz.Height = 30; btnKmz.Margin = new Thickness(3, 0, 0, 0); btnKmz.BorderBrush = TacticalConfigPanel.BrushAccent;
-                expRow1.Children.Add(btnGpx); expRow1.Children.Add(btnKmz);
-                sec4.Children.Add(expRow1);
+                AddToLeftTab(LeftTabLegend, WrapCard(sec4));
 
-                var btnFramedPrint = MakeActionButton("🗺️ Wydruk z ramką kartograficzną (PDF, seria arkuszy)…", true, () => ShowFramedPrintDialog(win));
-                btnFramedPrint.Height = 30;
-                btnFramedPrint.Margin = new Thickness(0, 0, 0, 6);
-                btnFramedPrint.ToolTip = "Arkusz w stylu map taktycznych: siatka MGRS z podziałką co 100 m, nazwa arkusza, podziałki km/mile, diagram PT/PM (WMM2025), kod QR. Wszystkie elementy można włączać i edytować.";
-                sec4.Children.Add(btnFramedPrint);
+                // ======================= ZAKŁADKA „EKSPORT”: wszystkie formaty (to samo co „📤 Eksport…”) i mapa offline
+                AddToLeftTab(LeftTabExport, WrapCard(BuildExportOptionsCard(win)));
 
-                var expRow2 = new UniformGrid { Columns = 3, Margin = new Thickness(0, 0, 0, 6) };
-                var btnPdf = MakeActionButton("🖨️ Zapisz PDF jako...", false, async () => await ExportTacticalMapPdfAsync(win));
-                var btnSaveJson = MakeActionButton("💾 Zapisz projekt", false, () => SaveMapProjectJson(win));
-                var btnLoadJson = MakeActionButton("📂 Wczytaj KMZ/GPX", false, () => LoadMapProjectJsonOrKml(win));
-                btnPdf.Height = 28; btnPdf.Margin = new Thickness(0, 0, 3, 0); btnPdf.BorderBrush = TacticalConfigPanel.BrushAccent;
-                btnSaveJson.Height = 28; btnSaveJson.Margin = new Thickness(2, 0, 2, 0);
-                btnLoadJson.Height = 28; btnLoadJson.Margin = new Thickness(3, 0, 0, 0);
-                expRow2.Children.Add(btnPdf); expRow2.Children.Add(btnSaveJson); expRow2.Children.Add(btnLoadJson);
-                sec4.Children.Add(expRow2);
-
-                var btnAddToFtak = MakeActionButton("⚡ Zapisz arkusz .KMZ / .GPX do paczki .ftak (dla zaznaczonych stron)", true, async () => await ExportMapToFtakSourceAsync(win));
-                btnAddToFtak.Height = 30;
-                sec4.Children.Add(btnAddToFtak);
-                leftStack.Children.Add(WrapCard(sec4));
-
-                var sec5 = CreateSectionCard("5. GENERATOR MAP OFFLINE MULTI-ZOOM (.MBTILES / .SQLITE DLA ATAK)");
+                var sec5 = CreateSectionCard("MAPA OFFLINE DLA ATAK (.MBTILES / .SQLITE, WIELE PRZYBLIŻEŃ)");
                 sec5.Children.Add(new TextBlock { Text = "Pobiera piramidę kafelków na wielu przybliżeniach (np. Zoom 13–17) i buduje bazę danych SQLite do pracy w 100% offline w lesie bez zasięgu LTE.", Foreground = TacticalConfigPanel.BrushMutedText, FontSize = 9.5, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 6) });
 
                 var zoomRangeGrid = new UniformGrid { Columns = 2, Margin = new Thickness(0, 0, 0, 4) };
@@ -905,8 +907,8 @@ namespace FieldTakHub.Builder.Services
                 btnBuildOfflineToFtak.Height = 32;
                 sec5.Children.Add(btnBuildOfflineToFtak);
 
-                leftStack.Children.Add(WrapCard(sec5));
-                _leftControlScrollViewer.Content = leftStack;
+                AddToLeftTab(LeftTabExport, WrapCard(sec5));
+                FinishLeftTabPages();
                 UpdateOfflineTileEstimateUI();
             }
             finally { _isRebuildingMapControls = false; }
@@ -928,9 +930,10 @@ namespace FieldTakHub.Builder.Services
             bodyGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
 
             _leftControlScrollViewer = new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Background = TacticalConfigPanel.BrushCardBg, Padding = new Thickness(10) };
+            var leftColumn = BuildLeftPanelShell(win);
             RebuildLeftControlsPanel(win);
-            Grid.SetColumn(_leftControlScrollViewer, 0);
-            bodyGrid.Children.Add(_leftControlScrollViewer);
+            Grid.SetColumn(leftColumn, 0);
+            bodyGrid.Children.Add(leftColumn);
 
             _viewportHostGrid = new Grid { Background = TacticalConfigPanel.BrushInputBg, ClipToBounds = true };
             _sheetFrameBorder = new Border { Width = 820, Height = 580, Background = TacticalConfigPanel.BrushCardBg, BorderBrush = TacticalConfigPanel.BrushAccent, BorderThickness = new Thickness(1.5), HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center, ClipToBounds = true };

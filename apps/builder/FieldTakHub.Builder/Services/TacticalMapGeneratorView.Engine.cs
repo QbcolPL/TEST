@@ -646,9 +646,13 @@ namespace FieldTakHub.Builder.Services
             }
         }
 
-        private static StackPanel BuildSection2GridAndColorsUI(Window win)
+        /// <summary>
+        /// Zakładka „Siatka”: karta układu współrzędnych (z podziałką sektorową) i karta wyglądu siatki i opisów.
+        /// Panel WGS84 musi zostać w pierwszej karcie — chowa sąsiednie pola MGRS, szukając ich w tej samej karcie.
+        /// </summary>
+        private static (StackPanel Coordinates, StackPanel Look) BuildSection2GridAndColorsUI(Window win)
         {
-            var sec2 = CreateSectionCard("2. SIATKA MGRS / SEKTOROWA (A,B,C / 1,2,3), ROZJA\u015ANIANIE LASU & KOLORY RGB");
+            var sec2 = CreateSectionCard("SIATKA: MGRS / SEKTOROWA (A1, B2…) / WGS84");
             sec2.Children.Add(TacticalConfigPanel.FieldBox("G\u0142\u00F3wny system wsp\u00F3\u0142rz\u0119dnych na mapie:", TacticalConfigPanel.ComboCtrl(new[] { "MGRS / UTM (Siatka wojskowa w metrach)", "Siatka Sektorowa (A1, B2, C3...)", "WGS84 (Stopnie geograficzne Lat/Lon)", "Brak siatki" }, _coordSystem, win, v => { _coordSystem = v; UpdateWgs84CustomizationPanelVisibility(); RedrawVectorsOnly(); })));
             var subGridRow = new UniformGrid { Columns = 2 };
             subGridRow.Children.Add(TacticalConfigPanel.FieldBox("Podzia\u0142 oczek MGRS:", TacticalConfigPanel.ComboCtrl(new[] { "Co 33 m (Keypad 1-9)", "Co 50 m (\u0106wiartki A,B,C,D)", "Brak podzia\u0142u (Tylko 100 m)", "Siatka co 250 m", "Siatka co 500 m" }, _subGridDivision, win, v => { _subGridDivision = v; RedrawVectorsOnly(); })));
@@ -785,6 +789,8 @@ namespace FieldTakHub.Builder.Services
             sectorBox.Child = sectorStack;
             sec2.Children.Add(sectorBox);
 
+            var look = CreateSectionCard("WYGLĄD SIATKI I OPISÓW");
+
             UIElement MakeRgbBtn(string fTitle, string dTitle, Func<string> getter, Action<string> setter)
             {
                 string hex = getter();
@@ -801,31 +807,36 @@ namespace FieldTakHub.Builder.Services
             rgbGrid.Children.Add(MakeRgbBtn("Kolor t\u0142a Keypad/\u0106wiartek (RGB):", "Kolor t\u0142a pod cyframi Keypad / \u0106wiartek", () => _subLabelBgColorHex, v => _subLabelBgColorHex = v));
             rgbGrid.Children.Add(MakeRgbBtn("Kolor linii wewn\u0119trznych (RGB):", "Kolor linii podzia\u0142ki Keypad / \u0106wiartek", () => _subGridLineColorHex, v => _subGridLineColorHex = v));
             rgbGrid.Children.Add(MakeRgbBtn("Kolor siatki g\u0142\u00F3wnej / Sektor\u00F3w (RGB):", "Kolor g\u0142\u00F3wnych linii MGRS / Sektor\u00F3w", () => _mainGridColorHex, v => { _mainGridColorHex = v; _sectorGridColorHex = v; }));
-            sec2.Children.Add(rgbGrid);
+            look.Children.Add(rgbGrid);
 
-            sec2.Children.Add(MakeSliderRow("Grubo\u015B\u0107 linii siatki (g\u0142\u00F3wnej i pomocniczej):", 0.5, 3.0, _gridThicknessMultiplier, v => $"{v:0.1}x", v => { _gridThicknessMultiplier = Math.Round(v, 1); _fastOverlayRenderer?.InvalidateVisual(); }));
-            sec2.Children.Add(MakeSliderRow("Rozmiar / grubo\u015B\u0107 czcionki wsp\u00F3\u0142rz\u0119dnych (MGRS, Sektory i Keypad):", 0.7, 2.0, _fontScaleMultiplier, v => $"{v:0.1}x", v => { _fontScaleMultiplier = Math.Round(v, 1); GlyphCache.Clear(); _fastOverlayRenderer?.InvalidateVisual(); }));
-            sec2.Children.Add(MakeSliderRow("Widoczno\u015B\u0107 (alfa) g\u0142\u00F3wnych linii i opis\u00F3w (MGRS / Sektory):", 0.05, 1.0, _mainGridOpacity, v => $"{(int)Math.Round(v * 100)}%", v => { _mainGridOpacity = Math.Round(v, 2); _fastOverlayRenderer?.InvalidateVisual(); }));
-            sec2.Children.Add(MakeSliderRow("Widoczno\u015B\u0107 (alfa) podzia\u0142ki wewn\u0119trznej (Keypad 1-9 / \u0106wiartki):", 0.0, 1.0, _subGridOpacity, v => $"{(int)Math.Round(v * 100)}%", v => { _subGridOpacity = Math.Round(v, 2); _fastOverlayRenderer?.InvalidateVisual(); }));
-            sec2.Children.Add(MakeSliderRow("Krycie t\u0142a (kasetonu) pod cyframi Keypad / \u0106wiartek:", 0.0, 1.0, _subLabelBgOpacity, v => $"{(int)Math.Round(v * 100)}%", v => { _subLabelBgOpacity = Math.Round(v, 2); _fastOverlayRenderer?.InvalidateVisual(); }));
-
-            sec2.Children.Add(MakeSliderRow("\u2600\uFE0F Rozja\u015Bnienie podk\u0142adu mapy (Ciemny las / Pod wydruk):", 0.0, 0.85, _mapBrightnessBoost, v => $"+{(int)Math.Round(v * 100)}%", v =>
-            {
-                _mapBrightnessBoost = Math.Round(v, 2);
-                TriggerLiveBrightnessRefresh();
-            }));
-
-            sec2.Children.Add(MakeSliderRow("Przyciemnienie podk\u0142adu mapy (wi\u0119kszy kontrast pod siatk\u0119):", 0.0, 0.65, _mapDimmerOpacity, v => $"{(int)Math.Round(v * 100)}%", v =>
-            {
-                _mapDimmerOpacity = Math.Round(v, 2);
-                if (_dimmerRect != null) _dimmerRect.Opacity = _mapDimmerOpacity;
-            }));
+            look.Children.Add(MakeSliderRow("Grubo\u015B\u0107 linii siatki (g\u0142\u00F3wnej i pomocniczej):", 0.5, 3.0, _gridThicknessMultiplier, v => $"{v:0.1}x", v => { _gridThicknessMultiplier = Math.Round(v, 1); _fastOverlayRenderer?.InvalidateVisual(); }));
+            look.Children.Add(MakeSliderRow("Rozmiar / grubo\u015B\u0107 czcionki wsp\u00F3\u0142rz\u0119dnych (MGRS, Sektory i Keypad):", 0.7, 2.0, _fontScaleMultiplier, v => $"{v:0.1}x", v => { _fontScaleMultiplier = Math.Round(v, 1); GlyphCache.Clear(); _fastOverlayRenderer?.InvalidateVisual(); }));
+            look.Children.Add(MakeSliderRow("Widoczno\u015B\u0107 (alfa) g\u0142\u00F3wnych linii i opis\u00F3w (MGRS / Sektory):", 0.05, 1.0, _mainGridOpacity, v => $"{(int)Math.Round(v * 100)}%", v => { _mainGridOpacity = Math.Round(v, 2); _fastOverlayRenderer?.InvalidateVisual(); }));
+            look.Children.Add(MakeSliderRow("Widoczno\u015B\u0107 (alfa) podzia\u0142ki wewn\u0119trznej (Keypad 1-9 / \u0106wiartki):", 0.0, 1.0, _subGridOpacity, v => $"{(int)Math.Round(v * 100)}%", v => { _subGridOpacity = Math.Round(v, 2); _fastOverlayRenderer?.InvalidateVisual(); }));
+            look.Children.Add(MakeSliderRow("Krycie t\u0142a (kasetonu) pod cyframi Keypad / \u0106wiartek:", 0.0, 1.0, _subLabelBgOpacity, v => $"{(int)Math.Round(v * 100)}%", v => { _subLabelBgOpacity = Math.Round(v, 2); _fastOverlayRenderer?.InvalidateVisual(); }));
 
             var haloRow = new UniformGrid { Columns = 2 };
             haloRow.Children.Add(TacticalConfigPanel.FieldBox("Obrys linii (Halo):", TacticalConfigPanel.ComboCtrl(new[] { "Pe\u0142ny czarny obrys", "P\u00F3\u0142przezroczysty obrys", "Brak obrysu" }, _gridHaloMode, win, v => { _gridHaloMode = v; _fastOverlayRenderer?.InvalidateVisual(); })));
             haloRow.Children.Add(TacticalConfigPanel.FieldBox("Styl opis\u00F3w i cyfr:", TacticalConfigPanel.ComboCtrl(new[] { "Kaseton (Kolor t\u0142a RGB)", "Tylko obrys Halo", "Czysty tekst" }, _labelBgStyle, win, v => { _labelBgStyle = v; _fastOverlayRenderer?.InvalidateVisual(); })));
-            sec2.Children.Add(haloRow);
-            return sec2;
+            look.Children.Add(haloRow);
+            return (sec2, look);
+        }
+
+        /// <summary>Jasność podkładu — zakładka „Mapa”, karta „Podkład mapy” (wcześniej w sekcji siatki).</summary>
+        private static UIElement BuildBaseMapToneControls()
+        {
+            var panel = new StackPanel { Margin = new Thickness(0, 6, 0, 0) };
+            panel.Children.Add(MakeSliderRow("\u2600\uFE0F Rozja\u015Bnienie podk\u0142adu mapy (Ciemny las / Pod wydruk):", 0.0, 0.85, _mapBrightnessBoost, v => $"+{(int)Math.Round(v * 100)}%", v =>
+            {
+                _mapBrightnessBoost = Math.Round(v, 2);
+                TriggerLiveBrightnessRefresh();
+            }));
+            panel.Children.Add(MakeSliderRow("Przyciemnienie podk\u0142adu mapy (wi\u0119kszy kontrast pod siatk\u0119):", 0.0, 0.65, _mapDimmerOpacity, v => $"{(int)Math.Round(v * 100)}%", v =>
+            {
+                _mapDimmerOpacity = Math.Round(v, 2);
+                if (_dimmerRect != null) _dimmerRect.Opacity = _mapDimmerOpacity;
+            }));
+            return panel;
         }
 
         private static (double W, double H) GetExactCanvasSize()

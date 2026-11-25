@@ -42,6 +42,7 @@ namespace FieldTakHub.Builder.Services
             "Prawy klik na obiekcie lub jego krawędzi — menu obiektu\n" +
             "Enter albo prawy klik — zakończ rysowany kształt\n" +
             "Shift — kąt co 45° przy rysowaniu; kilka znaczników naraz\n\n" +
+            "Ctrl+1…5 — zakładki panelu,  Ctrl+E — eksport\n\n" +
             "Ctrl+Z — cofnij,  Ctrl+Y — ponów\n" +
             "    (w trakcie rysowania Ctrl+Z usuwa ostatni punkt)\n" +
             "Del — usuń zaznaczony element,  Ctrl+D — duplikuj\n" +
@@ -643,6 +644,7 @@ namespace FieldTakHub.Builder.Services
         private static void FocusObjectNameBox(TacticalMapObjectItem obj)
         {
             SelectObjectFromList(obj, centerMap: false);
+            ShowObjectsTabForSelection();
             if (_objectNameBoxes.TryGetValue(obj, out var box)) FocusTextBoxSoon(box);
         }
 
@@ -727,6 +729,18 @@ namespace FieldTakHub.Builder.Services
                 e.Handled = true;
                 return;
             }
+            if (modifiers == ModifierKeys.Control && e.Key == Key.E)
+            {
+                ShowExportMenu(win);
+                e.Handled = true;
+                return;
+            }
+            if (modifiers == ModifierKeys.Control && LeftPanelTabs.FromDigit(DigitOfKey(e.Key)) is string tab)
+            {
+                SelectLeftTab(tab);
+                e.Handled = true;
+                return;
+            }
             if (e.Key == Key.Enter && _activeDraftPoly != null)
             {
                 FinishDraftShape(win);
@@ -765,6 +779,12 @@ namespace FieldTakHub.Builder.Services
                 e.Handled = true;
             }
         }
+
+        /// <summary>Cyfra z rzędu cyfr albo klawiatury numerycznej (−1 dla innych klawiszy).</summary>
+        private static int DigitOfKey(Key key) =>
+            key >= Key.D0 && key <= Key.D9 ? key - Key.D0
+            : key >= Key.NumPad0 && key <= Key.NumPad9 ? key - Key.NumPad0
+            : -1;
 
         /// <summary>Esc po kolei: kończy kształt, wyłącza narzędzie, czyści pomiar, odznacza obiekt.</summary>
         private static bool HandleMapEscape(Window win)

@@ -168,6 +168,7 @@ namespace FieldTakHub.Builder.Services
             _inspectedObject = null;
             _selectedRangeSector = item;
             _listSelection = item;
+            ShowObjectsTabForSelection();
             PopulateRangeSectorEditorFromSelected();
             UpdateSelectedMarkerInspectorUI();
             if (_hostWindow != null) RefreshObjectsListUI(_hostWindow);
